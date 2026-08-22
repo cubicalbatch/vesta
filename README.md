@@ -2,8 +2,8 @@
 
 **A private, offline library you can ask questions.**
 
-Vesta turns Kiwix ZIM archives — Wikipedia, StackExchange, Project Gutenberg,
-Wikivoyage, and thousands more — into a knowledge base you search and converse
+Vesta turns Kiwix ZIM archives (Wikipedia, StackExchange, Project Gutenberg,
+Wikivoyage, and thousands more) into a knowledge base you search and converse
 with. Ask a question in plain language and get a direct answer, streamed as
 it's written, with every claim cited back to the passage it came from. It all
 runs on your machine: after setup, no internet connection is needed.
@@ -81,7 +81,7 @@ Two ways to add archives:
 - **By hand**: drop `.zim` files into `data/zims/`; Vesta picks them up
   automatically.
 
-Semantic search needs a one-time index build per archive — from the web UI,
+Semantic search needs a one-time index build per archive: from the web UI,
 or:
 
 ```bash
@@ -96,15 +96,33 @@ answers but takes a lot to build.
 
 Switchable at any time in Settings:
 
-- **Local (default)** — drop a GGUF file into `data/models/` or download one
+- **Local (default)**: drop a GGUF file into `data/models/` or download one
   in the UI. By default, Vesta uses **Qwen 3.5 4B**, which requires ~4GB of memory when loaded. If your computer doesn't have a GPU, answers can take 2–3 minutes to generate. Vesta manages the model server for you: it loads on demand, unloads when idle, and uses your GPU when one is available.
-- **Remote** — point Vesta at any OpenAI-compatible endpoint (Ollama, vLLM,
+- **Remote**: point Vesta at any OpenAI-compatible endpoint (Ollama, vLLM,
   OpenRouter, …).
 
 ## Configuration
 
 Nearly everything is a setting in the web UI, and nearly everything applies
 without restarts.
+
+## Acknowledgement
+
+Vesta relies on great work from others:
+
+- [Kiwix](https://www.kiwix.org), who create and maintain the ZIM archives
+  that make offline Wikipedia, StackExchange, Project Gutenberg, and thousands
+  more possible.
+- [llama.cpp](https://github.com/ggml-org/llama.cpp), whose `llama-server`
+  binary we bundle to run the local language model.
+- [ONNX Runtime](https://onnxruntime.org), which powers the embedding and
+  reranking encoders.
+- The authors of the bundled encoder models:
+  [potion-retrieval-32M](https://huggingface.co/minishlab/potion-retrieval-32M)
+  by minishlab,
+  [granite-embedding-small-english-r2-ONNX](https://huggingface.co/onnx-community/granite-embedding-small-english-r2-ONNX)
+  by IBM, and
+  [ms-marco-MiniLM-L-6-v2](https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2).
 
 ## License
 
