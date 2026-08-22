@@ -28,7 +28,7 @@ for i in "${!MODELS[@]}"; do
   echo "================================================================="
   echo " [${idx}/${#MODELS[@]}] Evaluating model: ${model}"
   echo "================================================================="
-  
+
   uv run vesta bench run \
     --system answer_only \
     --from-context "${CONTEXT_FILE}" \
@@ -41,7 +41,7 @@ for i in "${!MODELS[@]}"; do
     --judge-api-key "${API_KEY}" \
     --label "baseline-l3-${model}" \
     --report both
-    
+
   echo " [${idx}/${#MODELS[@]}] Completed evaluation for: ${model}"
 done
 

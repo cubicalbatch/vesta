@@ -1402,7 +1402,7 @@ async def _verify_judge(
     return out
 
 
-def _write_verification_review(  # noqa: PLR0917 — fixed set of report inputs
+def _write_verification_review(
     dataset: Any,
     qs: Sequence[Any],
     support: dict[str, bool],

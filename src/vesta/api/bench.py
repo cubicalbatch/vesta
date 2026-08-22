@@ -2115,7 +2115,7 @@ _RESULT_COLUMNS = (
 
 
 @router.get("/runs/{run_id}/results", response_model=BenchResultsPage)
-async def get_bench_run_results(  # noqa: PLR0917 — route params, one per filter
+async def get_bench_run_results(
     request: Request,
     run_id: int,
     verdict: str | None = Query(None, description="filter by verdict"),

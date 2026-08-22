@@ -42,6 +42,7 @@ packages = ["src/vesta"]
 dev = [
     "httpx>=0.28.1",
     "mypy>=2.3.0",
+    "pre-commit>=4.6.2",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.16.0",
@@ -78,6 +79,7 @@ ignore = [
     "E501",   # line length handled by formatter
     "PLR2004",# magic numbers in tests/config are fine
     "PLR0913",# arg count (DI constructors are explicit)
+    "PLR0917",# positional arg count
     "B008",   # FastAPI Depends() in default args is the canonical pattern
     "PLW0603",# module-global resolver is an intentional configured singleton
     "UP040",  # PEP 695 type aliases — cosmetic, keep TypeVar form for now
@@ -88,6 +90,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["PLR2004", "S101", "SLF001", "TID252", "PLC0415", "SIM112", "B017"]
 "src/vesta/**" = ["SLF001", "PLC0415"]  # package plumbing; lazy imports where needed
+"scripts/**" = ["PLC0415"]  # CLI scripts with deferred imports
 "src/vesta/api/answer.py" = ["PLR0911"]  # _serialize_event is a clean isinstance dispatch over 7 event types
 "src/vesta/main.py" = ["PLR0915"]  # lifespan is the composition root; inherently multi-step
 
@@ -150,4 +153,3 @@ ignore_missing_imports = true
 # ChatMessage dataclass and cast — the runtime contract is OpenAI-compatible.
 module = "openai.*"
 disable_error_code = "call-overload, arg-type"
-

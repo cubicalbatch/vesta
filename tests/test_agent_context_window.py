@@ -748,7 +748,7 @@ _REFERENCE_SCENARIOS: list[tuple[str, dict[str, Any], list[tuple[str, str]], str
     _REFERENCE_SCENARIOS,
     ids=[s[0] for s in _REFERENCE_SCENARIOS],
 )
-async def test_full_profile_is_byte_identical_to_reference(  # noqa: PLR0917
+async def test_full_profile_is_byte_identical_to_reference(
     state: Any,
     monkeypatch: pytest.MonkeyPatch,
     name: str,

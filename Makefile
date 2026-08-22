@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 BACKEND_PORT := 5586
-DOCKER_IMAGE := vesta:latest
+DOCKER_IMAGE := ghcr.io/cubicalbatch/vesta:latest
 
 .PHONY: help install install-py install-frontend \
 	dev dev-backend dev-frontend \

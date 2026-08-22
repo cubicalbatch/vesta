@@ -67,7 +67,7 @@ def _coerce_duration(value: object) -> int | None:
     youtube2zim shape). Returns whole seconds, or ``None`` if neither."""
     if isinstance(value, bool):  # bool is an int subclass — exclude explicitly
         return None
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return int(value)
     if isinstance(value, str):
         m = _ISO_DURATION_RE.match(value.strip())

@@ -1,12 +1,12 @@
 # Vesta Model Matrix Benchmark Report (5 Models × {8k, 16k} Context Windows)
 
-**Date:** 2026-08-19  
-**Dataset:** `vesta_bench_v2.json` (Release Tier: 200 Questions, Level 3)  
-**Retrieval Profile:** `hybrid` (dense + BM25)  
-**Retrieval Scope:** `wikipedia_en_top_nopic_2026-06.zim`  
-**Judge Model:** `google/gemma-4-12b-qat` (temperature=0.0, max_tokens=4096)  
-**Endpoint:** `http://desktop.onoz.cc:1234/v1`  
-**Runner System:** `agentic_pydantic` (Full live AI agent search workflow)  
+**Date:** 2026-08-19
+**Dataset:** `vesta_bench_v2.json` (Release Tier: 200 Questions, Level 3)
+**Retrieval Profile:** `hybrid` (dense + BM25)
+**Retrieval Scope:** `wikipedia_en_top_nopic_2026-06.zim`
+**Judge Model:** `google/gemma-4-12b-qat` (temperature=0.0, max_tokens=4096)
+**Endpoint:** `http://desktop.onoz.cc:1234/v1`
+**Runner System:** `agentic_pydantic` (Full live AI agent search workflow)
 
 ---
 

@@ -116,9 +116,9 @@ def _install_patches() -> None:
     """
     # Local by design: the argv fail-fast guard above must not pay vesta's
     # import cost, so nothing from the app imports at module top.
-    from vesta.retrieval.impls.candidate_articles import CandidateArticles  # noqa: PLC0415
-    from vesta.zim import passages as passages_mod  # noqa: PLC0415
-    from vesta.zim.registry import LocalArchive  # noqa: PLC0415
+    from vesta.retrieval.impls.candidate_articles import CandidateArticles
+    from vesta.zim import passages as passages_mod
+    from vesta.zim.registry import LocalArchive
 
     orig_extract = LocalArchive.extract
     orig_split = passages_mod.split_passages
@@ -197,7 +197,7 @@ def run() -> int:
         return 2
     _install_patches()
     atexit.register(_print_report)
-    from vesta.cli import main  # noqa: PLC0415  # local so the guard above stays free
+    from vesta.cli import main  # local so the guard above stays free
 
     return main(argv)
 

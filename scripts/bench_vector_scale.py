@@ -476,12 +476,12 @@ async def _run_lancedb_arm(
     searchable-during-build index possible), so it is the
     correct backend-neutral comparison point against sqlite-vec's flat scan,
     not a synonym for `IvfFlat`."""
-    import lancedb  # noqa: PLC0415 — optional heavy dep, lance arm only
-    from lancedb import index as lindex  # noqa: PLC0415
+    import lancedb
+    from lancedb import index as lindex
 
     lance_dir = scratch_dir / f"lance_{n}_{index_type}"
     print(f"\n--- arm=lancedb:{index_type} n={n:,} -> {lance_dir} ---", flush=True)
-    import pyarrow as pa  # noqa: PLC0415
+    import pyarrow as pa
 
     db = await lancedb.connect_async(str(lance_dir))
     schema = pa.schema(

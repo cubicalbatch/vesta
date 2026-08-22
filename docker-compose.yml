@@ -12,12 +12,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: vesta:latest
+    image: ghcr.io/cubicalbatch/vesta:latest
     ports:
       # Explicit host bind on all interfaces, host port 5129 → container port 8080.
       - "0.0.0.0:5129:8080"
     volumes:
-      - ./data2:/app/data
+      - ./data:/app/data
     # GPU acceleration (optional): the image ships the Vulkan loader + Intel/AMD
     # ICDs + the ggml-vulkan backend. To use a GPU, expose the render nodes:
     #   devices:

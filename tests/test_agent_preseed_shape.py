@@ -318,7 +318,7 @@ _COVERAGE_QUESTION = "Where did Ada Lovelace meet Grace Hopper?"
         ),
     ],
 )
-async def test_coverage_search_behavior(  # noqa: PLR0917
+async def test_coverage_search_behavior(
     state: Any,
     monkeypatch: pytest.MonkeyPatch,
     coverage_on: bool,
@@ -437,7 +437,7 @@ def _weak_cards() -> list[SourceCard]:
         ("strong", False, True, False, None, False, False),
     ],
 )
-async def test_evidence_directive_modes(  # noqa: PLR0917
+async def test_evidence_directive_modes(
     state: Any,
     monkeypatch: pytest.MonkeyPatch,
     mode: str,
