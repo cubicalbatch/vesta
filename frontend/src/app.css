@@ -1,0 +1,252 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+@import '@fontsource/bitter/600.css';
+@import '@fontsource/bitter/700.css';
+@plugin '@tailwindcss/typography';
+
+/* Class-based dark mode (not just prefers-color-scheme) so the topbar theme
+   toggle can drive it: put `class="dark"` on <html> (mode-watcher / theme
+   store owns that). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Design tokens live in this @theme block. The tokens are the contract;
+ * component classes come from Tailwind utilities built on top of them. Do not
+ * hand-roll a parallel CSS file — extend this theme.
+ */
+@theme {
+	--font-sans: 'Inter Variable', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+		Helvetica, Arial, sans-serif;
+	--font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+	/* Serif is reader-only: never used for generated answers. */
+	--font-serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, Palladio, 'Source Serif 4', Georgia,
+		'Times New Roman', serif;
+	/* Display: warm rounded slab-serif for hero headlines (Clay Hearth direction). */
+	--font-display: 'Bitter', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+
+	--text-xs: 0.75rem;
+	--text-sm: 0.875rem;
+	--text-base: 1rem;
+	--text-lg: 1.125rem;
+	--text-xl: 1.25rem;
+	--text-2xl: 1.5rem;
+	--text-3xl: clamp(1.6rem, 1.2rem + 1.6vw, 2rem);
+	--text-4xl: clamp(2rem, 1.4rem + 2.8vw, 2.75rem);
+
+	--leading-tight: 1.2;
+	--leading-snug: 1.35;
+	--leading-normal: 1.6;
+	--leading-relaxed: 1.75;
+
+	/* 1-6 already match Tailwind's default spacing scale; only 7-10 diverge
+	   (a steeper jump for section/page rhythm). */
+	--spacing-7: 2rem;
+	--spacing-8: 2.5rem;
+	--spacing-9: 3.5rem;
+	--spacing-10: 5rem;
+
+	--radius-sm: 6px;
+	--radius-md: 8px;
+	--radius-lg: 12px;
+	--radius-xl: 16px;
+	--radius-2xl: 20px;
+	--radius-full: 9999px;
+
+	--shadow-xs: 0 1px 2px rgba(70, 45, 28, 0.06);
+	--shadow-sm: 0 1px 2px rgba(70, 45, 28, 0.06), 0 1px 3px rgba(70, 45, 28, 0.05);
+	--shadow-md: 0 6px 20px -6px rgba(96, 56, 32, 0.12), 0 2px 6px -3px rgba(96, 56, 32, 0.08);
+	--shadow-lg: 0 18px 48px -14px rgba(132, 64, 30, 0.18), 0 6px 14px -6px rgba(96, 56, 32, 0.10);
+	--shadow-pop: 0 24px 64px -16px rgba(132, 64, 30, 0.22), 0 8px 24px -8px rgba(96, 56, 32, 0.14);
+
+	--color-accent: #b54a2b;
+	--color-accent-hover: #973d22;
+	--color-accent-soft: #faeae1;
+	--color-accent-soft-text: #8a341a;
+
+	--color-canvas: #f5f1ec;
+	--color-surface: #fffefb;
+	--color-surface-muted: #efe9e1;
+	--color-surface-sunken: #e9e2d8;
+
+	--color-ink: #221b14;
+	--color-ink-2: #3a3024;
+	--color-muted: #6b5d4f;
+	--color-faint: #948576;
+	--color-disabled: #b3a695;
+
+	--color-border: #e6dfd6;
+	--color-border-strong: #d3c9bb;
+
+	--color-success: #15803d;
+	--color-success-soft: #ecfdf5;
+	--color-warning: #b45309;
+	--color-warning-soft: #fffbeb;
+	--color-danger: #b91c1c;
+	--color-danger-hover: #991b1b;
+	--color-danger-soft: #fef2f2;
+	--color-amber: #d97706;
+
+	--color-score-fill: #b54a2b;
+	--color-score-track: #e6dfd6;
+}
+
+/* Layout + motion tokens that aren't part of Tailwind's generated-utility
+   namespaces (--color-*, --font-*, --text-*, --radius-*, --shadow-*,
+   --spacing-*) stay as plain custom properties, referenced via arbitrary
+   values (e.g. `w-[var(--rail-w)]`). */
+:root {
+	--accent-ring: rgba(181, 74, 43, 0.30);
+
+	--content-max: 768px;
+	--wide-max: 1160px;
+	--rail-w: 316px;
+	--topbar-h: 56px;
+	--tabbar-h: 64px;
+
+	--t: 180ms ease;
+}
+
+.dark {
+	--color-accent: #d97050;
+	--color-accent-hover: #e88a6c;
+	--color-accent-soft: #241611;
+	--color-accent-soft-text: #d98a6e;
+	--accent-ring: rgba(217, 112, 80, 0.40);
+
+	--color-canvas: #15110d;
+	--color-surface: #1c1812;
+	--color-surface-muted: #241f17;
+	--color-surface-sunken: #1f1a13;
+
+	--color-ink: #f0ebe4;
+	--color-ink-2: #e2dccf;
+	--color-muted: #a59889;
+	--color-faint: #7a6e60;
+	--color-disabled: #514838;
+
+	--color-border: #2e2620;
+	--color-border-strong: #40352b;
+
+	--color-success-soft: #052e16;
+	--color-warning-soft: #2a1a04;
+	--color-danger: #f87171;
+	--color-danger-hover: #fca5a5;
+	--color-danger-soft: #2a0a0a;
+
+	--color-score-fill: #d97050;
+	--color-score-track: #2e2620;
+
+	--shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+	--shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45), 0 2px 4px rgba(0, 0, 0, 0.35);
+	--shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55), 0 4px 12px rgba(0, 0, 0, 0.4);
+	--shadow-pop: 0 24px 64px rgba(0, 0, 0, 0.7), 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+@layer base {
+	body {
+		background: var(--color-canvas);
+		color: var(--color-ink);
+		-webkit-font-smoothing: antialiased;
+		font-feature-settings: 'cv11', 'ss01';
+	}
+
+	:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 2px;
+		border-radius: var(--radius-sm);
+	}
+
+	::selection {
+		background: var(--color-accent-soft);
+		color: var(--color-accent-soft-text);
+	}
+}
+
+/* Indeterminate progress bar for jobs with no byte-level progress (the catalog
+   refresh is a single OPDS fetch reported 0/1 → 1/1). The fill slides across the
+   track; reduced-motion users get a static partial fill instead. */
+@keyframes vesta-progress-slide {
+	from {
+		left: -35%;
+	}
+	to {
+		left: 100%;
+	}
+}
+.catalog-bar-indeterminate > span {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: -35%;
+	width: 35%;
+	border-radius: inherit;
+	background: var(--color-accent);
+	animation: vesta-progress-slide 1.15s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+	.catalog-bar-indeterminate > span {
+		left: 0;
+		width: 35%;
+		animation: none;
+	}
+}
+
+/* ===== Clay Hearth direction (warm terracotta on warm stone) =====
+   Identity follow-on: the hearth Vesta is named for. These are the only
+   hand-rolled rules beyond @theme; everything else is Tailwind utilities. */
+
+/* Logo mark — rounded clay tile with a flame, warm gradient + inset highlight.
+   Shared by TopBar and WelcomeTopBar so the wordmark never drifts. */
+.vesta-logo {
+	background: linear-gradient(
+		150deg,
+		color-mix(in srgb, var(--color-accent) 92%, white 8%),
+		var(--color-accent) 60%,
+		var(--color-accent-hover)
+	);
+	color: #fff;
+	border-radius: 9px;
+	box-shadow:
+		0 2px 6px -1px color-mix(in srgb, var(--color-accent) 55%, transparent),
+		inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+/* Signature: the hearth glow — one soft warm radial wash behind hero sections.
+   Drop a `.hearth-glow` child inside a `position: relative` hero. Adapts to the
+   active theme via color-mix on --color-accent. Reduced motion → static glow. */
+.hearth-glow {
+	position: absolute;
+	z-index: -1;
+	pointer-events: none;
+	left: 50%;
+	top: 30%;
+	width: min(880px, 130vw);
+	height: min(640px, 110vw);
+	transform: translate(-50%, -50%);
+	background: radial-gradient(
+		46% 50% at 50% 50%,
+		color-mix(in srgb, var(--color-accent) 22%, transparent),
+		color-mix(in srgb, var(--color-accent) 10%, transparent) 45%,
+		transparent 72%
+	);
+	filter: blur(6px);
+	animation: vesta-hearth-breathe 7s ease-in-out infinite;
+}
+@keyframes vesta-hearth-breathe {
+	0%,
+	100% {
+		opacity: 0.72;
+		transform: translate(-50%, -50%) scale(0.985);
+	}
+	50% {
+		opacity: 0.98;
+		transform: translate(-50%, -50%) scale(1.015);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.hearth-glow {
+		animation: none;
+		opacity: 0.9;
+	}
+}

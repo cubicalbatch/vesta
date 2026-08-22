@@ -1,0 +1,45 @@
+name: out_of_corpus
+provenance: hand-written
+entries:
+  - id: o01
+    query: What is the release date of the Elden Ring DLC Shadow of the Erdtree?
+    expected_paths: []
+    expected_fact: ""
+    notes: Abstention slice — topics absent from this "top mini" archive. A correct
+      run returns NO high-confidence hit (abstention). No expected article.
+  - id: o02
+    query: Who are the impostors in the game Among Us?
+    expected_paths: []
+    expected_fact: ""
+  - id: o03
+    query: What is Taylor Swift's best-selling album?
+    expected_paths: []
+    expected_fact: ""
+  - id: o04
+    query: Explain the 2021 GameStop short squeeze mechanics.
+    expected_paths: []
+    expected_fact: ""
+  - id: o05
+    query: How many COVID-19 cases were reported in Tuvalu?
+    expected_paths: []
+    expected_fact: ""
+  - id: o06
+    query: List every Pokemon by Pokedex number.
+    expected_paths: []
+    expected_fact: ""
+  - id: o07
+    query: What is the current price of Dogecoin?
+    expected_paths: []
+    expected_fact: ""
+  - id: o08
+    query: Who won the most recent season of the reality show Love Island?
+    expected_paths: []
+    expected_fact: ""
+  - id: o09
+    query: What is the metacritic score for the video game Starfield?
+    expected_paths: []
+    expected_fact: ""
+  - id: o10
+    query: How do I install mods for Baldur's Gate 3?
+    expected_paths: []
+    expected_fact: ""

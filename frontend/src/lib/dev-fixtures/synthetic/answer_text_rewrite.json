@@ -1,0 +1,59 @@
+{
+  "description": "SYNTHETIC stream. Exercises the 2026-08-02 answer_text amendment: raw token markers are PASSAGE numbers ([3], [1]); citations.answer_text rewrites them to CARD numbers ([1], [2]) and answer_span offsets are computed against answer_text, not the raw token concatenation.",
+  "query": "When was the Eiffel Tower built and how tall is it?",
+  "events": [
+    {
+      "event": "sources",
+      "data": {
+        "cards": [
+          {
+            "zim_id": 1,
+            "path": "Eiffel_Tower",
+            "title": "Eiffel Tower",
+            "snippet": "The Eiffel Tower is a wrought-iron lattice tower...",
+            "breadcrumb": "Eiffel Tower",
+            "score": 0.95,
+            "source": "xapian_fts"
+          },
+          {
+            "zim_id": 1,
+            "path": "Eiffel_Tower",
+            "title": "Eiffel Tower",
+            "snippet": "It is 330 metres tall, about the same height as an 81-storey building.",
+            "breadcrumb": "Eiffel Tower > Structure",
+            "score": 0.88,
+            "source": "section_window"
+          }
+        ],
+        "merge": false
+      }
+    },
+    {"event": "status", "data": {"phase": "reading", "detail": "2 sources"}},
+    {"event": "status", "data": {"phase": "generating", "detail": "streaming answer"}},
+    {"event": "token", "data": {"text": "The Eiffel Tower was completed in 1889 [3]"}},
+    {"event": "token", "data": {"text": " and stands 330 metres tall [1]."}},
+    {
+      "event": "citations",
+      "data": {
+        "spans": [
+          {"answer_span": [0, 39], "card_id": 0, "passage_span": [0, 60], "score": 0.81},
+          {"answer_span": [40, 68], "card_id": 1, "passage_span": [0, 71], "score": 0.9}
+        ],
+        "answer_text": "The Eiffel Tower was completed in 1889 [1] and stands 330 metres tall [2]."
+      }
+    },
+    {
+      "event": "trace",
+      "data": {
+        "version": 1,
+        "stages": [
+          {"name": "answer", "component": "single_shot", "params": {}, "inputs": {}, "outputs": {"finish": "stop"}, "duration_ms": 6100.0},
+          {"name": "citations", "component": "post_hoc_align", "params": {"min_span_score": 0.55}, "inputs": {}, "outputs": {"spans": 2, "renumbered": true}, "duration_ms": 6.0}
+        ],
+        "degradations": [],
+        "profile": "hybrid"
+      }
+    },
+    {"event": "done", "data": {}}
+  ]
+}

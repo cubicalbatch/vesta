@@ -1,0 +1,105 @@
+name: reformulation
+provenance: hand-written
+entries:
+  - id: r01
+    query: How much nitrogen is in the air?
+    expected_paths: [Atmosphere_of_Earth]
+    expected_fact: "78"
+    notes: >
+      Motivating case: "air" is not an
+      article; the article is about the mixture of gases around Earth.
+  - id: r02
+    query: Who is Albert Einstein's wife?
+    expected_paths: [Albert_Einstein]
+    expected_fact: "Elsa"
+    notes: A relation query — the article is about the person, not the relation.
+  - id: r03
+    query: What do you call a baby kangaroo?
+    expected_paths: [Kangaroo]
+    expected_fact: joey
+    notes: Colloquial phrasing (a definition lookup) over the animal's article.
+  - id: r04
+    query: What is the highest point on Earth's surface above sea level?
+    expected_paths: [Mount_Everest]
+    expected_fact: Everest
+    notes: Descriptive/periphrastic phrasing instead of the article's own name.
+  - id: r05
+    query: What do we call the process of getting older?
+    expected_paths: [Ageing]
+    expected_fact: ageing
+    notes: Colloquial "getting older" vs. the article's formal title.
+  - id: r06
+    query: What do you call the inability to sleep?
+    expected_paths: [Insomnia]
+    expected_fact: sleeplessness
+    notes: Definition-style query over the medical-condition article's name.
+  - id: r07
+    query: What is the fear of heights called?
+    expected_paths: [Acrophobia]
+    expected_fact: height
+    notes: Same shape as r06 — a different phobia.
+  - id: r08
+    query: What do bees make in their hives?
+    expected_paths: [Honey]
+    expected_fact: bee
+    notes: The product, not the insect — a different article than "Bee".
+  - id: r09
+    query: Who came up with the theory of evolution by natural selection?
+    expected_paths: [Charles_Darwin]
+    expected_fact: Darwin
+    notes: Named after the concept rather than the person.
+  - id: r10
+    query: What do you call solid carbon dioxide?
+    expected_paths: [Dry_ice]
+    expected_fact: solid form of carbon dioxide
+    notes: Chemical-description phrasing vs. the common-name article title.
+  - id: r11
+    query: What is table salt made of chemically?
+    expected_paths: [Sodium_chloride]
+    expected_fact: sodium
+    notes: Common name ("table salt") vs. the chemical-compound article title.
+  - id: r12
+    query: What instrument is used to measure temperature?
+    expected_paths: [Thermometer]
+    expected_fact: temperature
+    notes: Functional description vs. the instrument's name.
+  - id: r13
+    query: What gas do plants absorb from the air to make food?
+    expected_paths: [Photosynthesis, Carbon_dioxide]
+    expected_fact: carbon dioxide
+    notes: Either the process article or the gas article is an acceptable hit.
+  - id: r14
+    query: Who was Napoleon's wife?
+    expected_paths: [Napoleon]
+    expected_fact: Joséphine
+    notes: Relation query resolving to the person's own article (like r02).
+  - id: r15
+    query: How long is a marathon race in kilometers?
+    expected_paths: [Marathon]
+    expected_fact: kilometres
+    notes: A "how long is X" phrasing rather than the event's proper name.
+  - id: r16
+    query: What is the boiling point of water in Celsius?
+    expected_paths: [Water]
+    expected_fact: "100"
+    notes: A specific-fact query the article covers under a broader topic.
+  - id: r17
+    query: What do you call a group of lions?
+    expected_paths: [Lion]
+    expected_fact: pride
+    notes: Collective-noun definition query over the animal's article.
+  - id: r18
+    query: What is the largest planet in the Solar System?
+    expected_paths: [Jupiter]
+    expected_fact: Jupiter
+    notes: Superlative-descriptive phrasing rather than the planet's name.
+  - id: r19
+    query: What causes the seasons to change on Earth?
+    expected_paths: [Season, Axial_tilt]
+    expected_fact: tilt
+    notes: Causal phrasing; either the seasons article or axial-tilt article counts.
+  - id: r20
+    query: What do you call a very large ocean wave caused by an earthquake?
+    expected_paths: [Tsunami]
+    expected_fact: earthquake
+    notes: Causal/descriptive phrasing of the phenomenon rather than its name.

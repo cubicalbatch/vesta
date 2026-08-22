@@ -1,0 +1,120 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+develop-eggs/
+downloads/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+.installed.cfg
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Tool caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.tox/
+.nox/
+.cache/
+htmlcov/
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# ---- Node / Svelte ----
+node_modules/
+frontend/dist/
+frontend/build/
+.svelte-kit/
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+*.tsbuildinfo
+
+# Built SPA served by the backend (Phase 11 adapter-static output lands in
+# src/vesta/static/). Treated as build output; the Phase 04 dev console that
+# once lived under static/dev/ is retired (Phase 16).
+src/vesta/static/*
+
+# ---- Env / secrets ----
+.env
+.env.*
+!.env.example
+
+# ---- Editor / OS ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ---- AI Agent & Tooling ----
+.claude/
+.crush/
+.opencode/
+.cursor/
+.gemini/
+.aider*
+AGENTS.md
+ARCHITECTURE.md
+CLAUDE.md
+frontend/CLAUDE.md
+AGENT_INSTRUCTIONS.md
+scripts/bench/AGENT_INSTRUCTIONS.md
+phased_plan/
+
+# ---- Project data (never commit) ----
+# ZIM archives are large (~50 MB and ~317 MB) — always local.
+data/zims/*.zim
+# Downloaded/embedding models and runtime caches.
+data/models/
+data/cache/
+# SQLite databases (system of record) and their sidecar files.
+*.db
+*.db-wal
+*.db-shm
+data/vesta.db*
+# Per-archive indexing resume sidecars (written by `vesta index`).
+data/.index_progress_*.json
+# Local dev/bench run state (bench DBs, downloaded models, etc.). Never commit.
+data/
+data2/
+# Retrieval-context snapshots (§20 mode-2 replay) — large, regenerable artifacts.
+snapshots/
+
+# ---- Benchmark logs & results ----
+*.log
+logs/
+bench_logs/
+bench_results/
+*.jsonl
+*.csv
+
+# ---- Temporary / ad-hoc scripts and migration docs ----
+check_desktop_models.sh
+move_to_lancedb.md
+.playwright-mcp/
+

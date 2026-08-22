@@ -1,0 +1,25 @@
+{
+  "description": "Sources-only answer stream (no LLM configured). Auto-selected when Capability.LLM is absent.",
+  "query": "Battle of Hastings",
+  "events": [
+    {
+      "event": "sources",
+      "data": {
+        "cards": [
+          {
+            "zim_id": 1,
+            "path": "Battle_of_Hastings",
+            "title": "Battle of Hastings",
+            "snippet": "The Battle of Hastings was fought on 14 October 1066.",
+            "breadcrumb": "Battle of Hastings",
+            "score": 0.87,
+            "source": "xapian_fts"
+          }
+        ]
+      }
+    },
+    {"event": "status", "data": {"phase": "sources_only", "detail": "1 sources"}},
+    {"event": "trace", "data": {"version": 1, "stages": [], "degradations": []}},
+    {"event": "done", "data": {}}
+  ]
+}

@@ -1,0 +1,448 @@
+"""The async job runner.
+
+One mechanism for all long work: jobs persist to the ``jobs`` table, survive a
+restart by resuming from their last checkpoint, throttle progress writes, expose
+SSE streams (per-job + global), and obey per-type concurrency limits.
+
+Deliberately *not* a task framework: no retries, no
+priorities, no DAGs. The primary job kinds are download and index; the
+shape here is the minimum that makes them resumable.
+
+Cancellation is cooperative + hard-kill: a job polls
+``JobHandle.cancelled()``; the runner also cancels the asyncio task. Pause stops
+a running task and keeps its checkpoint so resume picks up where it left off.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from collections.abc import AsyncIterator, Mapping
+from contextlib import suppress
+from dataclasses import dataclass
+from typing import Any
+
+from vesta import config
+from vesta.db.connection import Database
+from vesta.jobs.handle import JobHandleImpl
+from vesta.jobs.types import (
+    JOB_TYPES,
+    RESUME_CHECKPOINT_KEY,
+    JobRecord,
+    _maybe_json,
+)
+
+_log = logging.getLogger(__name__)
+
+_TERMINAL = frozenset({"done", "error", "cancelled"})
+_ACTIVE = frozenset({"running", "queued", "paused"})
+_QUEUE_MAX = 64  # bound SSE backlog; a slow consumer drops rather than blocks a job
+
+
+@dataclass
+class _RunState:
+    """In-memory state for a job that has been (or is being) scheduled."""
+
+    cancel_requested: bool = False
+    pause_requested: bool = False
+    task: asyncio.Task[None] | None = None
+    started_monotonic: float | None = None
+
+
+class JobRunner:
+    """Owns the lifetime of every running job task."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+        self._runs: dict[int, _RunState] = {}
+        self._sems: dict[str, asyncio.Semaphore] = {}
+        self._job_queues: dict[int, list[asyncio.Queue[dict[str, Any]]]] = {}
+        self._global_queues: list[asyncio.Queue[dict[str, Any]]] = []
+        self._stopping = False
+
+    # ── lifecycle ──────────────────────────────────────────────────────────
+
+    async def start(self) -> None:
+        """Resume jobs interrupted by a crash/restart.
+
+        Any job left ``running`` was killed mid-flight: re-queue it so it resumes
+        from its checkpoint.         ``paused`` jobs stay paused until the user resumes.
+        """
+        async with (
+            self._db.read() as conn,
+            conn.execute("SELECT id FROM jobs WHERE status = 'running'") as cur,
+        ):
+            rows = list(await cur.fetchall())
+        for (job_id,) in rows:
+            await self._set_status(job_id, "queued")
+            await self._enqueue(job_id, resume=True)
+        if rows:
+            _log.info("jobs.resumed", extra={"count": len(rows)})
+
+    async def stop(self) -> None:
+        """Cancel every running task so the process can exit cleanly."""
+        self._stopping = True
+        tasks = [s.task for s in self._runs.values() if s.task is not None]
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with suppress(asyncio.CancelledError):
+                await task
+
+    # ── public actions ─────────────────────────────────────────────────────
+
+    async def submit(
+        self,
+        type_: str,
+        target: str | None,
+        params: Mapping[str, Any] | None = None,
+    ) -> int:
+        """Create a job row and schedule it. Returns the new job id."""
+        if type_ not in JOB_TYPES:
+            raise ValueError(f"unknown job type {type_!r}")
+        params_json = json.dumps(dict(params or {}))
+        now = _now_iso()
+        async with self._db.write() as conn:
+            cur = await conn.execute(
+                "INSERT INTO jobs(type, target, params, status, progress, total, "
+                "created_at, updated_at) VALUES(?, ?, ?, 'queued', 0, 0, ?, ?)",
+                (type_, target, params_json, now, now),
+            )
+            job_id = int(cur.lastrowid) if cur.lastrowid is not None else 0
+        await self._publish_status(job_id, "queued")
+        await self._enqueue(job_id, resume=False)
+        return job_id
+
+    async def pause(self, job_id: int) -> bool:
+        """Stop a running job, keeping its checkpoint for later resume."""
+        state = self._runs.get(job_id)
+        record = await self.get(job_id)
+        if record is None or record.status != "running":
+            return False
+        if state is not None:
+            state.pause_requested = True
+            if state.task is not None:
+                state.task.cancel()
+        return True
+
+    async def resume(self, job_id: int) -> bool:
+        """Resume a paused (or queued) job from its checkpoint."""
+        record = await self.get(job_id)
+        if record is None or record.status not in {"paused", "queued"}:
+            return False
+        state = self._runs.get(job_id)
+        if state is not None:
+            state.pause_requested = False
+            state.cancel_requested = False
+        await self._set_status(job_id, "queued")
+        await self._enqueue(job_id, resume=True)
+        return True
+
+    async def cancel(self, job_id: int) -> bool:
+        """Cooperatively + forcibly cancel a running or queued job."""
+        state = self._runs.get(job_id)
+        record = await self.get(job_id)
+        if record is None or record.status in _TERMINAL:
+            return False
+        if state is not None:
+            state.cancel_requested = True
+            if state.task is not None:
+                state.task.cancel()
+        else:
+            # queued but not yet running: terminate immediately
+            await self._finish(job_id, "cancelled")
+        return True
+
+    # ── reads ──────────────────────────────────────────────────────────────
+
+    async def get(self, job_id: int) -> JobRecord | None:
+        async with (
+            self._db.read() as conn,
+            conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)) as cur,
+        ):
+            row = await cur.fetchone()
+        return _row_to_record(row) if row is not None else None
+
+    async def list_jobs(self, limit: int = 100) -> list[JobRecord]:
+        async with (
+            self._db.read() as conn,
+            conn.execute("SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,)) as cur,
+        ):
+            rows = await cur.fetchall()
+        return [_row_to_record(r) for r in rows]
+
+    # ── SSE ────────────────────────────────────────────────────────────────
+
+    async def stream(self, job_id: int) -> AsyncIterator[dict[str, Any]]:
+        """Yield events for one job: current snapshot first, then live updates."""
+        record = await self.get(job_id)
+        if record is None:
+            return
+        queue = self._subscribe(job_id)
+        try:
+            yield {"event": "snapshot", "data": record.to_dict()}
+            while True:
+                event = await queue.get()
+                yield event
+                data = event.get("data", {})
+                if isinstance(data, dict) and data.get("status") in _TERMINAL:
+                    return
+        finally:
+            self._unsubscribe(job_id, queue)
+
+    async def stream_all(self) -> AsyncIterator[dict[str, Any]]:
+        """Global stream: a snapshot of all jobs, then every status change."""
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=_QUEUE_MAX)
+        self._global_queues.append(queue)
+        try:
+            for record in await self.list_jobs():
+                yield {"event": "snapshot", "data": record.to_dict()}
+            while True:
+                event = await queue.get()
+                yield event
+        finally:
+            if queue in self._global_queues:
+                self._global_queues.remove(queue)
+
+    def _subscribe(self, job_id: int) -> asyncio.Queue[dict[str, Any]]:
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=_QUEUE_MAX)
+        self._job_queues.setdefault(job_id, []).append(queue)
+        return queue
+
+    def _unsubscribe(self, job_id: int, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        queues = self._job_queues.get(job_id)
+        if queues and queue in queues:
+            queues.remove(queue)
+
+    # ── scheduling / execution ─────────────────────────────────────────────
+
+    async def _enqueue(self, job_id: int, *, resume: bool) -> None:
+        record = await self.get(job_id)
+        if record is None:
+            return
+        state = self._runs.setdefault(job_id, _RunState())
+        sem = self._semaphore_for(record.type)
+        state.task = asyncio.create_task(self._acquire_and_run(job_id, sem), name=f"job-{job_id}")
+
+    async def _acquire_and_run(self, job_id: int, sem: asyncio.Semaphore) -> None:
+        # A job cancelled while still blocked on the semaphore (waiting for a
+        # concurrency slot, not yet running) never reaches _run_job's own
+        # CancelledError handler — cancellation lands at `await sem.acquire()`
+        # instead. Catch it here so the job still ends up `cancelled` with an
+        # SSE status event, exactly like a job cancelled mid-run.
+        try:
+            await sem.acquire()
+        except asyncio.CancelledError:
+            await self._finish(job_id, "cancelled")
+            return
+        try:
+            if self._stopping:
+                return
+            state = self._runs.get(job_id)
+            if state is not None and state.cancel_requested:
+                await self._finish(job_id, "cancelled")
+                return
+            await self._run_job(job_id)
+        finally:
+            sem.release()
+
+    async def _run_job(self, job_id: int) -> None:
+        state = self._runs.setdefault(job_id, _RunState())
+        record = await self.get(job_id)
+        if record is None:
+            return
+        jt = JOB_TYPES.get(record.type)
+        if jt is None:
+            await self._finish(job_id, "error", error=f"unknown job type {record.type}")
+            return
+        await self._set_status(job_id, "running")
+        state.started_monotonic = time.monotonic()
+        handle = JobHandleImpl(self, job_id)
+        params: dict[str, Any] = dict(record.params)
+        cp = _maybe_json(record.checkpoint)
+        if cp is not None:
+            params[RESUME_CHECKPOINT_KEY] = cp
+        try:
+            await jt.run(handle, params)
+        except asyncio.CancelledError:
+            if state.pause_requested:
+                await self._set_status(job_id, "paused")
+                await self._publish_status(job_id, "paused")
+            else:
+                await self._finish(job_id, "cancelled")
+            raise
+        except Exception as exc:
+            await self._finish(job_id, "error", error=repr(exc))
+            _log.exception("jobs.run_failed", extra={"job_id": job_id, "type": record.type})
+            return
+        else:
+            pending = handle.pending_final()
+            if pending is not None:
+                done, total, message = pending
+                await self._write_progress(job_id, done, total, message, final=True)
+            await self._finish(job_id, "done")
+
+    # ── cancellation flag ──────────────────────────────────────────────────
+
+    def _is_cancelling(self, job_id: int) -> bool:
+        state = self._runs.get(job_id)
+        return state is not None and (state.cancel_requested or state.pause_requested)
+
+    # ── persistence ────────────────────────────────────────────────────────
+
+    async def _write_progress(
+        self, job_id: int, done: int, total: int, message: str, *, final: bool
+    ) -> None:
+        rate, eta = _rate_eta(self._runs.get(job_id), done, total)
+        now = _now_iso()
+        async with self._db.write() as conn:
+            await conn.execute(
+                "UPDATE jobs SET progress = ?, total = ?, message = ?, rate = ?, "
+                "eta_seconds = ?, updated_at = ? WHERE id = ?",
+                (done, total, message, rate, eta, now, job_id),
+            )
+        await self._publish_progress(job_id, done, total, message)
+
+    async def _write_checkpoint(self, job_id: int, blob: Mapping[str, Any]) -> None:
+        now = _now_iso()
+        async with self._db.write() as conn:
+            await conn.execute(
+                "UPDATE jobs SET checkpoint = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(dict(blob)), now, job_id),
+            )
+
+    async def _set_status(self, job_id: int, status: str) -> None:
+        now = _now_iso()
+        finished = now if status in _TERMINAL else None
+        async with self._db.write() as conn:
+            await conn.execute(
+                "UPDATE jobs SET status = ?, updated_at = ?, finished_at = COALESCE(?, "
+                "finished_at) WHERE id = ?",
+                (status, now, finished, job_id),
+            )
+
+    async def _finish(self, job_id: int, status: str, *, error: str | None = None) -> None:
+        now = _now_iso()
+        async with self._db.write() as conn:
+            await conn.execute(
+                "UPDATE jobs SET status = ?, error = ?, updated_at = ?, finished_at = ? "
+                "WHERE id = ?",
+                (status, error, now, now, job_id),
+            )
+        await self._publish_status(job_id, status)
+
+    # ── SSE fan-out ────────────────────────────────────────────────────────
+
+    async def _publish_progress(self, job_id: int, done: int, total: int, message: str) -> None:
+        record = await self.get(job_id)
+        status = record.status if record is not None else "running"
+        await self._publish(
+            job_id,
+            {
+                "event": "progress",
+                "data": {
+                    "id": job_id,
+                    "progress": done,
+                    "total": total,
+                    "message": message,
+                    "status": status,
+                },
+            },
+        )
+
+    async def _publish_status(self, job_id: int, status: str) -> None:
+        record = await self.get(job_id)
+        await self._publish(
+            job_id,
+            {
+                "event": "status",
+                "data": record.to_dict()
+                if record is not None
+                else {"id": job_id, "status": status},
+            },
+        )
+
+    async def _publish(self, job_id: int, event: dict[str, Any]) -> None:
+        for queue in self._job_queues.get(job_id, []):
+            _put_nowait(queue, event)
+        for queue in self._global_queues:
+            _put_nowait(queue, event)
+
+    # ── helpers ────────────────────────────────────────────────────────────
+
+    def _semaphore_for(self, type_name: str) -> asyncio.Semaphore:
+        sem = self._sems.get(type_name)
+        if sem is None:
+            sem = asyncio.Semaphore(self._concurrency_limit(type_name))
+            self._sems[type_name] = sem
+        return sem
+
+    @staticmethod
+    def _concurrency_limit(type_name: str) -> int:
+        """Read ``jobs.max_concurrent.<type>`` if declared, else default to 1.
+
+        New job types declare their own setting; until they do,
+        a limit of 1 keeps the indexer CPU-bound one-at-a-time.
+        """
+        key = f"jobs.max_concurrent.{type_name}"
+        registry = config.all_settings()
+        descriptor = registry.get(key)
+        if descriptor is not None:
+            value = config.get(descriptor)
+            return int(value) if isinstance(value, int) else 1
+        return 1
+
+
+# ── module helpers ──────────────────────────────────────────────────────────
+
+
+def _put_nowait(queue: asyncio.Queue[dict[str, Any]], event: dict[str, Any]) -> None:
+    # A slow SSE consumer misses an event; the snapshot endpoint still gives the
+    # authoritative current state on reconnect. Never block the job.
+    with suppress(asyncio.QueueFull):
+        queue.put_nowait(event)
+
+
+def _rate_eta(state: _RunState | None, done: int, total: int) -> tuple[float | None, int | None]:
+    if state is None or state.started_monotonic is None or done <= 0:
+        return None, None
+    elapsed = max(time.monotonic() - state.started_monotonic, 1e-6)
+    rate = done / elapsed
+    remaining = max(total - done, 0)
+    eta = int(remaining / rate) if rate > 0 else None
+    return rate, eta
+
+
+def _now_iso() -> str:
+    # UTC, second precision, no telemetry-baiting microseconds. Good enough for a
+    # single-user appliance and sorts lexicographically in SQLite TEXT columns.
+    import datetime as _dt
+
+    return _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat()
+
+
+def _row_to_record(row: Any) -> JobRecord:
+    raw_params = row["params"]
+    params: dict[str, Any] = {}
+    if raw_params:
+        with suppress(json.JSONDecodeError):
+            params = dict(json.loads(raw_params))
+    return JobRecord(
+        id=int(row["id"]),
+        type=row["type"],
+        target=row["target"],
+        status=row["status"],
+        progress=int(row["progress"] or 0),
+        total=int(row["total"] or 0),
+        checkpoint=row["checkpoint"],
+        message=row["message"],
+        error=row["error"],
+        rate=row["rate"],
+        eta_seconds=row["eta_seconds"],
+        params=params,
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        finished_at=row["finished_at"],
+    )

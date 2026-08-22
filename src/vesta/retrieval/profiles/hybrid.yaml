@@ -1,0 +1,58 @@
+name: hybrid
+description: >
+  The new default WHEN vectors exist: `standard` + the
+  Stage A3 dense `vector_knn` source. Lexical + dense candidates are RRF-fused
+  within each archive, so the dense side contributes recall (paraphrase,
+  deep-content) the lexical side misses, while lexical keeps keyword/strong.
+  On a depth-0 box VECTORS is unmet, the profile drops vector_knn, and degrades
+  to `standard` (degrade-don't-fail) — no branching in the pipeline.
+  Funnel + assembler aligned to `standard.yaml` (2026-08-02, iter 15): the old
+  narrow 20/20/20 funnel + 2400 topk_budget assembler starved the answer layer
+  of context and dropped reachable articles before Stage B; this inherits
+  standard's widened 60/40/400 funnel and lead_boost (12000 budget,
+  guarantee_top_lead_k=3) so the dense recall gain isn't paid for in lost
+  lexical context. `max_per_article` raised 4->6 (2026-08-02, iter 16): a long
+  rank-1 article's buried fact can live in its ~5th-best passage, which the
+  old cap of 4 dropped before the LLM saw it (motivating Pasteur case: fact at
+  char 42.5k in a 47.8k article).
+  Score floor added (2026-08-02, precision fix): on a small archive the
+  12000-token budget never binds, so every candidate the funnel returned —
+  including score-0.0000 tag/disambiguation pages — reached the prompt and
+  diluted it; `score_floor_abs`/`score_floor_rel` prune that tail while
+  `min_articles: 8` guarantees the context is never starved.
+  `title_entity_suggest` added (2026-08-16), params aligned to
+  `standard.yaml` (a depth-0 equivalence test compares the two
+  profiles field-for-field): the entity-span title lookup needs no vectors,
+  so depth-0 boxes keep it even as `vector_knn` drops (S5). Its
+  `rank_offset: 4` tempering matters most HERE — the dense side already fills
+  the funnel, and an untempered title-only nomination displaces articles
+  backed by xapian + dense under the cross-archive round-robin union.
+preparers:
+  - impl: normalize
+  - impl: alias_expand
+    params: {max_aliases: 3}
+  - impl: conversational_rewrite
+sources:
+  - impl: xapian_fts
+    params: {limit: 60, fallback_ladder: true}
+  - impl: title_suggest
+    params: {limit: 20, keyword_boost: 1.8}
+  - impl: title_entity_suggest
+    params: {limit: 3, max_spans: 4, rank_offset: 4}
+  - impl: vector_knn
+    params: {k: 40, enabled: true}
+fusion:
+  impl: rrf
+  params: {k: 20, across_archives: union}
+passages:
+  impl: candidate_articles
+  params: {max_articles: 40, max_passages: 400}
+scorers:
+  - impl: lexical_overlap
+  - impl: static_pass
+    params: {candidates_max: 400, shortlist: 40}
+  - impl: cross_encoder
+    params: {enabled: true, candidates_max: 40}
+assembler:
+  impl: lead_boost
+  params: {budget_tokens: 12000, max_per_article: 6, dedup: near_exact, ordering: score_desc, boost: 0.15, guarantee_top_lead: true, guarantee_top_lead_k: 3, score_floor_abs: 0.02, score_floor_rel: 0.02, min_articles: 8}

@@ -1,0 +1,276 @@
+{
+ "s1_defaults_oneshot": {
+  "answer": "The answer is forty-two [1].",
+  "budget": {
+   "age_tool_chars": 0,
+   "compact_prompt": false,
+   "max_output_tokens": 4096,
+   "preseed_passage_max_chars": 0,
+   "preseed_passages": 6,
+   "read_max_chars": 0,
+   "search_entries": 6,
+   "search_snippet_chars": 400,
+   "tool_budget_chars": 0
+  },
+  "cards": [
+   [
+    1,
+    1,
+    "a/0",
+    "Article 0",
+    "PASSAGE-0 says the answer is forty-two. detail detail detail"
+   ],
+   [
+    2,
+    1,
+    "a/1",
+    "Article 1",
+    "PASSAGE-1 says the answer is forty-two. detail detail detail"
+   ],
+   [
+    3,
+    1,
+    "a/2",
+    "Article 2",
+    "PASSAGE-2 says the answer is forty-two. detail detail detail"
+   ],
+   [
+    4,
+    1,
+    "a/3",
+    "Article 3",
+    "PASSAGE-3 says the answer is forty-two. detail detail detail"
+   ]
+  ],
+  "peak_input_tokens": 752,
+  "requests": [
+   [
+    [
+     "ModelRequest",
+     [
+      [
+       "SystemPromptPart",
+       "You are a research assistant that answers questions using ONLY an offline archive (Wikipedia and similar reference sites), accessed through the `search` and `read_article` tools. You have no other knowledge sources \u2014 never answer from your own memory or training data.\n\nEach question comes with INITIAL sources: numbered passages ([1], [2], ...) shown above the question. They are the archive's best matches for the question. Read them first, before deciding anything.\n\nTools:\n- read_article(n): read the FULL text of source [n] (the number shown next to it). Use this when a source looks relevant but its excerpt does not contain the exact fact you need. This is usually a better next step than another search.\n- search(query): keyword matching over passages. Returns short PASSAGES (excerpts), not full articles, ranked by matching words. Use it only when the initial sources and full reads do not surface a specific missing fact.\n\nThe search tool matches WORDS, not meaning \u2014 extra words copied from the question (\"age\", \"when\", \"how many\", \"born date\", \"why\") do not help it find the right article; they just add noise that can drown out the one match that matters.\n\nQuery rules:\n- Search for the ENTITY the question is about, plus at most one disambiguating word \u2014 never the fact you are trying to find. Ask yourself \"what article would this live in\", not \"how do I rephrase the question\".\n  - Question: \"How old was Napoleon when he became emperor?\"\n    - Good queries: \"Napoleon\", \"Napoleon emperor\", \"Napoleon coronation\"\n    - Bad queries: \"Napoleon age when became emperor\", \"Napoleon I born date crowned emperor date\" \u2014 these are fact-shaped, not entity-shaped, and will match worse.\n- If the results do not contain the answer, try a genuinely different angle: a related entity name, a narrower or broader term, or a synonym for the concept \u2014 not the same words padded with more fact-words.\n- You get up to 3 search attempts. Prefer read_article on a promising source before spending another search.\n\nWhen you find the answer, state it directly in 2-4 plain sentences. Ground each fact with its supporting detail from the source \u2014 the date, year, quantity, or name that establishes it \u2014 so the answer is verifiable. For a question about an age or duration, state the dates you used (e.g. \"Einstein, born 1879, published special relativity in 1905 at about 26 [1].\"). Cite every distinct fact with the bracket number of the source you used. Re-use the same [n] if it came from the same source. Do not also name the article in prose \u2014 the numbered source is shown to the user separately, alongside your answer. Do not open with a preface that restates where your answer came from \u2014 no \"Based on the provided sources\", \"According to the sources\", or similar. Every answer is drawn from the archive by design, so lead with the fact itself, not a mention of the sources.\n- When the question asks for a specific name, term, drug, chemical, numeral, or entity, answer with that EXACT specific thing \u2014 not a related, broader, or similar concept. Re-read the question and verify your answer satisfies every qualifier it states before finalizing.\n\nDo not refuse while a shown source is relevant. If a source looks relevant but its excerpt lacks the exact fact, call read_article on it first. Only say you could not find it after you have read the relevant sources in full and none contains the answer. Never guess.\n\nThe initial sources above are the archive's best matches for this question and very likely contain the answer. Read them \u2014 and use read_article for the full text of any that look relevant \u2014 before considering any refusal, then answer with [n] citations."
+      ],
+      [
+       "UserPromptPart",
+       "Initial sources for this question:\n\nSearch returned 4 passages (showing top 4):\n[1] \"Article 0\" (archive-1)\nPASSAGE-0 says the answer is forty-two. detail detail detail \n\n[2] \"Article 1\" (archive-1)\nPASSAGE-1 says the answer is forty-two. detail detail detail detail \n\n[3] \"Article 2\" (archive-1)\nPASSAGE-2 says the answer is forty-two. detail detail detail detail detail \n\n[4] \"Article 3\" (archive-1)\nPASSAGE-3 says the answer is forty-two. detail detail detail detail detail detail \n\n\nQuestion: What is the answer?"
+      ]
+     ]
+    ]
+   ]
+  ],
+  "requests_count": 1,
+  "stage_names": [
+   "pre_seed"
+  ],
+  "tool_calls": [
+   [
+    "What is the answer?",
+    "Search returned 4 passages (showing top 4):\n[1] \"Article 0\" (archive-1)\nPASSAGE-0 says the answer is forty-two. detail detail detail \n\n[2] \"Article 1\" (archive-1)\nPASSAGE-1 says the answer is forty-two. detail detail detail detail \n\n[3] \"Article 2\" (archive-1)\nPASSAGE-2 says the answer is forty-two."
+   ]
+  ]
+ },
+ "s2_economy_read": {
+  "answer": "Read confirms: forty-two [1].",
+  "budget": {
+   "age_tool_chars": 0,
+   "compact_prompt": false,
+   "max_output_tokens": 2048,
+   "preseed_passage_max_chars": 6000,
+   "preseed_passages": 6,
+   "read_max_chars": 6000,
+   "search_entries": 6,
+   "search_snippet_chars": 400,
+   "tool_budget_chars": 12000
+  },
+  "cards": [
+   [
+    1,
+    1,
+    "a/0",
+    "Article 0",
+    "PASSAGE-0 says the answer is forty-two. detail detail detail"
+   ],
+   [
+    2,
+    1,
+    "a/1",
+    "Article 1",
+    "PASSAGE-1 says the answer is forty-two. detail detail detail"
+   ],
+   [
+    3,
+    1,
+    "a/2",
+    "Article 2",
+    "PASSAGE-2 says the answer is forty-two. detail detail detail"
+   ],
+   [
+    4,
+    1,
+    "a/3",
+    "Article 3",
+    "PASSAGE-3 says the answer is forty-two. detail detail detail"
+   ]
+  ],
+  "peak_input_tokens": 1196,
+  "requests": [
+   [
+    [
+     "ModelRequest",
+     [
+      [
+       "SystemPromptPart",
+       "You are a research assistant that answers questions using ONLY an offline archive (Wikipedia and similar reference sites), accessed through the `search` and `read_article` tools. You have no other knowledge sources \u2014 never answer from your own memory or training data.\n\nEach question comes with INITIAL sources: numbered passages ([1], [2], ...) shown above the question. They are the archive's best matches for the question. Read them first, before deciding anything.\n\nTools:\n- read_article(n): read the FULL text of source [n] (the number shown next to it). Use this when a source looks relevant but its excerpt does not contain the exact fact you need. This is usually a better next step than another search.\n- search(query): keyword matching over passages. Returns short PASSAGES (excerpts), not full articles, ranked by matching words. Use it only when the initial sources and full reads do not surface a specific missing fact.\n\nThe search tool matches WORDS, not meaning \u2014 extra words copied from the question (\"age\", \"when\", \"how many\", \"born date\", \"why\") do not help it find the right article; they just add noise that can drown out the one match that matters.\n\nQuery rules:\n- Search for the ENTITY the question is about, plus at most one disambiguating word \u2014 never the fact you are trying to find. Ask yourself \"what article would this live in\", not \"how do I rephrase the question\".\n  - Question: \"How old was Napoleon when he became emperor?\"\n    - Good queries: \"Napoleon\", \"Napoleon emperor\", \"Napoleon coronation\"\n    - Bad queries: \"Napoleon age when became emperor\", \"Napoleon I born date crowned emperor date\" \u2014 these are fact-shaped, not entity-shaped, and will match worse.\n- If the results do not contain the answer, try a genuinely different angle: a related entity name, a narrower or broader term, or a synonym for the concept \u2014 not the same words padded with more fact-words.\n- You get up to 3 search attempts. Prefer read_article on a promising source before spending another search.\n\nWhen you find the answer, state it directly in 2-4 plain sentences. Ground each fact with its supporting detail from the source \u2014 the date, year, quantity, or name that establishes it \u2014 so the answer is verifiable. For a question about an age or duration, state the dates you used (e.g. \"Einstein, born 1879, published special relativity in 1905 at about 26 [1].\"). Cite every distinct fact with the bracket number of the source you used. Re-use the same [n] if it came from the same source. Do not also name the article in prose \u2014 the numbered source is shown to the user separately, alongside your answer. Do not open with a preface that restates where your answer came from \u2014 no \"Based on the provided sources\", \"According to the sources\", or similar. Every answer is drawn from the archive by design, so lead with the fact itself, not a mention of the sources.\n- When the question asks for a specific name, term, drug, chemical, numeral, or entity, answer with that EXACT specific thing \u2014 not a related, broader, or similar concept. Re-read the question and verify your answer satisfies every qualifier it states before finalizing.\n\nDo not refuse while a shown source is relevant. If a source looks relevant but its excerpt lacks the exact fact, call read_article on it first. Only say you could not find it after you have read the relevant sources in full and none contains the answer. Never guess.\n\nThe initial sources above are the archive's best matches for this question and very likely contain the answer. Read them \u2014 and use read_article for the full text of any that look relevant \u2014 before considering any refusal, then answer with [n] citations."
+      ],
+      [
+       "UserPromptPart",
+       "Initial sources for this question:\n\nSearch returned 4 passages (showing top 4):\n[1] \"Article 0\" (archive-1)\nPASSAGE-0 says the answer is forty-two. detail detail detail \n\n[2] \"Article 1\" (archive-1)\nPASSAGE-1 says the answer is forty-two. detail detail detail detail \n\n[3] \"Article 2\" (archive-1)\nPASSAGE-2 says the answer is forty-two. detail detail detail detail detail \n\n[4] \"Article 3\" (archive-1)\nPASSAGE-3 says the answer is forty-two. detail detail detail detail detail detail \n\n\nQuestion: What is the answer?"
+      ]
+     ]
+    ]
+   ],
+   [
+    [
+     "ModelRequest",
+     [
+      [
+       "SystemPromptPart",
+       "You are a research assistant that answers questions using ONLY an offline archive (Wikipedia and similar reference sites), accessed through the `search` and `read_article` tools. You have no other knowledge sources \u2014 never answer from your own memory or training data.\n\nEach question comes with INITIAL sources: numbered passages ([1], [2], ...) shown above the question. They are the archive's best matches for the question. Read them first, before deciding anything.\n\nTools:\n- read_article(n): read the FULL text of source [n] (the number shown next to it). Use this when a source looks relevant but its excerpt does not contain the exact fact you need. This is usually a better next step than another search.\n- search(query): keyword matching over passages. Returns short PASSAGES (excerpts), not full articles, ranked by matching words. Use it only when the initial sources and full reads do not surface a specific missing fact.\n\nThe search tool matches WORDS, not meaning \u2014 extra words copied from the question (\"age\", \"when\", \"how many\", \"born date\", \"why\") do not help it find the right article; they just add noise that can drown out the one match that matters.\n\nQuery rules:\n- Search for the ENTITY the question is about, plus at most one disambiguating word \u2014 never the fact you are trying to find. Ask yourself \"what article would this live in\", not \"how do I rephrase the question\".\n  - Question: \"How old was Napoleon when he became emperor?\"\n    - Good queries: \"Napoleon\", \"Napoleon emperor\", \"Napoleon coronation\"\n    - Bad queries: \"Napoleon age when became emperor\", \"Napoleon I born date crowned emperor date\" \u2014 these are fact-shaped, not entity-shaped, and will match worse.\n- If the results do not contain the answer, try a genuinely different angle: a related entity name, a narrower or broader term, or a synonym for the concept \u2014 not the same words padded with more fact-words.\n- You get up to 3 search attempts. Prefer read_article on a promising source before spending another search.\n\nWhen you find the answer, state it directly in 2-4 plain sentences. Ground each fact with its supporting detail from the source \u2014 the date, year, quantity, or name that establishes it \u2014 so the answer is verifiable. For a question about an age or duration, state the dates you used (e.g. \"Einstein, born 1879, published special relativity in 1905 at about 26 [1].\"). Cite every distinct fact with the bracket number of the source you used. Re-use the same [n] if it came from the same source. Do not also name the article in prose \u2014 the numbered source is shown to the user separately, alongside your answer. Do not open with a preface that restates where your answer came from \u2014 no \"Based on the provided sources\", \"According to the sources\", or similar. Every answer is drawn from the archive by design, so lead with the fact itself, not a mention of the sources.\n- When the question asks for a specific name, term, drug, chemical, numeral, or entity, answer with that EXACT specific thing \u2014 not a related, broader, or similar concept. Re-read the question and verify your answer satisfies every qualifier it states before finalizing.\n\nDo not refuse while a shown source is relevant. If a source looks relevant but its excerpt lacks the exact fact, call read_article on it first. Only say you could not find it after you have read the relevant sources in full and none contains the answer. Never guess.\n\nThe initial sources above are the archive's best matches for this question and very likely contain the answer. Read them \u2014 and use read_article for the full text of any that look relevant \u2014 before considering any refusal, then answer with [n] citations."
+      ],
+      [
+       "UserPromptPart",
+       "Initial sources for this question:\n\nSearch returned 4 passages (showing top 4):\n[1] \"Article 0\" (archive-1)\nPASSAGE-0 says the answer is forty-two. detail detail detail \n\n[2] \"Article 1\" (archive-1)\nPASSAGE-1 says the answer is forty-two. detail detail detail detail \n\n[3] \"Article 2\" (archive-1)\nPASSAGE-2 says the answer is forty-two. detail detail detail detail detail \n\n[4] \"Article 3\" (archive-1)\nPASSAGE-3 says the answer is forty-two. detail detail detail detail detail detail \n\n\nQuestion: What is the answer?"
+      ]
+     ]
+    ],
+    [
+     "ModelResponse",
+     [
+      [
+       "ToolCallPart",
+       "obj:NoneType",
+       [
+        "args",
+        "{\"n\": 1}"
+       ],
+       [
+        "tool_name",
+        "read_article"
+       ],
+       [
+        "tool_call_id",
+        "pyd_ai_<id:39>"
+       ]
+      ]
+     ]
+    ],
+    [
+     "ModelRequest",
+     [
+      [
+       "ToolReturnPart",
+       "Article 0\nLEAD. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics.\n\n[...]\n\nArticle 0\nfiller about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. The answer is forty-two.",
+       [
+        "tool_name",
+        "read_article"
+       ],
+       [
+        "tool_call_id",
+        "pyd_ai_<id:39>"
+       ]
+      ]
+     ]
+    ]
+   ]
+  ],
+  "requests_count": 2,
+  "stage_names": [
+   "pre_seed",
+   "read_article"
+  ],
+  "tool_calls": [
+   [
+    "What is the answer?",
+    "Search returned 4 passages (showing top 4):\n[1] \"Article 0\" (archive-1)\nPASSAGE-0 says the answer is forty-two. detail detail detail \n\n[2] \"Article 1\" (archive-1)\nPASSAGE-1 says the answer is forty-two. detail detail detail detail \n\n[3] \"Article 2\" (archive-1)\nPASSAGE-2 says the answer is forty-two."
+   ],
+   [
+    "read_article([1] Article 0)",
+    "Article 0\nLEAD. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. filler about unrelated topics. fille"
+   ]
+  ]
+ },
+ "s3_economy_compact": {
+  "answer": "Forty-two [1].",
+  "budget": {
+   "age_tool_chars": 0,
+   "compact_prompt": true,
+   "max_output_tokens": 2048,
+   "preseed_passage_max_chars": 6000,
+   "preseed_passages": 6,
+   "read_max_chars": 6000,
+   "search_entries": 6,
+   "search_snippet_chars": 400,
+   "tool_budget_chars": 12000
+  },
+  "cards": [
+   [
+    1,
+    1,
+    "a/0",
+    "Article 0",
+    "PASSAGE-0 says the answer is forty-two. detail detail detail"
+   ],
+   [
+    2,
+    1,
+    "a/1",
+    "Article 1",
+    "PASSAGE-1 says the answer is forty-two. detail detail detail"
+   ],
+   [
+    3,
+    1,
+    "a/2",
+    "Article 2",
+    "PASSAGE-2 says the answer is forty-two. detail detail detail"
+   ],
+   [
+    4,
+    1,
+    "a/3",
+    "Article 3",
+    "PASSAGE-3 says the answer is forty-two. detail detail detail"
+   ]
+  ],
+  "peak_input_tokens": 611,
+  "requests": [
+   [
+    [
+     "ModelRequest",
+     [
+      [
+       "SystemPromptPart",
+       "You are a research assistant that answers questions using ONLY an offline archive (Wikipedia and similar), via the `search` and `read_article` tools. You have no other knowledge sources \u2014 never answer from your own memory or training data.\n\nEach question comes with INITIAL sources: numbered passages ([1], [2], ...) shown above the question \u2014 the archive's best matches. Read them first, before deciding anything.\n\nTools:\n- read_article(n): the FULL text of source [n]. Use when a source looks relevant but its excerpt lacks the exact fact. Usually better than another search.\n- search(query): keyword matching over passages (short excerpts, not full articles). Use only when the initial sources and full reads do not surface a specific missing fact.\n\nSearch matches WORDS, not meaning \u2014 extra words copied from the question (\"age\", \"when\", \"how many\") just add noise that drowns out the one match that matters.\n\nQuery rules:\n- Search for the ENTITY the question is about, plus at most one disambiguating word \u2014 never the fact you are trying to find. Entity-shaped queries beat fact-shaped ones that copy the question's words.\n- If the results miss, try a genuinely different angle: a related entity, a narrower or broader term, a synonym \u2014 not the same words padded with more fact-words.\n- Up to 3 searches and 3 reads. Prefer read_article on a promising source before another search.\n\nWhen you find the answer, state it directly in 2-4 plain sentences, grounding each fact with the date, year, quantity, or name that establishes it \u2014 e.g. \"Einstein, born 1879, published special relativity in 1905 at about 26 [1].\" For an age or duration, state the dates you used. Cite every distinct fact with the bracket number of the source you used. Re-use the same [n] if it came from the same source. If the initial sources' excerpts already contain the exact fact, answer immediately \u2014 no tool call is needed. Do not also name the article in prose \u2014 the numbered source is shown to the user separately. Do not open with a preface about where your answer came from; lead with the fact itself.\n- When the question asks for a specific name, term, drug, chemical, numeral, or entity, answer with that EXACT specific thing \u2014 not a related, broader, or similar concept. Verify your answer satisfies every qualifier before finalizing.\n\nDo not refuse while a shown source is relevant. If a source looks relevant but its excerpt lacks the exact fact, call read_article on it first. Only say you could not find it after you have read the relevant sources in full and none contains the answer. Never guess.\n\nThe initial sources above are the archive's best matches for this question and very likely contain the answer. Read them \u2014 and use read_article for the full text of any that look relevant \u2014 before considering any refusal, then answer with [n] citations."
+      ],
+      [
+       "UserPromptPart",
+       "Initial sources for this question:\n\nSearch returned 4 passages (showing top 4):\n[1] \"Article 0\" (archive-1)\nPASSAGE-0 says the answer is forty-two. detail detail detail \n\n[2] \"Article 1\" (archive-1)\nPASSAGE-1 says the answer is forty-two. detail detail detail detail \n\n[3] \"Article 2\" (archive-1)\nPASSAGE-2 says the answer is forty-two. detail detail detail detail detail \n\n[4] \"Article 3\" (archive-1)\nPASSAGE-3 says the answer is forty-two. detail detail detail detail detail detail \n\n\nQuestion: What is the answer?"
+      ]
+     ]
+    ]
+   ]
+  ],
+  "requests_count": 1,
+  "stage_names": [
+   "pre_seed"
+  ],
+  "tool_calls": [
+   [
+    "What is the answer?",
+    "Search returned 4 passages (showing top 4):\n[1] \"Article 0\" (archive-1)\nPASSAGE-0 says the answer is forty-two. detail detail detail \n\n[2] \"Article 1\" (archive-1)\nPASSAGE-1 says the answer is forty-two. detail detail detail detail \n\n[3] \"Article 2\" (archive-1)\nPASSAGE-2 says the answer is forty-two."
+   ]
+  ]
+ }
+}

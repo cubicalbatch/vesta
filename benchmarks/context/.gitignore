@@ -1,0 +1,4 @@
+# Keep this directory in git; ignore generated retrieval-context snapshots
+# (large, regenerable benchmark replay artifacts — see scripts/bench/phase21_1a_replays.sh).
+*
+!.gitignore

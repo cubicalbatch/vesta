@@ -1,0 +1,27 @@
+{
+  "description": "SYNTHETIC stream. Exercises a recoverable mid-stream error (llama-server killed/restarted): the partial answer and its citations must stay rendered, not be discarded.",
+  "query": "What is the population of France?",
+  "events": [
+    {
+      "event": "sources",
+      "data": {
+        "cards": [
+          {
+            "zim_id": 1,
+            "path": "France",
+            "title": "France",
+            "snippet": "France is a country in Western Europe with a population of about 68 million.",
+            "breadcrumb": "France",
+            "score": 0.9,
+            "source": "xapian_fts"
+          }
+        ],
+        "merge": false
+      }
+    },
+    {"event": "status", "data": {"phase": "reading", "detail": "1 sources"}},
+    {"event": "status", "data": {"phase": "generating", "detail": "streaming answer"}},
+    {"event": "token", "data": {"text": "France has a population of approximately"}},
+    {"event": "error", "data": {"code": "stream_error", "message": "llama-server connection dropped; restarting", "recoverable": true}}
+  ]
+}

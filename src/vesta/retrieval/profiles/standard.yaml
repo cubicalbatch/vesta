@@ -1,0 +1,69 @@
+name: standard
+description: >
+  The default: lexical Stage A + Stage B two-pass
+  scoring (static shortlist then cross-encoder rerank) + lead_boost context
+  assembly. Cross-corpus-comparable scores come from Stage B, mandatory at
+  every index depth including 0. Assembler switched from topk_budget
+  to lead_boost and the budget raised 2400->12000 / max_per_article 2->4
+  (2026-08-01): a long, strongly-matching article's lead paragraph can score
+  far below its own body passages under the cross-encoder (e.g. dense infobox
+  metadata ahead of the useful sentence in the same chunk) — topk_budget has
+  no way to notice this; lead_boost's guarantee_top_lead does. The guarantee
+  was widened from top-1 to top-3 (guarantee_top_lead_k=3) after the
+  motivating bug showed the fact can live in article #2's lead while the
+  irrelevant article #1 held the only guarantee slot.
+  Funnel widened 2026-08-02 (xapian limit 40->60, max_articles 20->40,
+  static_pass shortlist 20->40, max_passages 200->400): the prior limits
+  dropped reachable articles before Stage B could score them — measured on the
+  golden set (recall@10 0.443 -> 0.571) and the gap-answer benchmark. A target
+  surfaced by xapian at rank 21-40 (common for entity/paraphrase queries whose
+  terms AND-match weakly) never reached the cross-encoder; widening lets Stage
+  B see and rerank them.
+  `max_per_article` raised 4->6 (2026-08-02, iter 16): a long rank-1
+  article's buried fact can live in its ~5th-best passage, which the old cap
+  of 4 dropped before the LLM saw it (buried-fact retrieval hits).
+  Score floor added (2026-08-02, precision fix): on a small archive the
+  12000-token budget never binds, so every candidate the funnel returned —
+  including score-0.0000 tag/disambiguation pages — reached the prompt and
+  diluted it; `score_floor_abs`/`score_floor_rel` prune that tail while
+  `min_articles: 8` guarantees the context is never starved.
+  `title_entity_suggest` added (2026-08-16): entity-shaped spans
+  from the raw question (multi-word capitalized runs + quoted spans; a single
+  capitalized word only as a fallback for entity-poor questions) finally give
+  the universal title index a prefix it can match — the joined stopword-
+  stripped prefix `title_suggest` feeds it matched 0/150 bench questions.
+  Params are measured, not default-looking: `limit: 3` (the fallback width —
+  a span whose own article is in the results emits only that article; where
+  an exact title exists it sits at suggest rank 1-2, and variant tails
+  measured as pure dilution), `rank_offset: 4` (RRF tempering — under
+  cross-archive round-robin an untempered title-only hit displaces
+  xapian-backed golds; offset 0 measured -5 questions on hybrid's funnel),
+  distinctive terms OFF (T2 wins +2 on standard but -4 on hybrid). Span-axis
+  probe: T1 82/150, T2 90/150 (20260816-phase19-2-span-hitrate-probe.json).
+preparers:
+  - impl: normalize
+  - impl: alias_expand
+    params: {max_aliases: 3}
+  - impl: conversational_rewrite
+sources:
+  - impl: xapian_fts
+    params: {limit: 60, fallback_ladder: true}
+  - impl: title_suggest
+    params: {limit: 20, keyword_boost: 1.8}
+  - impl: title_entity_suggest
+    params: {limit: 3, max_spans: 4, rank_offset: 4}
+fusion:
+  impl: rrf
+  params: {k: 20, across_archives: union}
+passages:
+  impl: candidate_articles
+  params: {max_articles: 40, max_passages: 400}
+scorers:
+  - impl: lexical_overlap
+  - impl: static_pass
+    params: {candidates_max: 400, shortlist: 40}
+  - impl: cross_encoder
+    params: {enabled: true, candidates_max: 40}
+assembler:
+  impl: lead_boost
+  params: {budget_tokens: 12000, max_per_article: 6, dedup: near_exact, ordering: score_desc, boost: 0.15, guarantee_top_lead: true, guarantee_top_lead_k: 3, score_floor_abs: 0.02, score_floor_rel: 0.02, min_articles: 8}

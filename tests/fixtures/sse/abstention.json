@@ -1,0 +1,41 @@
+{
+  "description": "Abstention pre-gate fired (top_score below threshold). The LLM is never called — zero hallucination risk. The harness-side abstention string is emitted as a single token.",
+  "query": "quantum computing breakthroughs 2026",
+  "events": [
+    {
+      "event": "sources",
+      "data": {
+        "cards": [
+          {
+            "zim_id": 1,
+            "path": "Quantum_computing",
+            "title": "Quantum computing",
+            "snippet": "Quantum computing is a type of computation...",
+            "breadcrumb": "Quantum computing",
+            "score": 0.12,
+            "source": "xapian_fts"
+          }
+        ]
+      }
+    },
+    {"event": "status", "data": {"phase": "reading", "detail": "1 sources"}},
+    {"event": "status", "data": {"phase": "abstaining", "detail": "pre-gate: top_score 0.120 < floor 0.250"}},
+    {"event": "token", "data": {"text": "No passage in your archives closely matches this query. The closest results are below — you may want to try different wording, or a broader term."}},
+    {
+      "event": "trace",
+      "data": {
+        "version": 1,
+        "stages": [
+          {"name": "query_preparer", "component": "normalize", "params": {}, "inputs": {"raw": "quantum computing breakthroughs 2026"}, "outputs": {"terms": ["quantum", "computing", "breakthroughs", "2026"]}, "duration_ms": 0.1},
+          {"name": "candidate_source", "component": "xapian_fts", "params": {}, "inputs": {"terms": ["quantum", "computing"]}, "outputs": {"candidate_count": 3}, "duration_ms": 38.0},
+          {"name": "fuser", "component": "rrf", "params": {"k": 60}, "inputs": {"sources": 2}, "outputs": {"fused": 4}, "duration_ms": 0.8},
+          {"name": "context_assembler", "component": "topk_budget", "params": {"budget_tokens": 2400}, "inputs": {"scored": 4}, "outputs": {"selected": 1}, "duration_ms": 2.1},
+          {"name": "abstention", "component": "pre_gate", "params": {"reason": "top_score 0.120 < floor 0.250"}, "inputs": {}, "outputs": {"abstained": true, "gate": "top_score 0.120 < floor 0.250"}, "duration_ms": 0.2}
+        ],
+        "degradations": [],
+        "profile": "lexical"
+      }
+    },
+    {"event": "done", "data": {}}
+  ]
+}

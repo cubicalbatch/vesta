@@ -1,0 +1,44 @@
+name: deep_content
+provenance: hand-written
+entries:
+  - id: d01
+    query: What percentage of the Sun's photosphere is hydrogen by mass?
+    expected_paths: [Sun]
+    expected_fact: "hydrogen (~73%)"
+    notes: Fact buried mid-article, not in the title or lead.
+  - id: d02
+    query: How many moons are known to orbit Jupiter?
+    expected_paths: [Jupiter]
+    expected_fact: "At least 115 moons"
+  - id: d03
+    query: What was the bite force estimate for Tyrannosaurus relative to other land animals?
+    expected_paths: [Tyrannosaurus]
+    expected_fact: "largest among all terrestrial animals"
+  - id: d04
+    query: What percentage of dry air is nitrogen by mole fraction?
+    expected_paths: [Atmosphere_of_Earth]
+    expected_fact: "78.08% nitrogen"
+  - id: d05
+    query: How far does the Moon orbit Earth on average, in kilometers?
+    expected_paths: [Moon]
+    expected_fact: "384,399 kilometers"
+  - id: d06
+    query: What is the estimated age of the earliest hominin divergence from gorillas?
+    expected_paths: [Human_evolution]
+    expected_fact: "Hominins"
+  - id: d07
+    query: What is the area of the Sahara desert in square kilometres?
+    expected_paths: [Sahara]
+    expected_fact: "9,200,000 square kilometres"
+  - id: d08
+    query: Who first published the theory of continental drift in 1912?
+    expected_paths: [Continental_drift]
+    expected_fact: "Alfred Wegener in 1912"
+  - id: d09
+    query: In what year was the general periodic table first generally accepted?
+    expected_paths: [Periodic_table]
+    expected_fact: "Mendeleev in 1869"
+  - id: d10
+    query: What title did the Roman Senate grant Octavian, marking the first emperor?
+    expected_paths: [Roman_Empire]
+    expected_fact: "the new title of Augustus"

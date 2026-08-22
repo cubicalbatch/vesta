@@ -1,0 +1,702 @@
+[
+  {
+    "id": 1,
+    "query": "Which actor played J. Robert Oppenheimer in Christopher Nolan's 2023 biographical film?",
+    "target_article": "Oppenheimer (film)",
+    "ground_truth_answer": "Cillian Murphy",
+    "benchmark_category": "Pop Culture & Arts (Single-hop Entity)"
+  },
+  {
+    "id": 2,
+    "query": "What physical process causes the Earth's sky to appear blue during daytime?",
+    "target_article": "Rayleigh scattering",
+    "ground_truth_answer": "Rayleigh scattering of sunlight by atmospheric gas molecules, which scatters shorter (blue) wavelengths more strongly than longer wavelengths.",
+    "benchmark_category": "Science & Nature (Concept Explanation)"
+  },
+  {
+    "id": 3,
+    "query": "What is the deepest freshwater lake in the world and what country is it located in?",
+    "target_article": "Lake Baikal",
+    "ground_truth_answer": "Lake Baikal, located in Russia (southern Siberia).",
+    "benchmark_category": "Geography (Multi-hop Superlative)"
+  },
+  {
+    "id": 4,
+    "query": "In what year did the construction of the Berlin Wall begin, and who constructed it?",
+    "target_article": "Berlin Wall",
+    "ground_truth_answer": "Construction began in August 1961 by the German Democratic Republic (GDR / East Germany).",
+    "benchmark_category": "World History (Date & Entity)"
+  },
+  {
+    "id": 5,
+    "query": "What open-source operating system kernel was created by Linus Torvalds in 1991?",
+    "target_article": "Linux kernel",
+    "ground_truth_answer": "The Linux kernel",
+    "benchmark_category": "Technology & Computing (Attribution)"
+  },
+  {
+    "id": 6,
+    "query": "What is the most abundant chemical element in the universe by mass?",
+    "target_article": "Hydrogen",
+    "ground_truth_answer": "Hydrogen (accounting for roughly 75% of the universe's baryonic mass).",
+    "benchmark_category": "Science & Physics (Factoid)"
+  },
+  {
+    "id": 7,
+    "query": "Who is credited with discovering penicillin in 1928?",
+    "target_article": "Alexander Fleming",
+    "ground_truth_answer": "Alexander Fleming",
+    "benchmark_category": "Medicine & Biology (Attribution)"
+  },
+  {
+    "id": 8,
+    "query": "What subatomic particle was discovered at CERN's Large Hadron Collider in 2012?",
+    "target_article": "Higgs boson",
+    "ground_truth_answer": "The Higgs boson",
+    "benchmark_category": "Science & Physics (Discovery)"
+  },
+  {
+    "id": 9,
+    "query": "What is the hardest naturally occurring mineral on Earth?",
+    "target_article": "Diamond",
+    "ground_truth_answer": "Diamond (scoring a 10 on the Mohs hardness scale).",
+    "benchmark_category": "Earth Science & Mineralogy (Superlative)"
+  },
+  {
+    "id": 10,
+    "query": "What is the chemical formula for table salt?",
+    "target_article": "Sodium chloride",
+    "ground_truth_answer": "NaCl (Sodium chloride)",
+    "benchmark_category": "Chemistry (Factual Lookup)"
+  },
+  {
+    "id": 11,
+    "query": "What was the name of the first artificial satellite launched into orbit, and in what year was it launched?",
+    "target_article": "Sputnik 1",
+    "ground_truth_answer": "Sputnik 1, launched in 1957 by the Soviet Union.",
+    "benchmark_category": "Space Exploration (Historical Milestone)"
+  },
+  {
+    "id": 12,
+    "query": "Which planet in the Solar System has the most confirmed natural satellites (moons)?",
+    "target_article": "Moons of Saturn",
+    "ground_truth_answer": "Saturn (with over 140 confirmed moons).",
+    "benchmark_category": "Astronomy (Superlative)"
+  },
+  {
+    "id": 13,
+    "query": "What is the name of the supermassive black hole located at the center of the Milky Way galaxy?",
+    "target_article": "Sagittarius A*",
+    "ground_truth_answer": "Sagittarius A* (Sagittarius A-star)",
+    "benchmark_category": "Astronomy (Entity Lookup)"
+  },
+  {
+    "id": 14,
+    "query": "Who was the first woman to travel into space?",
+    "target_article": "Valentina Tereshkova",
+    "ground_truth_answer": "Valentina Tereshkova (on the Vostok 6 mission in 1963).",
+    "benchmark_category": "Space Exploration (Historical First)"
+  },
+  {
+    "id": 15,
+    "query": "What space telescope was launched in December 2021 as the primary successor to the Hubble Space Telescope?",
+    "target_article": "James Webb Space Telescope",
+    "ground_truth_answer": "The James Webb Space Telescope (JWST)",
+    "benchmark_category": "Space & Technology (Entity Retrieval)"
+  },
+  {
+    "id": 16,
+    "query": "What is the boundary around a black hole beyond which nothing, not even light, can escape?",
+    "target_article": "Event horizon",
+    "ground_truth_answer": "The event horizon",
+    "benchmark_category": "Astrophysics (Concept Definition)"
+  },
+  {
+    "id": 17,
+    "query": "Which Apollo mission successfully landed the first humans on the Moon in July 1969?",
+    "target_article": "Apollo 11",
+    "ground_truth_answer": "Apollo 11",
+    "benchmark_category": "Space Exploration (Factoid)"
+  },
+  {
+    "id": 18,
+    "query": "What is the closest spiral galaxy to the Milky Way?",
+    "target_article": "Andromeda Galaxy",
+    "ground_truth_answer": "The Andromeda Galaxy (Messier 31 / M31)",
+    "benchmark_category": "Astronomy (Factoid)"
+  },
+  {
+    "id": 19,
+    "query": "What is the hottest planet in our solar system and why?",
+    "target_article": "Venus",
+    "ground_truth_answer": "Venus, due to its dense atmosphere rich in carbon dioxide creating an extreme greenhouse effect.",
+    "benchmark_category": "Astronomy (Comparative & Causality)"
+  },
+  {
+    "id": 20,
+    "query": "What robotic rover landed on Mars in February 2021 carrying the Ingenuity helicopter?",
+    "target_article": "Perseverance (rover)",
+    "ground_truth_answer": "Perseverance (part of NASA's Mars 2020 mission)",
+    "benchmark_category": "Space Exploration (Entity Lookup)"
+  },
+  {
+    "id": 21,
+    "query": "Who was the first Emperor of a unified China and the founder of the Qin dynasty?",
+    "target_article": "Qin Shi Huang",
+    "ground_truth_answer": "Qin Shi Huang",
+    "benchmark_category": "World History (Historical Biography)"
+  },
+  {
+    "id": 22,
+    "query": "In what year did the Roman Empire in the West traditionally fall?",
+    "target_article": "Fall of the Western Roman Empire",
+    "ground_truth_answer": "476 AD (when Romulus Augustulus was deposed by Odoacer).",
+    "benchmark_category": "World History (Chronology)"
+  },
+  {
+    "id": 23,
+    "query": "What treaty signed in 1919 officially brought an end to World War I?",
+    "target_article": "Treaty of Versailles",
+    "ground_truth_answer": "The Treaty of Versailles",
+    "benchmark_category": "World History (Document / Legal)"
+  },
+  {
+    "id": 24,
+    "query": "Which English monarch had six wives and established the Church of England?",
+    "target_article": "Henry VIII",
+    "ground_truth_answer": "King Henry VIII",
+    "benchmark_category": "World History (Biography)"
+  },
+  {
+    "id": 25,
+    "query": "What ancient trade route network connected China and the Mediterranean region for centuries?",
+    "target_article": "Silk Road",
+    "ground_truth_answer": "The Silk Road",
+    "benchmark_category": "World History (Geography / Trade)"
+  },
+  {
+    "id": 26,
+    "query": "Who was the leader of the Soviet Union during the Cuban Missile Crisis in 1962?",
+    "target_article": "Nikita Khrushchev",
+    "ground_truth_answer": "Nikita Khrushchev",
+    "benchmark_category": "World History (Cold War Politics)"
+  },
+  {
+    "id": 27,
+    "query": "What pandemic devastated Europe and Asia in the mid-14th century, killing tens of millions of people?",
+    "target_article": "Black Death",
+    "ground_truth_answer": "The Black Death (bubonic plague caused by Yersinia pestis)",
+    "benchmark_category": "World History (Epidemiology / History)"
+  },
+  {
+    "id": 28,
+    "query": "Who was the first democratically elected President of South Africa after the end of apartheid?",
+    "target_article": "Nelson Mandela",
+    "ground_truth_answer": "Nelson Mandela (elected in 1994)",
+    "benchmark_category": "World History (Modern Political History)"
+  },
+  {
+    "id": 29,
+    "query": "Which ancient Egyptian pharaoh's nearly intact tomb was discovered by Howard Carter in 1922?",
+    "target_article": "Tutankhamun",
+    "ground_truth_answer": "Tutankhamun (King Tut)",
+    "benchmark_category": "Archaeology & History (Entity Lookup)"
+  },
+  {
+    "id": 30,
+    "query": "What was the code name for the Allied invasion of Normandy in June 1944?",
+    "target_article": "Operation Overlord",
+    "ground_truth_answer": "Operation Overlord (often associated with D-Day)",
+    "benchmark_category": "Military History (Naming)"
+  },
+  {
+    "id": 31,
+    "query": "Which city served as the capital of the Byzantine Empire until its fall in 1453?",
+    "target_article": "Constantinople",
+    "ground_truth_answer": "Constantinople (modern-day Istanbul)",
+    "benchmark_category": "World History & Geography (Historical Capital)"
+  },
+  {
+    "id": 32,
+    "query": "Who wrote the 'I Have a Dream' speech delivered during the 1963 March on Washington?",
+    "target_article": "Martin Luther King Jr.",
+    "ground_truth_answer": "Martin Luther King Jr.",
+    "benchmark_category": "Civil Rights History (Attribution)"
+  },
+  {
+    "id": 33,
+    "query": "What ancient wonder of the world was located in Alexandria, Egypt, and guided sailors into harbor?",
+    "target_article": "Lighthouse of Alexandria",
+    "ground_truth_answer": "The Lighthouse of Alexandria (Pharos of Alexandria)",
+    "benchmark_category": "Ancient History (Seven Wonders)"
+  },
+  {
+    "id": 34,
+    "query": "In which French palace was the Treaty of Versailles signed in 1919?",
+    "target_article": "Palace of Versailles",
+    "ground_truth_answer": "The Palace of Versailles (specifically in the Hall of Mirrors).",
+    "benchmark_category": "World History & Architecture (Location Lookup)"
+  },
+  {
+    "id": 35,
+    "query": "What Mesoamerican empire was conquered by Spanish conquistador Hernán Cortés in 1521?",
+    "target_article": "Aztec Empire",
+    "ground_truth_answer": "The Aztec Empire (Mexica Empire)",
+    "benchmark_category": "World History (Conquest)"
+  },
+  {
+    "id": 36,
+    "query": "What is the capital city of Australia?",
+    "target_article": "Canberra",
+    "ground_truth_answer": "Canberra",
+    "benchmark_category": "Geography (Capitals)"
+  },
+  {
+    "id": 37,
+    "query": "What is the longest river in Africa and traditionally considered the longest in the world?",
+    "target_article": "Nile",
+    "ground_truth_answer": "The Nile River",
+    "benchmark_category": "Geography (Superlative)"
+  },
+  {
+    "id": 38,
+    "query": "Which country has the longest coastline in the world?",
+    "target_article": "List of countries by length of coastline",
+    "ground_truth_answer": "Canada",
+    "benchmark_category": "Geography (Superlative)"
+  },
+  {
+    "id": 39,
+    "query": "What is the tallest mountain peak in North America, formerly known as Mount McKinley?",
+    "target_article": "Denali",
+    "ground_truth_answer": "Denali (located in Alaska)",
+    "benchmark_category": "Geography (Entity & Alias)"
+  },
+  {
+    "id": 40,
+    "query": "What narrow body of water separates the United Kingdom from mainland France?",
+    "target_article": "English Channel",
+    "ground_truth_answer": "The English Channel (specifically the Strait of Dover at its narrowest point)",
+    "benchmark_category": "Geography (Hydrography)"
+  },
+  {
+    "id": 41,
+    "query": "What is the largest hot desert in the world?",
+    "target_article": "Sahara",
+    "ground_truth_answer": "The Sahara Desert (Antarctica and the Arctic are larger polar deserts, but Sahara is the largest hot desert).",
+    "benchmark_category": "Geography (Clarified Superlative)"
+  },
+  {
+    "id": 42,
+    "query": "Which two countries share the longest international land border?",
+    "target_article": "Canada–United States border",
+    "ground_truth_answer": "Canada and the United States",
+    "benchmark_category": "Geography (Borders)"
+  },
+  {
+    "id": 43,
+    "query": "What tectonic boundary feature forms the deepest ocean trench on Earth?",
+    "target_article": "Mariana Trench",
+    "ground_truth_answer": "The Mariana Trench (with Challenger Deep reaching ~11,000 meters depth).",
+    "benchmark_category": "Earth Science (Superlative)"
+  },
+  {
+    "id": 44,
+    "query": "Which African lake is the world's second-largest freshwater lake by surface area?",
+    "target_article": "Lake Victoria",
+    "ground_truth_answer": "Lake Victoria (after Lake Superior).",
+    "benchmark_category": "Geography (Ranked Factoid)"
+  },
+  {
+    "id": 45,
+    "query": "What is the highest uninterrupted waterfall in the world, and in which country is it found?",
+    "target_article": "Angel Falls",
+    "ground_truth_answer": "Angel Falls (Salto Ángel), located in Venezuela.",
+    "benchmark_category": "Geography (Multi-hop Superlative)"
+  },
+  {
+    "id": 46,
+    "query": "What is the capital city of Canada?",
+    "target_article": "Ottawa",
+    "ground_truth_answer": "Ottawa",
+    "benchmark_category": "Geography (Capitals)"
+  },
+  {
+    "id": 47,
+    "query": "Which strait connects the Atlantic Ocean to the Mediterranean Sea?",
+    "target_article": "Strait of Gibraltar",
+    "ground_truth_answer": "The Strait of Gibraltar",
+    "benchmark_category": "Geography (Straits & Passages)"
+  },
+  {
+    "id": 48,
+    "query": "In which mountain range is Mount Everest located?",
+    "target_article": "Himalayas",
+    "ground_truth_answer": "The Himalayas (on the border between Nepal and China/Tibet).",
+    "benchmark_category": "Geography (Location)"
+  },
+  {
+    "id": 49,
+    "query": "What is the smallest independent sovereign state in the world by both area and population?",
+    "target_article": "Vatican City",
+    "ground_truth_answer": "Vatican City",
+    "benchmark_category": "Geography & Politics (Superlative)"
+  },
+  {
+    "id": 50,
+    "query": "What is the largest island in the world that is not considered a continent?",
+    "target_article": "Greenland",
+    "ground_truth_answer": "Greenland (an autonomous territory of Denmark)",
+    "benchmark_category": "Geography (Superlative)"
+  },
+  {
+    "id": 51,
+    "query": "Who is widely regarded as the world's first computer programmer for writing an algorithm for the Analytical Engine?",
+    "target_article": "Ada Lovelace",
+    "ground_truth_answer": "Ada Lovelace",
+    "benchmark_category": "Computer Science (Historical First)"
+  },
+  {
+    "id": 52,
+    "query": "What company developed the Python programming language and who was its original creator?",
+    "target_article": "Guido van Rossum",
+    "ground_truth_answer": "Guido van Rossum (at CWI in the Netherlands, later supported by the Python Software Foundation).",
+    "benchmark_category": "Computer Science (Language Creation)"
+  },
+  {
+    "id": 53,
+    "query": "What fundamental encryption algorithm published in 1977 is named after Rivest, Shamir, and Adleman?",
+    "target_article": "RSA (cryptosystem)",
+    "ground_truth_answer": "RSA",
+    "benchmark_category": "Cryptography (Algorithm)"
+  },
+  {
+    "id": 54,
+    "query": "Who invented the World Wide Web in 1989 while working at CERN?",
+    "target_article": "Tim Berners-Lee",
+    "ground_truth_answer": "Tim Berners-Lee",
+    "benchmark_category": "Internet History (Attribution)"
+  },
+  {
+    "id": 55,
+    "query": "What mathematical constant represents the ratio of a circle's circumference to its diameter?",
+    "target_article": "Pi",
+    "ground_truth_answer": "Pi (approx. 3.14159...)",
+    "benchmark_category": "Mathematics (Constant)"
+  },
+  {
+    "id": 56,
+    "query": "What company created the Android mobile operating system before it was acquired by Google in 2005?",
+    "target_article": "Android (operating system)",
+    "ground_truth_answer": "Android Inc. (co-founded by Andy Rubin, Rich Miner, Nick Sears, and Chris White).",
+    "benchmark_category": "Tech History (Acquisition & Origin)"
+  },
+  {
+    "id": 57,
+    "query": "What architecture pattern separates web application data into Model, View, and Controller components?",
+    "target_article": "Model–view–controller",
+    "ground_truth_answer": "Model–View–Controller (MVC)",
+    "benchmark_category": "Software Architecture (Design Pattern)"
+  },
+  {
+    "id": 58,
+    "query": "What is Moore's Law in semiconductor electronics?",
+    "target_article": "Moore's law",
+    "ground_truth_answer": "The observation made by Gordon Moore that the number of transistors on a microchip doubles roughly every two years.",
+    "benchmark_category": "Technology & Electronics (Principle)"
+  },
+  {
+    "id": 59,
+    "query": "What deep learning architecture introduced in the 2017 paper 'Attention Is All You Need' became the basis for modern LLMs?",
+    "target_article": "Transformer (deep learning architecture)",
+    "ground_truth_answer": "The Transformer architecture (developed by Google researchers)",
+    "benchmark_category": "Artificial Intelligence (Core Architecture)"
+  },
+  {
+    "id": 60,
+    "query": "Who is known as the father of modern theoretical computer science and broke the Enigma code at Bletchley Park?",
+    "target_article": "Alan Turing",
+    "ground_truth_answer": "Alan Turing",
+    "benchmark_category": "Computer Science (Biography)"
+  },
+  {
+    "id": 61,
+    "query": "What standard networking protocol is used to assign dynamic IP addresses to devices on a local network?",
+    "target_article": "Dynamic Host Configuration Protocol",
+    "ground_truth_answer": "DHCP (Dynamic Host Configuration Protocol)",
+    "benchmark_category": "Networking (Protocol)"
+  },
+  {
+    "id": 62,
+    "query": "What is the name of the consensus mechanism originally used by Bitcoin to validate transactions?",
+    "target_article": "Proof of work",
+    "ground_truth_answer": "Proof of Work (PoW)",
+    "benchmark_category": "Cryptocurrency & Computing (Mechanism)"
+  },
+  {
+    "id": 63,
+    "query": "In relational databases, what does the ACID acronym stand for?",
+    "target_article": "ACID",
+    "ground_truth_answer": "Atomicity, Consistency, Isolation, Durability",
+    "benchmark_category": "Database Systems (Acronym/Concept)"
+  },
+  {
+    "id": 64,
+    "query": "What was the first commercial microprocessor released by Intel in 1971?",
+    "target_article": "Intel 4004",
+    "ground_truth_answer": "Intel 4004",
+    "benchmark_category": "Hardware History (Milestone)"
+  },
+  {
+    "id": 65,
+    "query": "What distributed version control system was created in 2005 by Linus Torvalds to manage Linux kernel development?",
+    "target_article": "Git",
+    "ground_truth_answer": "Git",
+    "benchmark_category": "Software Engineering (Tool Attribution)"
+  },
+  {
+    "id": 66,
+    "query": "What organelle is often referred to as the 'powerhouse of the cell' for producing ATP?",
+    "target_article": "Mitochondrion",
+    "ground_truth_answer": "The Mitochondrion (mitochondria)",
+    "benchmark_category": "Cell Biology (Concept / Metaphor)"
+  },
+  {
+    "id": 67,
+    "query": "Who proposed the theory of evolution by natural selection in the 1859 book 'On the Origin of Species'?",
+    "target_article": "Charles Darwin",
+    "ground_truth_answer": "Charles Darwin",
+    "benchmark_category": "Biology (Foundational Theory)"
+  },
+  {
+    "id": 68,
+    "query": "What molecule carries genetic instructions for development and functioning in all known living organisms?",
+    "target_article": "DNA",
+    "ground_truth_answer": "DNA (Deoxyribonucleic acid)",
+    "benchmark_category": "Genetics & Molecular Biology (Molecule)"
+  },
+  {
+    "id": 69,
+    "query": "What is the largest internal organ in the human body?",
+    "target_article": "Liver",
+    "ground_truth_answer": "The liver (the skin is the largest organ overall, but the liver is the largest internal organ).",
+    "benchmark_category": "Human Anatomy (Superlative)"
+  },
+  {
+    "id": 70,
+    "query": "What hormone produced by the pancreas regulates blood glucose levels?",
+    "target_article": "Insulin",
+    "ground_truth_answer": "Insulin",
+    "benchmark_category": "Physiology & Endocrinology (Hormone)"
+  },
+  {
+    "id": 71,
+    "query": "Which blood type is known as the universal red blood cell donor in the ABO blood group system?",
+    "target_article": "ABO blood group system",
+    "ground_truth_answer": "O negative (O-)",
+    "benchmark_category": "Medicine & Hematology (Factoid)"
+  },
+  {
+    "id": 72,
+    "query": "What gene-editing tool derived from bacterial immune systems allows targeted modification of DNA sequences?",
+    "target_article": "CRISPR gene editing",
+    "ground_truth_answer": "CRISPR-Cas9 (or CRISPR)",
+    "benchmark_category": "Biotechnology (Tool & Mechanism)"
+  },
+  {
+    "id": 73,
+    "query": "What is the largest living mammal species on Earth?",
+    "target_article": "Blue whale",
+    "ground_truth_answer": "The Blue Whale (Balaenoptera musculus)",
+    "benchmark_category": "Zoology (Superlative)"
+  },
+  {
+    "id": 74,
+    "query": "What process do green plants use to convert light energy into chemical energy stored in glucose?",
+    "target_article": "Photosynthesis",
+    "ground_truth_answer": "Photosynthesis",
+    "benchmark_category": "Botany & Biochemistry (Biological Process)"
+  },
+  {
+    "id": 75,
+    "query": "Which scientist developed the first successful inactivated polio vaccine in the 1950s?",
+    "target_article": "Jonas Salk",
+    "ground_truth_answer": "Jonas Salk",
+    "benchmark_category": "Medical History (Attribution)"
+  },
+  {
+    "id": 76,
+    "query": "What type of blood cells are primarily responsible for fighting infections in the human body?",
+    "target_article": "White blood cell",
+    "ground_truth_answer": "White blood cells (leukocytes)",
+    "benchmark_category": "Immunology (Cell Type)"
+  },
+  {
+    "id": 77,
+    "query": "What is the primary protein component of human hair, fingernails, and animal horns?",
+    "target_article": "Keratin",
+    "ground_truth_answer": "Keratin",
+    "benchmark_category": "Biochemistry (Structural Protein)"
+  },
+  {
+    "id": 78,
+    "query": "Which human chromosome pair abnormality causes Down syndrome?",
+    "target_article": "Down syndrome",
+    "ground_truth_answer": "Trisomy 21 (a third copy of chromosome 21).",
+    "benchmark_category": "Genetics & Pathology (Condition Etiology)"
+  },
+  {
+    "id": 79,
+    "query": "What neurological structure connecting the left and right cerebral hemispheres allows interhemispheric communication?",
+    "target_article": "Corpus callosum",
+    "ground_truth_answer": "The corpus callosum",
+    "benchmark_category": "Neuroscience (Anatomical Structure)"
+  },
+  {
+    "id": 80,
+    "query": "What is the name of the symbiotic relationship where both species benefit from the interaction?",
+    "target_article": "Mutualism (biology)",
+    "ground_truth_answer": "Mutualism",
+    "benchmark_category": "Ecology (Concept Definition)"
+  },
+  {
+    "id": 81,
+    "query": "Who painted the Mona Lisa and in which museum is it permanently displayed?",
+    "target_article": "Mona Lisa",
+    "ground_truth_answer": "Leonardo da Vinci; permanently displayed at the Louvre Museum in Paris.",
+    "benchmark_category": "Art History (Multi-hop / Attribution & Location)"
+  },
+  {
+    "id": 82,
+    "query": "Which Russian author wrote the novels 'War and Peace' and 'Anna Karenina'?",
+    "target_article": "Leo Tolstoy",
+    "ground_truth_answer": "Leo Tolstoy",
+    "benchmark_category": "Literature (Author Attribution)"
+  },
+  {
+    "id": 83,
+    "query": "Who composed the landmark choral Symphony No. 9 in D minor featuring 'Ode to Joy'?",
+    "target_article": "Symphony No. 9 (Beethoven)",
+    "ground_truth_answer": "Ludwig van Beethoven",
+    "benchmark_category": "Classical Music (Attribution)"
+  },
+  {
+    "id": 84,
+    "query": "What Greek philosopher was the teacher of Plato and was sentenced to death by drinking hemlock?",
+    "target_article": "Socrates",
+    "ground_truth_answer": "Socrates",
+    "benchmark_category": "Philosophy (Biography)"
+  },
+  {
+    "id": 85,
+    "query": "Who wrote the dystopian novel 'Nineteen Eighty-Four', introducing concepts like Big Brother and Thought Police?",
+    "target_article": "Nineteen Eighty-Four",
+    "ground_truth_answer": "George Orwell",
+    "benchmark_category": "Literature (Author Attribution)"
+  },
+  {
+    "id": 86,
+    "query": "What Renaissance artist painted the ceiling of the Sistine Chapel in the Vatican?",
+    "target_article": "Sistine Chapel ceiling",
+    "ground_truth_answer": "Michelangelo",
+    "benchmark_category": "Art History (Masterpiece Attribution)"
+  },
+  {
+    "id": 87,
+    "query": "Who wrote the epic ancient Greek poems 'The Iliad' and 'The Odyssey'?",
+    "target_article": "Homer",
+    "ground_truth_answer": "Homer",
+    "benchmark_category": "Classical Literature (Attribution)"
+  },
+  {
+    "id": 88,
+    "query": "Which French philosopher famously coined the statement 'Cogito, ergo sum' (I think, therefore I am)?",
+    "target_article": "René Descartes",
+    "ground_truth_answer": "René Descartes",
+    "benchmark_category": "Philosophy (Famous Quotation)"
+  },
+  {
+    "id": 89,
+    "query": "What Dutch post-impressionist painter created 'The Starry Night' while staying at the Saint-Paul asylum in Saint-Rémy?",
+    "target_article": "The Starry Night",
+    "ground_truth_answer": "Vincent van Gogh",
+    "benchmark_category": "Art History (Artist & Context)"
+  },
+  {
+    "id": 90,
+    "query": "What Shakespearean play features the line 'To be, or not to be, that is the question'?",
+    "target_article": "Hamlet",
+    "ground_truth_answer": "Hamlet (The Tragedy of Hamlet, Prince of Denmark)",
+    "benchmark_category": "Literature & Drama (Quote Lookup)"
+  },
+  {
+    "id": 91,
+    "query": "Which country has won the most FIFA Men's World Cup titles in soccer history?",
+    "target_article": "List of FIFA World Cup finals",
+    "ground_truth_answer": "Brazil (with 5 titles: 1958, 1962, 1970, 1994, 2002).",
+    "benchmark_category": "Sports (Superlative / Historical Record)"
+  },
+  {
+    "id": 92,
+    "query": "In which city were the first modern Olympic Games held in 1896?",
+    "target_article": "1896 Summer Olympics",
+    "ground_truth_answer": "Athens, Greece",
+    "benchmark_category": "Sports History (Host City / Origin)"
+  },
+  {
+    "id": 93,
+    "query": "What filmmaker directed the sci-fi movie 'Inception' and the superhero film 'The Dark Knight'?",
+    "target_article": "Christopher Nolan",
+    "ground_truth_answer": "Christopher Nolan",
+    "benchmark_category": "Cinema & Pop Culture (Director Attribution)"
+  },
+  {
+    "id": 94,
+    "query": "What animated film released by Pixar in 1995 was the first entirely computer-animated feature film?",
+    "target_article": "Toy Story",
+    "ground_truth_answer": "Toy Story",
+    "benchmark_category": "Cinema & Animation (Historical First)"
+  },
+  {
+    "id": 95,
+    "query": "What Scottish economist published 'The Wealth of Nations' in 1776, outlining the concept of the 'invisible hand'?",
+    "target_article": "Adam Smith",
+    "ground_truth_answer": "Adam Smith",
+    "benchmark_category": "Economics (Foundational Work)"
+  },
+  {
+    "id": 96,
+    "query": "Who is the all-time leading scorer in NBA regular-season history, surpassing Kareem Abdul-Jabbar in 2023?",
+    "target_article": "LeBron James",
+    "ground_truth_answer": "LeBron James",
+    "benchmark_category": "Sports (All-Time Record)"
+  },
+  {
+    "id": 97,
+    "query": "What video game franchise created by Shigeru Miyamoto follows the adventures of Link in the kingdom of Hyrule?",
+    "target_article": "The Legend of Zelda",
+    "ground_truth_answer": "The Legend of Zelda",
+    "benchmark_category": "Gaming & Pop Culture (Franchise)"
+  },
+  {
+    "id": 98,
+    "query": "What is the official currency used by the member states of the Eurozone?",
+    "target_article": "Euro",
+    "ground_truth_answer": "The Euro (€)",
+    "benchmark_category": "Economics & Monetary Policy (Currency)"
+  },
+  {
+    "id": 99,
+    "query": "What fictional wizarding school in J.K. Rowling's Harry Potter universe is divided into Gryffindor, Hufflepuff, Ravenclaw, and Slytherin?",
+    "target_article": "Hogwarts",
+    "ground_truth_answer": "Hogwarts School of Witchcraft and Wizardry",
+    "benchmark_category": "Literature & Pop Culture (Fictional Entity)"
+  },
+  {
+    "id": 100,
+    "query": "Who was the first female Prime Minister of the United Kingdom, serving from 1979 to 1990?",
+    "target_article": "Margaret Thatcher",
+    "ground_truth_answer": "Margaret Thatcher",
+    "benchmark_category": "Political History (Historical First)"
+  }
+]

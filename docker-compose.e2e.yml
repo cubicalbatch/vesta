@@ -1,0 +1,12 @@
+# Phase 6 E2E override — NOT for production.
+#   E2E=/tmp/vesta-e2e docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build
+# Fresh data dir (B1 fresh-install honesty) + the llama-server router published
+# on the host so the browser-side "Test connection" probe (B7) can reach the
+# container's own llama-server at http://127.0.0.1:8081/v1.
+services:
+  vesta:
+    volumes:
+      - ${E2E:-/tmp/vesta-e2e}:/app/data
+    ports:
+      - "0.0.0.0:5129:8080"
+      - "127.0.0.1:8081:8081"

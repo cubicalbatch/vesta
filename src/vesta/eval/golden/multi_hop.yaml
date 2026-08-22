@@ -1,0 +1,44 @@
+name: multi_hop
+provenance: hand-written
+entries:
+  - id: m01
+    query: The physicist who won the 1921 Nobel Prize also developed which theory of gravity?
+    expected_paths: [Albert_Einstein, Gravity]
+    expected_fact: "general relativity"
+    notes: Hop 1 Einstein→Nobel, hop 2 Einstein→gravity theory. Either article is a hit.
+  - id: m02
+    query: Which emperor lost an empire after the battle of Waterloo?
+    expected_paths: [Napoleon]
+    expected_fact: "Battle of Waterloo"
+  - id: m03
+    query: The president who issued the Emancipation Proclamation led which country through civil war?
+    expected_paths: [Abraham_Lincoln]
+    expected_fact: "Emancipation Proclamation"
+  - id: m04
+    query: The scientist who discovered penicillin in 1928 was of what nationality?
+    expected_paths: [Penicillin]
+    expected_fact: "Scottish physician Alexander Fleming"
+  - id: m05
+    query: Which programming language first appeared in 1991 and was designed by Guido van Rossum?
+    expected_paths: [Python_(programming_language)]
+    expected_fact: "Guido van Rossum"
+  - id: m06
+    query: The operating system kernel released by Linus Torvalds in 1991 belongs to which family?
+    expected_paths: [Linux]
+    expected_fact: "Unix-like"
+  - id: m07
+    query: The tower named after engineer Gustave Eiffel stands in which city?
+    expected_paths: [Eiffel_Tower]
+    expected_fact: "Gustave Eiffel"
+  - id: m08
+    query: The supercontinent that existed around 335 million years ago broke apart in which period?
+    expected_paths: [Pangaea]
+    expected_fact: "beginning of the Triassic"
+  - id: m09
+    query: The chemist who formulated the periodic law in 1869 was from which country?
+    expected_paths: [Periodic_table]
+    expected_fact: "Russian chemist Dmitri Mendeleev"
+  - id: m10
+    query: The storming of the Bastille in 1789 began which revolution?
+    expected_paths: [French_Revolution]
+    expected_fact: "Storming of the Bastille"

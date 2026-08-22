@@ -1,0 +1,35 @@
+# Vesta — production compose.
+#
+#   docker compose up -d --build   # builds the image, serves on http://0.0.0.0:5129
+#
+# One container, one process, one bind mount. ./data is the system of record
+# (zims/, models/, vesta.db, cache/); it is created on first run. On an empty
+# ./data the app boots to the welcome/onboarding page — the whole first-run
+# flow is UI-driven from there.
+
+services:
+  vesta:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vesta:latest
+    ports:
+      # Explicit host bind on all interfaces, host port 5129 → container port 8080.
+      - "0.0.0.0:5129:8080"
+    volumes:
+      - ./data2:/app/data
+    # GPU acceleration (optional): the image ships the Vulkan loader + Intel/AMD
+    # ICDs + the ggml-vulkan backend. To use a GPU, expose the render nodes:
+    #   devices:
+    #     - /dev/dri:/dev/dri        # Intel / AMD
+    # For NVIDIA use deploy.resources.reservations.devices with driver: nvidia.
+    # With no device mapped, llama-server runs on CPU — never crashes.
+    restart: unless-stopped
+    healthcheck:
+      # /health returns 200 with nothing configured — no ZIMs, no models, no
+      # index — so this is a true liveness check, not a readiness gate.
+      test: ["CMD", "python", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s

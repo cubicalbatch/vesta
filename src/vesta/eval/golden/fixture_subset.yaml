@@ -1,0 +1,40 @@
+# Fixture golden subset — runs in CI against the tiny-ZIM fixture.
+#
+# The full 60-query golden set requires the pinned archive
+# (wikipedia_en_top_nopic_2026-06.zim), which is gitignored and not present in
+# CI. This file is the CI-runnable surrogate: a handful of queries whose
+# expected paths and facts are present in the tiny generated ZIM
+# (tests/fixtures/tiny_zim.py). The regression gate (eval.regression gate) runs
+# THIS set so it actually executes in CI; the full set runs on-demand/nightly
+# where the pinned archive is present.
+name: fixture_subset
+archive:
+  # 'fixture' is a sentinel: the runner resolves it to the tiny ZIM articles
+  # rather than the checksum-pinned Wikipedia archive.
+  path: fixture
+  checksum: fixture
+entries:
+  - id: f01
+    query: Albert Einstein
+    expected_paths: [A/Albert_Einstein]
+    expected_fact: Albert Einstein
+    slice: keyword
+    provenance: fixture
+  - id: f02
+    query: lorem ipsum
+    expected_paths: [A/Albert_Einstein]
+    expected_fact: Lorem ipsum
+    slice: deep_content
+    provenance: fixture
+  - id: f03
+    query: United States
+    expected_paths: [A/United_States, A/USA_Redirect]
+    expected_fact: United States
+    slice: entity
+    provenance: fixture
+  - id: f04
+    query: Mercury
+    expected_paths: [A/Mercury]
+    expected_fact: Mercury
+    slice: entity
+    provenance: fixture

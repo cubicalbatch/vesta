@@ -1,0 +1,79 @@
+{
+  "description": "Gap-directed recovery: Round-0 retrieval only turns up the wrong article ('Air'), which fires the pre-gate. Under the agentic strategy this escalates into gap-directed reformulation instead of an immediate abstention: one chat_once names the missing fact and proposes 'atmosphere of earth', a recovery search finds the right article, and a fresh grounded answer streams. The recovered evidence arrives as a second, merge:true 'sources' event.",
+  "query": "How much nitrogen in the air?",
+  "events": [
+    {
+      "event": "sources",
+      "data": {
+        "cards": [
+          {
+            "zim_id": 1,
+            "path": "Air",
+            "title": "Air",
+            "snippet": "Air commonly refers to the atmosphere of Earth in colloquial usage.",
+            "breadcrumb": "Air",
+            "score": 0.09,
+            "source": "xapian_fts"
+          }
+        ],
+        "merge": false
+      }
+    },
+    {"event": "status", "data": {"phase": "reading", "detail": "1 sources"}},
+    {"event": "status", "data": {"phase": "searching", "detail": "reformulating query"}},
+    {"event": "status", "data": {"phase": "generating", "detail": "streaming recovered answer"}},
+    {"event": "token", "data": {"text": "Nitrogen makes up about 78% of Earth's atmosphere"}},
+    {"event": "token", "data": {"text": " by volume [1]."}},
+    {
+      "event": "sources",
+      "data": {
+        "cards": [
+          {
+            "zim_id": 1,
+            "path": "Atmosphere_of_Earth",
+            "title": "Atmosphere of Earth",
+            "snippet": "The atmosphere of Earth is composed of about 78% nitrogen, 21% oxygen...",
+            "breadcrumb": "Atmosphere of Earth",
+            "score": 0.91,
+            "source": "alias_title_resolve"
+          }
+        ],
+        "merge": true
+      }
+    },
+    {
+      "event": "citations",
+      "data": {
+        "spans": [
+          {
+            "answer_span": [0, 60],
+            "card_id": 1,
+            "passage_span": [0, 66],
+            "score": 0.79
+          }
+        ]
+      }
+    },
+    {
+      "event": "trace",
+      "data": {
+        "version": 1,
+        "stages": [
+          {"name": "query_preparer", "component": "normalize", "params": {}, "inputs": {"raw": "How much nitrogen in the air?"}, "outputs": {"terms": ["nitrogen", "air"]}, "duration_ms": 0.1},
+          {"name": "query_preparer", "component": "alias_expand", "params": {"max_aliases": 3, "mode": "title_hints"}, "inputs": {"terms": ["nitrogen", "air"]}, "outputs": {"aliases": ["Atmosphere of Earth"]}, "duration_ms": 0.2},
+          {"name": "candidate_source", "component": "xapian_fts", "params": {}, "inputs": {"terms": ["nitrogen", "air"]}, "outputs": {"candidate_count": 3}, "duration_ms": 38.0},
+          {"name": "candidate_source", "component": "alias_title_resolve", "params": {}, "inputs": {"terms": ["nitrogen", "air"]}, "outputs": {"candidate_count": 0}, "duration_ms": 4.0},
+          {"name": "fuser", "component": "rrf", "params": {"k": 20}, "inputs": {"sources": 2}, "outputs": {"fused": 3}, "duration_ms": 0.8},
+          {"name": "context_assembler", "component": "topk_budget", "params": {"budget_tokens": 2400}, "inputs": {"scored": 3}, "outputs": {"selected": 1}, "duration_ms": 2.1},
+          {"name": "agentic_round", "component": "reformulate", "params": {"trigger": "pre_gate", "prompt_version": "13.1", "prompt_hash": "9f2a..."}, "inputs": {}, "outputs": {"missing_fact": "the nitrogen percentage of the atmosphere", "queries": ["atmosphere of earth"]}, "duration_ms": 640.0},
+          {"name": "agentic_round", "component": "tool_call", "params": {"round": 1, "tool": "search", "query": "atmosphere of earth", "source": "reformulate"}, "inputs": {"arguments": {"query": "atmosphere of earth"}}, "outputs": {"found": true}, "duration_ms": 210.0},
+          {"name": "answer", "component": "agentic_recovered", "params": {"prompt_version": "07.1", "trigger": "pre_gate", "rounds_executed": 1}, "inputs": {"passage_count": 2}, "outputs": {"answer_length": 76, "finish": "stop"}, "duration_ms": 5400.0},
+          {"name": "citations", "component": "post_hoc_align", "params": {"min_span_score": 0.55}, "inputs": {"answer_length": 76, "passage_count": 2}, "outputs": {"spans": 1, "alignments": 1}, "duration_ms": 3.0}
+        ],
+        "degradations": [],
+        "profile": "alias_resolve"
+      }
+    },
+    {"event": "done", "data": {}}
+  ]
+}

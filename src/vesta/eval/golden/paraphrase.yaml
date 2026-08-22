@@ -1,0 +1,44 @@
+name: paraphrase
+provenance: hand-written
+entries:
+  - id: p01
+    query: How do plants make their own food from sunlight?
+    expected_paths: [Photosynthesis]
+    expected_fact: "convert light energy"
+    notes: No shared keyword with the title "Photosynthesis" — the slice that justifies embeddings.
+  - id: p02
+    query: What process in cells produces the energy currency called ATP?
+    expected_paths: [Mitochondrion]
+    expected_fact: "adenosine triphosphate (ATP)"
+  - id: p03
+    query: Which structure carries the genetic instructions for development?
+    expected_paths: [DNA]
+    expected_fact: "genetic instructions"
+  - id: p04
+    query: What is the biological process where plants release oxygen from water?
+    expected_paths: [Photosynthesis]
+    expected_fact: "releases oxygen as a byproduct"
+  - id: p05
+    query: What nickname is given to the organelle that powers the cell?
+    expected_paths: [Mitochondrion]
+    expected_fact: "powerhouse of the cell"
+  - id: p06
+    query: Which astronomical body sits at the center of our planetary system?
+    expected_paths: [Sun]
+    expected_fact: "located at the centre of the Solar System"
+  - id: p07
+    query: What is the only world known to sustain liquid surface water?
+    expected_paths: [Earth]
+    expected_fact: "sustaining liquid surface water"
+  - id: p08
+    query: Which region of the atmosphere blocks most ultraviolet radiation?
+    expected_paths: [Ozone_layer]
+    expected_fact: "absorbs most of the Sun's ultraviolet"
+  - id: p09
+    query: What is the common name for the force that draws objects toward each other?
+    expected_paths: [Gravity]
+    expected_fact: "force that draws material objects towards each other"
+  - id: p10
+    query: Which fundamental theory describes Earth's lithosphere as moving plates?
+    expected_paths: [Plate_tectonics]
+    expected_fact: "lithosphere comprises a number of large tectonic plates"

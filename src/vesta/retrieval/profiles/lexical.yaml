@@ -1,0 +1,25 @@
+name: lexical
+description: Depth-0 baseline. No embeddings, no reranking. `title_entity_suggest` (2026-08-16) gives the universal title index entity-shaped spans from the raw question — depth-0 boxes have no dense side to compensate for the joined-prefix miss, so they need it most. Params aligned to `standard.yaml` (the standard-arm funnel replay measured +28/−0 questions there, offset-insensitive; lexical's narrower 20-article funnel is the depth-0 reality where archives are few, so the same tempering applies).
+preparers:
+  - impl: normalize
+  - impl: alias_expand
+    params: {max_aliases: 3}
+  - impl: conversational_rewrite
+sources:
+  - impl: xapian_fts
+    params: {limit: 40, fallback_ladder: true}
+  - impl: title_suggest
+    params: {limit: 20, keyword_boost: 1.8}
+  - impl: title_entity_suggest
+    params: {limit: 3, max_spans: 4, rank_offset: 4}
+fusion:
+  impl: rrf
+  params: {k: 20, across_archives: union}
+passages:
+  impl: candidate_articles
+  params: {max_articles: 20, max_passages: 200}
+scorers:
+  - impl: lexical_overlap
+assembler:
+  impl: topk_budget
+  params: {budget_tokens: 2400, max_per_article: 2, dedup: near_exact}

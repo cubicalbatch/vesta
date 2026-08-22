@@ -1,0 +1,66 @@
+{
+  "description": "Single-shot grounded answer with citations (local 4B). Demonstrates progressive disclosure: sources first, status during prefill, then tokens, then post-hoc citation alignment.",
+  "query": "When was the Battle of Hastings?",
+  "events": [
+    {
+      "event": "sources",
+      "data": {
+        "cards": [
+          {
+            "zim_id": 1,
+            "path": "Battle_of_Hastings",
+            "title": "Battle of Hastings",
+            "snippet": "The Battle of Hastings was fought on 14 October 1066 during the Norman conquest of England.",
+            "breadcrumb": "Battle of Hastings",
+            "score": 0.92,
+            "source": "xapian_fts"
+          },
+          {
+            "zim_id": 1,
+            "path": "Norman_Conquest",
+            "title": "Norman Conquest",
+            "snippet": "The Norman Conquest was the 11th-century invasion and occupation of England.",
+            "breadcrumb": "Norman Conquest",
+            "score": 0.71,
+            "source": "xapian_fts"
+          }
+        ]
+      }
+    },
+    {"event": "status", "data": {"phase": "reading", "detail": "2 sources"}},
+    {"event": "status", "data": {"phase": "generating", "detail": "streaming answer"}},
+    {"event": "token", "data": {"text": "The Battle of Hastings was fought on 14 October 1066"}},
+    {"event": "token", "data": {"text": " during the Norman conquest of England"}},
+    {"event": "token", "data": {"text": " [1]."}},
+    {
+      "event": "citations",
+      "data": {
+        "spans": [
+          {
+            "answer_span": [0, 68],
+            "card_id": 0,
+            "passage_span": [0, 80],
+            "score": 0.82
+          }
+        ]
+      }
+    },
+    {
+      "event": "trace",
+      "data": {
+        "version": 1,
+        "stages": [
+          {"name": "query_preparer", "component": "normalize", "params": {}, "inputs": {"raw": "When was the Battle of Hastings?"}, "outputs": {"terms": ["battle", "hastings"]}, "duration_ms": 0.1},
+          {"name": "candidate_source", "component": "xapian_fts", "params": {}, "inputs": {"terms": ["battle", "hastings"]}, "outputs": {"candidate_count": 14}, "duration_ms": 41.0},
+          {"name": "fuser", "component": "rrf", "params": {"k": 60}, "inputs": {"sources": 2}, "outputs": {"fused": 18}, "duration_ms": 1.2},
+          {"name": "context_assembler", "component": "topk_budget", "params": {"budget_tokens": 2400}, "inputs": {"scored": 20}, "outputs": {"selected": 6}, "duration_ms": 3.4},
+          {"name": "answer", "component": "single_shot", "params": {"prompt_version": "07.1"}, "inputs": {"passage_count": 2}, "outputs": {"answer_length": 90, "finish": "stop"}, "duration_ms": 14200.0},
+          {"name": "citations", "component": "post_hoc_align", "params": {"min_span_score": 0.55}, "inputs": {"answer_length": 90, "passage_count": 2}, "outputs": {"spans": 1, "alignments": 1}, "duration_ms": 8.0}
+        ],
+        "degradations": [],
+        "profile": "lexical"
+      }
+    },
+    {"event": "done", "data": {}}
+  ]
+}

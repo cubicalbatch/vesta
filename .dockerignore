@@ -1,0 +1,68 @@
+# ── Version control ─────────────────────────────────────────────────────────
+.git
+.gitignore
+
+# ── Project data (large, local-only — never enters the build context) ───────
+# ZIMs, models, the SQLite DB, caches, index sidecars all live under data/.
+data/
+data2/
+snapshots/
+
+# ── Python ──────────────────────────────────────────────────────────────────
+.venv/
+venv/
+**/__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# ── Frontend ────────────────────────────────────────────────────────────────
+# node_modules and the svelte-kit generated dir are reproduced inside the image.
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/dist/
+frontend/build/
+# A host-built SPA must never shadow the one the image builds itself.
+src/vesta/static/app/
+
+# ── Editor / OS / misc ──────────────────────────────────────────────────────
+.vscode/
+.idea/
+.opencode/
+.claude/
+.crush/
+.cursor/
+.gemini/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbnails.db
+*.log
+logs/
+bench_logs/
+bench_results/
+
+# ── Docs / planning not needed in the image ─────────────────────────────────
+docs/
+phased_plan/
+benchmarks/
+README.md
+ARCHITECTURE.md
+AGENTS.md
+CLAUDE.md
+frontend/CLAUDE.md
+scripts/bench/AGENT_INSTRUCTIONS.md
+move_to_lancedb.md
+check_desktop_models.sh
+Makefile
+start.sh
+dev.sh
+kiwi-start.sh
+
+# Compose files aren't build inputs; keep them out of the production context.
+docker-compose*.yml

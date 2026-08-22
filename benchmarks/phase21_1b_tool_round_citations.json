@@ -1,0 +1,2416 @@
+{
+ "analysis": "phase21-1b-tool-round-citations",
+ "method": {
+  "tool_round": "stages beyond the leading pre_seed contain search/read_article",
+  "preseed_card_count": "stages[0].outputs.cards of the pre_seed step",
+  "citation": "regex \\[(\\d{1,2})\\] on answer_text, filtered to 1..len(retrieved_paths)",
+  "post_tool_card": "cited card number n > preseed card count (cards numbered at first discovery; pre-seed cards occupy 1..C)",
+  "confound": "judged-only; gold in cards = source_hit_rank IS NOT NULL; split on cumulative input_tokens at 10k"
+ },
+ "runs": [
+  {
+   "run_id": 46,
+   "label": "phase19-4-off",
+   "system": "agentic_pydantic",
+   "answer_model": "qwen3.5-4b@q4_k_s",
+   "judge_model": "google/gemma-4-12b-qat",
+   "subset_hash": "dbca4d6f0f11dd16",
+   "verdicts": {
+    "correct": 117,
+    "partial": 9,
+    "incorrect": 12,
+    "unjudged": 12
+   },
+   "judged_n": 138,
+   "total_questions": 150,
+   "tool_round_questions": 60,
+   "tool_round_with_search": 34,
+   "tool_round_read_only": 26,
+   "answers_with_no_citation": 10,
+   "cite_post_tool_questions": 18,
+   "cite_post_tool_pct_of_tool_round": 30.0,
+   "cite_post_tool_pct_of_search_round": 52.9,
+   "total_citations": 78,
+   "post_tool_citations": 19,
+   "post_tool_citation_share_pct": 24.4,
+   "correct_rate_by_group": {
+    "cites_post_tool": {
+     "judged_n": 17,
+     "correct_pct": 76.5
+    },
+    "pre_seed_only": {
+     "judged_n": 39,
+     "correct_pct": 66.7
+    }
+   },
+   "confound_conditioning": {
+    "<10k": {
+     "n": 86,
+     "gold_in_cards_pct": 98.8,
+     "mean_gold_rank": 1.0,
+     "correct_given_gold_pct": 94.1
+    },
+    ">=10k": {
+     "n": 52,
+     "gold_in_cards_pct": 90.4,
+     "mean_gold_rank": 2.5,
+     "correct_given_gold_pct": 72.3
+    }
+   },
+   "per_question": [
+    {
+     "qid": "mfs-0003",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 3,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 16893,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mfs-0015",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 8,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 16456,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mfs-0019",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 3,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 15317,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mfs-0020",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 7,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 27788,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mfs-0025",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 1,
+     "n_cards": 1,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 15247,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mfs-0026",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 2,
+     "n_cards": 2,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 16381,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mfs-0027",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 4,
+     "n_cards": 6,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "partial",
+     "input_tokens": 21044,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mfs-0036",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 6,
+     "n_cards": 6,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 15410,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0001",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 4,
+     "n_cards": 11,
+     "cited": [
+      5
+     ],
+     "cited_post_tool": [
+      5
+     ],
+     "verdict": "correct",
+     "input_tokens": 15710,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0003",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 4,
+     "n_cards": 6,
+     "cited": [
+      2,
+      5
+     ],
+     "cited_post_tool": [
+      5
+     ],
+     "verdict": "correct",
+     "input_tokens": 50353,
+     "source_hit_rank": 2
+    },
+    {
+     "qid": "mhc-0009",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 11,
+     "cited": [
+      1,
+      4
+     ],
+     "cited_post_tool": [
+      4
+     ],
+     "verdict": "correct",
+     "input_tokens": 8380,
+     "source_hit_rank": 4
+    },
+    {
+     "qid": "mhc-0010",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 6,
+     "n_cards": 14,
+     "cited": [
+      1,
+      2,
+      7
+     ],
+     "cited_post_tool": [
+      7
+     ],
+     "verdict": "correct",
+     "input_tokens": 46734,
+     "source_hit_rank": 2
+    },
+    {
+     "qid": "mhc-0011",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 6,
+     "n_cards": 6,
+     "cited": [
+      1,
+      4
+     ],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 15837,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0013",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 13,
+     "cited": [
+      1,
+      9
+     ],
+     "cited_post_tool": [
+      9
+     ],
+     "verdict": "correct",
+     "input_tokens": 36433,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0014",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 6,
+     "n_cards": 6,
+     "cited": [
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 12545,
+     "source_hit_rank": null
+    },
+    {
+     "qid": "mhc-0016",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 10,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "partial",
+     "input_tokens": 46534,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0017",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 6,
+     "n_cards": 10,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 42890,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0020",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 8,
+     "cited": [
+      4,
+      6
+     ],
+     "cited_post_tool": [
+      4,
+      6
+     ],
+     "verdict": "correct",
+     "input_tokens": 74212,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0021",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "search",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 7,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 47815,
+     "source_hit_rank": null
+    },
+    {
+     "qid": "mhc-0022",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article",
+      "search",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 24,
+     "cited": [
+      3,
+      20
+     ],
+     "cited_post_tool": [
+      20
+     ],
+     "verdict": "incorrect",
+     "input_tokens": 98762,
+     "source_hit_rank": 6
+    },
+    {
+     "qid": "mhc-0023",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 14,
+     "cited": [
+      2,
+      8
+     ],
+     "cited_post_tool": [
+      8
+     ],
+     "verdict": "partial",
+     "input_tokens": 33815,
+     "source_hit_rank": 2
+    },
+    {
+     "qid": "mhc-0024",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 7,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 24789,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0025",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 20,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 59034,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0026",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 4,
+     "n_cards": 4,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 43265,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0028",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 5,
+     "n_cards": 11,
+     "cited": [
+      1,
+      8
+     ],
+     "cited_post_tool": [
+      8
+     ],
+     "verdict": "correct",
+     "input_tokens": 17926,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0029",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "search",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 20,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 81860,
+     "source_hit_rank": null
+    },
+    {
+     "qid": "mhc-0030",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "search"
+     ],
+     "preseed_cards": 5,
+     "n_cards": 10,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 31242,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0031",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "search"
+     ],
+     "preseed_cards": 6,
+     "n_cards": 9,
+     "cited": [
+      1,
+      3
+     ],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 20846,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0037",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 2,
+     "n_cards": 2,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 21863,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0038",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 7,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 14319,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0039",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 2,
+     "n_cards": 2,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 21051,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0040",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 3,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 34241,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0042",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 6,
+     "n_cards": 11,
+     "cited": [
+      1,
+      7
+     ],
+     "cited_post_tool": [
+      7
+     ],
+     "verdict": "correct",
+     "input_tokens": 50038,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0043",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 5,
+     "n_cards": 5,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 21745,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0046",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 7,
+     "cited": [
+      1,
+      5
+     ],
+     "cited_post_tool": [
+      5
+     ],
+     "verdict": "partial",
+     "input_tokens": 8609,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "multi-0001",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 4,
+     "n_cards": 4,
+     "cited": [
+      1,
+      3
+     ],
+     "cited_post_tool": [],
+     "verdict": "partial",
+     "input_tokens": 17383,
+     "source_hit_rank": 3
+    },
+    {
+     "qid": "multi-0004",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 5,
+     "n_cards": 10,
+     "cited": [
+      1,
+      2,
+      3
+     ],
+     "cited_post_tool": [],
+     "verdict": "unjudged",
+     "input_tokens": 47005,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "multi-0009",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 5,
+     "n_cards": 5,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "unjudged",
+     "input_tokens": 28807,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "multi-0010",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 5,
+     "n_cards": 5,
+     "cited": [
+      1,
+      3
+     ],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 33208,
+     "source_hit_rank": null
+    },
+    {
+     "qid": "multi-0013",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 4,
+     "n_cards": 13,
+     "cited": [
+      2,
+      5
+     ],
+     "cited_post_tool": [
+      5
+     ],
+     "verdict": "unjudged",
+     "input_tokens": 84481,
+     "source_hit_rank": 2
+    },
+    {
+     "qid": "wiki-0001",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "search",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 24,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 64251,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0002",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 11,
+     "cited": [
+      9
+     ],
+     "cited_post_tool": [
+      9
+     ],
+     "verdict": "correct",
+     "input_tokens": 15052,
+     "source_hit_rank": 9
+    },
+    {
+     "qid": "wiki-0006",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 12,
+     "cited": [
+      9
+     ],
+     "cited_post_tool": [
+      9
+     ],
+     "verdict": "correct",
+     "input_tokens": 60363,
+     "source_hit_rank": 9
+    },
+    {
+     "qid": "wiki-0010",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 9,
+     "cited": [
+      5
+     ],
+     "cited_post_tool": [
+      5
+     ],
+     "verdict": "incorrect",
+     "input_tokens": 73532,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0012",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article",
+      "search",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 25,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 99275,
+     "source_hit_rank": 9
+    },
+    {
+     "qid": "wiki-0017",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 4,
+     "n_cards": 4,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 13804,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0018",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "search",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 21,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 95731,
+     "source_hit_rank": 6
+    },
+    {
+     "qid": "wiki-0020",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 5,
+     "n_cards": 5,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 11297,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0023",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 15,
+     "cited": [
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 41541,
+     "source_hit_rank": 2
+    },
+    {
+     "qid": "wiki-0027",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 7,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 15783,
+     "source_hit_rank": null
+    },
+    {
+     "qid": "wiki-0028",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 4,
+     "n_cards": 9,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 17602,
+     "source_hit_rank": 5
+    },
+    {
+     "qid": "wiki-0029",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 2,
+     "n_cards": 2,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 10648,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0030",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 7,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 14013,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0032",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 8,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 12796,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0033",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 6,
+     "n_cards": 6,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 7815,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0036",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 11,
+     "cited": [
+      9
+     ],
+     "cited_post_tool": [
+      9
+     ],
+     "verdict": "correct",
+     "input_tokens": 18338,
+     "source_hit_rank": 9
+    },
+    {
+     "qid": "wiki-0041",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 16,
+     "cited": [
+      10
+     ],
+     "cited_post_tool": [
+      10
+     ],
+     "verdict": "correct",
+     "input_tokens": 31550,
+     "source_hit_rank": 10
+    },
+    {
+     "qid": "wiki-0043",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 8,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 9111,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0046",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 22,
+     "cited": [
+      12
+     ],
+     "cited_post_tool": [
+      12
+     ],
+     "verdict": "correct",
+     "input_tokens": 46332,
+     "source_hit_rank": 12
+    },
+    {
+     "qid": "wiki-0050",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 16,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "unjudged",
+     "input_tokens": 75662,
+     "source_hit_rank": null
+    }
+   ]
+  },
+  {
+   "run_id": 48,
+   "label": "phase21-0-baseline",
+   "system": "agentic_pydantic",
+   "answer_model": "qwen3.5-4b@q4_k_s",
+   "judge_model": "google/gemma-4-12b-qat",
+   "subset_hash": "dbca4d6f0f11dd16",
+   "verdicts": {
+    "correct": 117,
+    "partial": 14,
+    "incorrect": 16,
+    "unjudged": 3
+   },
+   "judged_n": 147,
+   "total_questions": 150,
+   "tool_round_questions": 61,
+   "tool_round_with_search": 32,
+   "tool_round_read_only": 29,
+   "answers_with_no_citation": 14,
+   "cite_post_tool_questions": 10,
+   "cite_post_tool_pct_of_tool_round": 16.4,
+   "cite_post_tool_pct_of_search_round": 31.2,
+   "total_citations": 71,
+   "post_tool_citations": 10,
+   "post_tool_citation_share_pct": 14.1,
+   "correct_rate_by_group": {
+    "cites_post_tool": {
+     "judged_n": 10,
+     "correct_pct": 60.0
+    },
+    "pre_seed_only": {
+     "judged_n": 50,
+     "correct_pct": 64.0
+    }
+   },
+   "confound_conditioning": {
+    "<10k": {
+     "n": 91,
+     "gold_in_cards_pct": 97.8,
+     "mean_gold_rank": 1.1,
+     "correct_given_gold_pct": 89.9
+    },
+    ">=10k": {
+     "n": 56,
+     "gold_in_cards_pct": 91.1,
+     "mean_gold_rank": 2.3,
+     "correct_given_gold_pct": 66.7
+    }
+   },
+   "per_question": [
+    {
+     "qid": "mfs-0003",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 3,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 16893,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mfs-0009",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 3,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 13436,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mfs-0015",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 8,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 16456,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mfs-0019",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 3,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 15317,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mfs-0020",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 7,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 27788,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mfs-0025",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 1,
+     "n_cards": 1,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 15247,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mfs-0026",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 2,
+     "n_cards": 2,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 16381,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mfs-0027",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 4,
+     "n_cards": 6,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "partial",
+     "input_tokens": 21044,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mfs-0032",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 3,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 16812,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mfs-0036",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 6,
+     "n_cards": 6,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 15410,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0001",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 4,
+     "n_cards": 11,
+     "cited": [
+      5
+     ],
+     "cited_post_tool": [
+      5
+     ],
+     "verdict": "correct",
+     "input_tokens": 15710,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0002",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 3,
+     "cited": [
+      2,
+      3
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 23391,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0003",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 4,
+     "n_cards": 6,
+     "cited": [
+      2,
+      5
+     ],
+     "cited_post_tool": [
+      5
+     ],
+     "verdict": "correct",
+     "input_tokens": 50443,
+     "source_hit_rank": 2
+    },
+    {
+     "qid": "mhc-0009",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 11,
+     "cited": [
+      1,
+      4
+     ],
+     "cited_post_tool": [
+      4
+     ],
+     "verdict": "correct",
+     "input_tokens": 8396,
+     "source_hit_rank": 4
+    },
+    {
+     "qid": "mhc-0010",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 6,
+     "n_cards": 12,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 38206,
+     "source_hit_rank": 2
+    },
+    {
+     "qid": "mhc-0013",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "search"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 13,
+     "cited": [
+      1,
+      9
+     ],
+     "cited_post_tool": [
+      9
+     ],
+     "verdict": "incorrect",
+     "input_tokens": 16331,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0016",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 10,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "partial",
+     "input_tokens": 46534,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0017",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 6,
+     "n_cards": 10,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 42890,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0018",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 3,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "partial",
+     "input_tokens": 41105,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0020",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 5,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 20690,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0021",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 3,
+     "cited": [
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 22286,
+     "source_hit_rank": null
+    },
+    {
+     "qid": "mhc-0022",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article",
+      "search",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 21,
+     "cited": [
+      3,
+      18
+     ],
+     "cited_post_tool": [
+      18
+     ],
+     "verdict": "incorrect",
+     "input_tokens": 77566,
+     "source_hit_rank": 6
+    },
+    {
+     "qid": "mhc-0023",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 14,
+     "cited": [
+      2,
+      8
+     ],
+     "cited_post_tool": [
+      8
+     ],
+     "verdict": "partial",
+     "input_tokens": 33815,
+     "source_hit_rank": 2
+    },
+    {
+     "qid": "mhc-0024",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 7,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 24789,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0025",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 20,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 59034,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0026",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 4,
+     "n_cards": 13,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 86232,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0028",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 5,
+     "n_cards": 12,
+     "cited": [
+      1,
+      8
+     ],
+     "cited_post_tool": [
+      8
+     ],
+     "verdict": "correct",
+     "input_tokens": 33617,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0029",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "search",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 20,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 81864,
+     "source_hit_rank": null
+    },
+    {
+     "qid": "mhc-0031",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 6,
+     "n_cards": 8,
+     "cited": [
+      1,
+      2,
+      3
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 21975,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0037",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 2,
+     "n_cards": 2,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 21863,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0038",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 7,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 14319,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0039",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 2,
+     "n_cards": 2,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 21051,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0040",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 3,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 34241,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0042",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 6,
+     "n_cards": 11,
+     "cited": [
+      1,
+      7
+     ],
+     "cited_post_tool": [
+      7
+     ],
+     "verdict": "correct",
+     "input_tokens": 50038,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0043",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 5,
+     "n_cards": 5,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 21745,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "mhc-0046",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 7,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "partial",
+     "input_tokens": 8609,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "multi-0001",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 4,
+     "n_cards": 4,
+     "cited": [
+      1,
+      3
+     ],
+     "cited_post_tool": [],
+     "verdict": "partial",
+     "input_tokens": 24073,
+     "source_hit_rank": 3
+    },
+    {
+     "qid": "multi-0004",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 5,
+     "n_cards": 9,
+     "cited": [
+      1,
+      2,
+      3
+     ],
+     "cited_post_tool": [],
+     "verdict": "partial",
+     "input_tokens": 46977,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "multi-0009",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 5,
+     "n_cards": 5,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "partial",
+     "input_tokens": 28807,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "multi-0010",
+     "capability": "multi_fact_same_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 5,
+     "n_cards": 5,
+     "cited": [
+      1,
+      3
+     ],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 33208,
+     "source_hit_rank": null
+    },
+    {
+     "qid": "multi-0013",
+     "capability": "multi_hop_cross_article",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 4,
+     "n_cards": 4,
+     "cited": [
+      1,
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "partial",
+     "input_tokens": 21232,
+     "source_hit_rank": 2
+    },
+    {
+     "qid": "wiki-0001",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "search",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 24,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 64255,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0002",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 11,
+     "cited": [
+      9
+     ],
+     "cited_post_tool": [
+      9
+     ],
+     "verdict": "correct",
+     "input_tokens": 15052,
+     "source_hit_rank": 9
+    },
+    {
+     "qid": "wiki-0006",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 7,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "unjudged",
+     "input_tokens": 20361,
+     "source_hit_rank": null
+    },
+    {
+     "qid": "wiki-0010",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 9,
+     "cited": [
+      5
+     ],
+     "cited_post_tool": [
+      5
+     ],
+     "verdict": "incorrect",
+     "input_tokens": 73540,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0012",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article",
+      "search",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 25,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 99275,
+     "source_hit_rank": 9
+    },
+    {
+     "qid": "wiki-0018",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 20,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 93384,
+     "source_hit_rank": 6
+    },
+    {
+     "qid": "wiki-0020",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 5,
+     "n_cards": 5,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 11297,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0023",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 15,
+     "cited": [
+      2
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 45770,
+     "source_hit_rank": 2
+    },
+    {
+     "qid": "wiki-0025",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 3,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 12798,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0027",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 7,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 15783,
+     "source_hit_rank": null
+    },
+    {
+     "qid": "wiki-0028",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 4,
+     "n_cards": 9,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 17602,
+     "source_hit_rank": 5
+    },
+    {
+     "qid": "wiki-0029",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 2,
+     "n_cards": 2,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 10648,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0030",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 7,
+     "n_cards": 11,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 15600,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0032",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 8,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 12796,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0033",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 6,
+     "n_cards": 6,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 7815,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0036",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article",
+      "search"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 17,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 28315,
+     "source_hit_rank": 9
+    },
+    {
+     "qid": "wiki-0041",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article",
+      "search",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 16,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 31550,
+     "source_hit_rank": 10
+    },
+    {
+     "qid": "wiki-0043",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "read_article"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 8,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "correct",
+     "input_tokens": 9111,
+     "source_hit_rank": 1
+    },
+    {
+     "qid": "wiki-0046",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "search",
+      "search",
+      "read_article",
+      "read_article"
+     ],
+     "preseed_cards": 3,
+     "n_cards": 22,
+     "cited": [],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 66215,
+     "source_hit_rank": 12
+    },
+    {
+     "qid": "wiki-0050",
+     "capability": "buried_fact",
+     "stages": [
+      "pre_seed",
+      "search",
+      "read_article",
+      "search",
+      "read_article",
+      "search"
+     ],
+     "preseed_cards": 8,
+     "n_cards": 20,
+     "cited": [
+      1
+     ],
+     "cited_post_tool": [],
+     "verdict": "incorrect",
+     "input_tokens": 109475,
+     "source_hit_rank": null
+    }
+   ]
+  }
+ ]
+}

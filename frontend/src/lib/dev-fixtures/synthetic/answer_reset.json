@@ -1,0 +1,52 @@
+{
+  "description": "SYNTHETIC stream. Exercises the 2026-08-02 answer_reset amendment (weak-support escalation): a first draft streams, is judged weakly supported, and answer_reset fires before a full regenerate. A client that ignores answer_reset concatenates both drafts.",
+  "query": "What triggered the 2027 currency reform?",
+  "events": [
+    {
+      "event": "sources",
+      "data": {
+        "cards": [
+          {
+            "zim_id": 1,
+            "path": "Currency_reform",
+            "title": "Currency reform",
+            "snippet": "A currency reform is a very general term...",
+            "breadcrumb": "Currency reform",
+            "score": 0.34,
+            "source": "xapian_fts"
+          }
+        ],
+        "merge": false
+      }
+    },
+    {"event": "status", "data": {"phase": "reading", "detail": "1 sources"}},
+    {"event": "status", "data": {"phase": "generating", "detail": "streaming answer"}},
+    {"event": "token", "data": {"text": "It is not entirely clear, but currency reforms are "}},
+    {"event": "token", "data": {"text": "generally triggered by hyperinflation [1]."}},
+    {"event": "answer_reset", "data": {"reason": "weak_support"}},
+    {"event": "status", "data": {"phase": "generating", "detail": "streaming recovered answer"}},
+    {"event": "token", "data": {"text": "Nothing in your library specifically covers a 2027 "}},
+    {"event": "token", "data": {"text": "currency reform [1]."}},
+    {
+      "event": "citations",
+      "data": {
+        "spans": [
+          {"answer_span": [0, 60], "card_id": 0, "passage_span": [0, 50], "score": 0.4}
+        ]
+      }
+    },
+    {
+      "event": "trace",
+      "data": {
+        "version": 1,
+        "stages": [
+          {"name": "answer", "component": "single_shot", "params": {}, "inputs": {}, "outputs": {"finish": "stop"}, "duration_ms": 5000.0},
+          {"name": "answer", "component": "weak_support_regenerate", "params": {"reason": "weak_support"}, "inputs": {}, "outputs": {"finish": "stop"}, "duration_ms": 4800.0}
+        ],
+        "degradations": [],
+        "profile": "hybrid"
+      }
+    },
+    {"event": "done", "data": {}}
+  ]
+}

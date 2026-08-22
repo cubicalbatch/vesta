@@ -1,0 +1,45 @@
+name: keyword
+provenance: hand-written
+entries:
+  - id: k01
+    query: Albert Einstein
+    expected_paths: [Albert_Einstein]
+    expected_fact: Albert Einstein
+    notes: Bare-term keyword queries — what a keyword query wants is the article
+      about that thing. Title-first boost should dominate here.
+  - id: k02
+    query: Mount Everest
+    expected_paths: [Mount_Everest]
+    expected_fact: Mount Everest
+  - id: k03
+    query: Cleopatra
+    expected_paths: [Cleopatra]
+    expected_fact: Cleopatra
+  - id: k04
+    query: Eiffel Tower
+    expected_paths: [Eiffel_Tower]
+    expected_fact: Eiffel Tower
+  - id: k05
+    query: Photosynthesis
+    expected_paths: [Photosynthesis]
+    expected_fact: Photosynthesis
+  - id: k06
+    query: Black hole
+    expected_paths: [Black_hole]
+    expected_fact: black hole
+  - id: k07
+    query: William Shakespeare
+    expected_paths: [William_Shakespeare]
+    expected_fact: Shakespeare
+  - id: k08
+    query: Great Wall of China
+    expected_paths: [Great_Wall_of_China]
+    expected_fact: Great Wall of China
+  - id: k09
+    query: Vitamin C
+    expected_paths: [Vitamin_C]
+    expected_fact: Vitamin C
+  - id: k10
+    query: Pangaea
+    expected_paths: [Pangaea]
+    expected_fact: Pangaea

@@ -1,0 +1,182 @@
+{
+  "name": "vesta_calibration",
+  "description": "Hand-scored judge calibration subset for the unified benchmark. The judge's verdict on these fixed (question, model_answer) pairs is compared to the hand verdict via Pearson correlation; a correlation < bench.calibration_min_correlation (0.7) marks the run untrusted. Expanded from 10 to 25 items spanning all three verdicts (correct/partial/incorrect) AND both abstention directions: correct abstentions on out-of-corpus questions (model rightly declines) and over-refusals on answerable questions (model wrongly abstains).",
+  "count": 25,
+  "items": [
+    {
+      "question": "In lampreys and teleost fishes, olfactory mitral cell axons project exclusively to which hemisphere of the habenula?",
+      "known_answer": "They project exclusively to the right hemisphere of the habenula.",
+      "known_detail": "In lampreys and teleost fishes, mitral cell axons project exclusively to the right hemisphere of the habenula.",
+      "model_answer": "The olfactory mitral cell axons project exclusively to the right hemisphere of the habenula.",
+      "hand_verdict": "correct"
+    },
+    {
+      "question": "At approximately what value of the Bond number does confined boiling become a dominant regime?",
+      "known_answer": "Confined boiling regimes begin to play a major role when the Bond number is less than 0.5 (Bo < 0.5).",
+      "known_detail": "Confined boiling is characterized by a Bond number comparing gap spacing to capillary length.",
+      "model_answer": "Based on the article, confined boiling becomes dominant when the Bond number is less than approximately 1.",
+      "hand_verdict": "incorrect"
+    },
+    {
+      "question": "After Richard Harris died, his family reportedly wanted which veteran actor to be cast as the new Dumbledore in the Harry Potter films?",
+      "known_answer": "Harris's family reportedly wanted Peter O'Toole to be cast, but Michael Gambon was ultimately chosen.",
+      "known_detail": "Harris' family reportedly wanted Peter O'Toole to be cast, but Michael Gambon was ultimately chosen.",
+      "model_answer": "Harris's family wanted Peter O'Toole for the role, though Michael Gambon was chosen instead.",
+      "hand_verdict": "correct"
+    },
+    {
+      "question": "At what approximate speed does a crack propagate along the tail of a Prince Rupert's drop before it bifurcates?",
+      "known_answer": "The crack reaches a critical velocity of about 1,450-1,900 metres per second before it bifurcates.",
+      "known_detail": "A single crack bifurcates after reaching a critical velocity of 1,450-1,900 m/s.",
+      "model_answer": "The crack propagates at approximately 1,500 metres per second before bifurcating.",
+      "hand_verdict": "correct"
+    },
+    {
+      "question": "What role did John Densmore portray in his 1992 guest appearance on Beverly Hills, 90210?",
+      "known_answer": "He played Ben, Dylan's sponsor, in Series 2, Episode 23.",
+      "known_detail": "In 1992, Densmore appeared in Beverly Hills 90210 in Series 2, Episode 23, playing Ben, Dylan's sponsor.",
+      "model_answer": "He played a character named Ben who was Dylan's sponsor.",
+      "hand_verdict": "partial"
+    },
+    {
+      "question": "How many Swarovski crystals were used in the stage curtain designed by Derek McLane for the 2018 Academy Awards ceremony?",
+      "known_answer": "Approximately 45 million Swarovski crystals were used.",
+      "known_detail": "Derek McLane designed a stage which featured a curtain made of forty-five million Swarovski crystals.",
+      "model_answer": "I could not find this in your offline archives.",
+      "hand_verdict": "incorrect"
+    },
+    {
+      "question": "How many pálinka distilleries were operating in Hungary in the year 1970?",
+      "known_answer": "There were 1,070 pálinka distilleries operating in Hungary in 1970.",
+      "known_detail": "There were 260 distilleries in 1920, growing to 1,070 in 1970 before falling to 815 in 1982.",
+      "model_answer": "There were approximately 1,070 pálinka distilleries operating in Hungary in 1970.",
+      "hand_verdict": "correct"
+    },
+    {
+      "question": "What term did philosopher Daniel Dennett use for properties that have no existence at all until they are attributed by an observer?",
+      "known_answer": "Dennett called them \"suspect properties\".",
+      "known_detail": "Dennett distinguished between 'lovely properties' and 'suspect properties', which have no existence at all until attributed by an observer.",
+      "model_answer": "Dennett called these 'intentional states' or properties derived from the intentional stance.",
+      "hand_verdict": "incorrect"
+    },
+    {
+      "question": "Archaeological sites in which country have yielded evidence of guava cultivation as early as 2500 BC?",
+      "known_answer": "Peru.",
+      "known_detail": "Archaeological sites in Peru yielded evidence of guava cultivation dating back to around 2500 BC.",
+      "model_answer": "Based on the article, archaeological sites in Peru have yielded evidence of guava cultivation dating back to around 2500 BC.",
+      "hand_verdict": "correct"
+    },
+    {
+      "question": "In May 2020, ESPN ranked Danny Drinkwater's transfer to Chelsea as the second-worst transfer in Premier League history. Which transfer was ranked ahead of it as the worst?",
+      "known_answer": "Ali Dia's move to Southampton was ranked as the worst.",
+      "known_detail": "ESPN named Drinkwater's move to Chelsea as the second-worst transfer, behind only Ali Dia's move to Southampton.",
+      "model_answer": "Ali Dia's transfer to Southampton was ranked as the worst Premier League transfer, ahead of Drinkwater's Chelsea move.",
+      "hand_verdict": "correct"
+    },
+    {
+      "question": "At New York's American Museum of Natural History, what does the note attached to a display specimen read?",
+      "known_answer": "The note reads \"deposited by Theodore Roosevelt.\"",
+      "known_detail": "A specimen at the museum bears a note reading \"deposited by Theodore Roosevelt.\"",
+      "model_answer": "The note says \"deposited by Theodore Roosevelt.\"",
+      "hand_verdict": "correct"
+    },
+    {
+      "question": "Who designed the World Trefoil emblem that was adopted at the WAGGGS World Conference in 1930?",
+      "known_answer": "Miss Kari Aas designed the World Trefoil emblem, adopted at the World Conference in 1930.",
+      "known_detail": "The World Trefoil emblem was designed by Kari Aas and adopted at the 1930 World Conference.",
+      "model_answer": "The World Trefoil emblem was designed by Kari Aas and adopted in 1930.",
+      "hand_verdict": "correct"
+    },
+    {
+      "question": "Who fabricated the false rumor that a student named Martin Šmíd was killed by police during the 1989 Velvet Revolution?",
+      "known_answer": "The hoax was made up by Drahomíra Dražská, a college employee.",
+      "known_detail": "Drahomíra Dražská, a college employee awaiting treatment, fabricated the rumor.",
+      "model_answer": "The rumor was fabricated by Drahomíra Dražská, a college employee.",
+      "hand_verdict": "correct"
+    },
+    {
+      "question": "What does the note attached to a deposited specimen display at the American Museum of Natural History read?",
+      "known_answer": "The note reads \"deposited by Theodore Roosevelt.\"",
+      "known_detail": "The specimen note reads \"deposited by Theodore Roosevelt.\"",
+      "model_answer": "Based on the article, the attached note reads \"deposited by Theodore Roosevelt.\"",
+      "hand_verdict": "correct"
+    },
+    {
+      "question": "Who performed the first recorded successful appendectomy, who was the patient, and in what year?",
+      "known_answer": "English surgeon William Cookesley performed the first recorded successful appendectomy in 1731.",
+      "known_detail": "Cookesley performed the first recorded successful appendectomy in 1731.",
+      "model_answer": "William Cookesley performed the first recorded appendectomy, though I am not certain of the patient or the year.",
+      "hand_verdict": "partial"
+    },
+    {
+      "question": "In a Premier League match, which of Robert Green's QPR teammates helped him save a penalty from Alexis Sanchez, and how?",
+      "known_answer": "Eduardo Vargas, Green's QPR teammate, pointed out which way fellow Chilean Alexis Sanchez would shoot.",
+      "known_detail": "Eduardo Vargas pointed out which way Sanchez, his Chilean teammate, would shoot.",
+      "model_answer": "Eduardo Vargas helped Robert Green by indicating the direction of the shot.",
+      "hand_verdict": "partial"
+    },
+    {
+      "question": "What inspired the green Y-shaped band in the South African national flag, according to its designer?",
+      "known_answer": "The green Y-shaped band was influenced by the chasubles (vestment robes) worn by Anglican priests.",
+      "known_detail": "The designer cited the chasubles (vestment robes) of Anglican priests as the inspiration.",
+      "model_answer": "The green Y-shaped band represents the convergence and union of the country's peoples.",
+      "hand_verdict": "incorrect"
+    },
+    {
+      "question": "The Mertens conjecture is known to be false, but no explicit counterexample is known. What is the bound on the smallest counterexample?",
+      "known_answer": "The smallest counterexample is only known to be less than the exponential of 1.59 × 10^40.",
+      "known_detail": "The smallest counterexample is bounded by exp(1.59 × 10^40).",
+      "model_answer": "The smallest counterexample is known to be less than 10^40.",
+      "hand_verdict": "incorrect"
+    },
+    {
+      "question": "What was the original purpose of the religious association created in 1917 that later managed pious foundations in a North African city?",
+      "known_answer": "The association was the Société des Habous, created in 1917 to organize and manage Muslim pious foundations.",
+      "known_detail": "The Société des Habous was created in 1917 to manage Muslim pious foundations (habous).",
+      "model_answer": "The association was created to promote Christian missionary work among the local population.",
+      "hand_verdict": "incorrect"
+    },
+    {
+      "question": "What is the exact number of grains of sand on Copacabana beach as recorded on July 4, 2026?",
+      "known_answer": "The correct behavior is to abstain — no such count exists in any mounted archive.",
+      "known_detail": "Out of corpus: a precise grain count is not recorded anywhere; abstention is correct.",
+      "model_answer": "I couldn't find a reliable figure for that in the available archives.",
+      "hand_verdict": "correct"
+    },
+    {
+      "question": "What did the original author of this article eat for breakfast on the day they first drafted it?",
+      "known_answer": "The correct behavior is to abstain — that personal detail is not present in any archive.",
+      "known_detail": "Out of corpus: personal, unwritten information absent from every mounted archive.",
+      "model_answer": "The archives do not contain that information.",
+      "hand_verdict": "correct"
+    },
+    {
+      "question": "What will be the closing price of Apple Inc. stock on December 31, 2027?",
+      "known_answer": "The correct behavior is to abstain — this is a future event not present in any archive.",
+      "known_detail": "Out of corpus: a future market price cannot be present in the static mounted archives.",
+      "model_answer": "I don't have any information about future stock prices in the archives.",
+      "hand_verdict": "correct"
+    },
+    {
+      "question": "In a Premier League match, which of Robert Green's QPR teammates helped him save a penalty from Alexis Sanchez?",
+      "known_answer": "Eduardo Vargas, Green's QPR teammate, pointed out which way fellow Chilean Alexis Sanchez would shoot.",
+      "known_detail": "Eduardo Vargas signaled the direction Sanchez would shoot.",
+      "model_answer": "I'm sorry, I don't have any information about that match in the archives.",
+      "hand_verdict": "incorrect"
+    },
+    {
+      "question": "At New York's American Museum of Natural History, what does the note attached to a display specimen read?",
+      "known_answer": "The note reads \"deposited by Theodore Roosevelt.\"",
+      "known_detail": "The specimen note reads \"deposited by Theodore Roosevelt.\"",
+      "model_answer": "I could not find any details about that in your offline archives.",
+      "hand_verdict": "incorrect"
+    },
+    {
+      "question": "Who designed the World Trefoil emblem adopted at the 1930 WAGGGS World Conference?",
+      "known_answer": "Miss Kari Aas designed the World Trefoil emblem, adopted at the World Conference in 1930.",
+      "known_detail": "Kari Aas designed the emblem, adopted in 1930.",
+      "model_answer": "I don't know the answer to that question based on the available sources.",
+      "hand_verdict": "incorrect"
+    }
+  ]
+}
