@@ -45,6 +45,9 @@ _INITIAL_BACKOFF_S = 1.0
 _MAX_BACKOFF_S = 30.0
 #: Max restart attempts before giving up (degrades to no-LLM).
 _MAX_RESTARTS = 5
+#: Grace window between SIGTERM and SIGKILL when tearing down a child (shared
+#: by ``stop()`` and the failed-health-wait cleanup so both behave identically).
+_TERMINATE_GRACE_S = 10.0
 #: Timeout for the ``--list-devices`` hardware probe (a hung binary must not
 #: wedge a chat turn — kill and assume CPU).
 _LIST_DEVICES_TIMEOUT_S = 10.0
@@ -244,8 +247,32 @@ class LlamaServerSupervisor:
         proc = self._proc
         assert proc is not None
         self._drain_task = asyncio.create_task(self._drain_output(proc), name="llama-server-drain")
-        self._watcher_task = asyncio.create_task(self._watch(), name="llama-server-watcher")
-        await self._wait_for_health(proc)
+        self._watcher_task = asyncio.create_task(self._watch(proc), name="llama-server-watcher")
+        try:
+            await self._wait_for_health(proc)
+        except Exception:
+            await self._abort_start(proc)
+            raise
+
+    async def _abort_start(self, proc: asyncio.subprocess.Process) -> None:
+        """Clean up a start attempt whose health-wait failed, then let it raise.
+
+        A child that spawns but never answers ``/health`` would otherwise be
+        orphaned still holding the port — every later spawn dies on bind and
+        each retry feeds another zombie. Order matters: this attempt's watcher
+        is cancelled *before* the SIGTERM so it cannot observe the teardown
+        exit and schedule a restart; the slot is cleared only if nothing
+        replaced the attempted child (a concurrent :meth:`stop` owns the
+        outcome then).
+        """
+        tasks = [t for t in (self._watcher_task, self._drain_task) if t is not None]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await _terminate_and_reap(proc)
+        if self._proc is proc:
+            self._proc = None
+        _log.warning("llama_server.start_aborted", extra={"port": self._port})
 
     def _write_models_ini(self) -> None:
         """Write the router-mode ``models.ini`` into the config dir.
@@ -332,16 +359,35 @@ class LlamaServerSupervisor:
             await asyncio.sleep(_HEALTH_POLL_S)
         raise LlamaServerError(f"llama-server did not become healthy within {_HEALTH_TIMEOUT_S}s")
 
-    async def _watch(self) -> None:
-        """Watch for unexpected exit; trigger restart with backoff."""
-        assert self._proc is not None
-        await self._proc.wait()
-        if self._crashed:
+    async def _watch(self, proc: asyncio.subprocess.Process) -> None:
+        """Watch for unexpected exit; trigger restart with backoff.
+
+        Generation-safe: the proc is captured once at task creation (passed
+        in, not re-read from ``self._proc``), and after the exit-wait does
+        nothing unless that proc is still the supervisor's current one — a
+        newer generation (or ``stop()``) owns the outcome otherwise, and
+        reporting here would misattribute the return code and stack a second
+        restart loop beside a live one.
+        """
+        await proc.wait()
+        if self._crashed or self._proc is not proc:
             return
-        rc = self._proc.returncode
+        rc = proc.returncode
         _log.warning("llama_server.crashed", extra={"returncode": rc})
         self._crashed = True
         self._proc = None
+        self._schedule_restart()
+
+    def _schedule_restart(self) -> None:
+        """Create the restart-with-backoff task unless one is still live.
+
+        Single-owner rule: two concurrent backoff loops double-spawn children
+        and clobber each other's bookkeeping, so creation is refused while a
+        prior loop lives (``stop()`` cancels its task first, freeing creation).
+        """
+        prior = self._restart_task
+        if prior is not None and not prior.done():
+            return
         self._restart_task = asyncio.create_task(
             self._restart_with_backoff(), name="llama-server-restart"
         )
@@ -401,15 +447,31 @@ class LlamaServerSupervisor:
             self._watcher_task.cancel()
         if self._drain_task is not None and not self._drain_task.done():
             self._drain_task.cancel()
-        if self._proc is not None and self._proc.returncode is None:
-            try:
-                self._proc.send_signal(signal.SIGTERM)
-                await asyncio.wait_for(self._proc.wait(), timeout=10.0)
-            except Exception:
-                with contextlib.suppress(Exception):
-                    self._proc.kill()
+        if self._proc is not None:
+            await _terminate_and_reap(self._proc)
         self._proc = None
         _log.info("llama_server.stopped")
+
+
+async def _terminate_and_reap(proc: asyncio.subprocess.Process) -> None:
+    """Tear down one child: SIGTERM, grace window, SIGKILL fallback, reap.
+
+    Shared by :meth:`LlamaServerSupervisor.stop` and the failed-health-wait
+    cleanup so every teardown path behaves identically. An already-exited
+    child is merely reaped; a killed one is always awaited, never left as an
+    unreaped zombie.
+    """
+    if proc.returncode is None:
+        try:
+            proc.send_signal(signal.SIGTERM)
+            await asyncio.wait_for(proc.wait(), timeout=_TERMINATE_GRACE_S)
+        except Exception:
+            with contextlib.suppress(Exception):
+                proc.kill()
+    # Always reap: without the await, returncode stays unset (None) even after
+    # death, and the child lingers until GC gets around to it.
+    with contextlib.suppress(Exception):
+        await proc.wait()
 
 
 def _check_health(url: str) -> int:

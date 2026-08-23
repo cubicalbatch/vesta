@@ -7,7 +7,12 @@ require a real ``llama-server`` binary. Tests mock both.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import logging
+import socket
+import time
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,6 +25,7 @@ from vesta.inference.gateway import (
 )
 from vesta.inference.local import (
     BinaryMissing,
+    LlamaServerError,
     LlamaServerSupervisor,
 )
 
@@ -371,6 +377,30 @@ class TestUsageRecorder:
         assert rec.input_tokens == 0
 
 
+class FakeChildProc:
+    """The surface ``_watch`` consumes from a spawned process."""
+
+    def __init__(self) -> None:
+        self.returncode: int | None = None
+        self._exited = asyncio.Event()
+
+    async def wait(self) -> int:
+        await self._exited.wait()
+        assert self.returncode is not None
+        return self.returncode
+
+    def exit(self, rc: int) -> None:
+        self.returncode = rc
+        self._exited.set()
+
+
+def _free_port() -> int:
+    """A currently-free localhost port so tests never touch :8081."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
 class TestLlamaServerSupervisor:
     def test_binary_available_false_for_nonexistent(self, tmp_path: Path) -> None:
         sup = LlamaServerSupervisor(
@@ -577,6 +607,231 @@ class TestLlamaServerSupervisor:
         # and _start_and_wait was called.
         assert restart_done.is_set()
         assert started
+
+    # ── M3: failed-start cleanup + generation-safe watcher ──────────────────
+
+    @pytest.mark.asyncio
+    async def test_failed_health_wait_reaps_child_and_allows_retry(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """M3 regression: a child that starts but never serves ``/health``
+        within the health timeout used to be orphaned still holding the port —
+        every later spawn died on bind. It must be terminated and reaped inside
+        the failed start, leaving no zombie and a supervisor that can
+        immediately attempt again."""
+        import vesta.inference.local as inference_local
+
+        binary = tmp_path / "never-healthy-llama-server"
+        binary.write_text("#!/bin/sh\nexec sleep 30\n")
+        binary.chmod(0o755)
+
+        sup = LlamaServerSupervisor(
+            binary_path=str(binary),
+            models_dir=tmp_path / "models",
+            config_dir=tmp_path / "config",
+            port=_free_port(),
+        )
+        sup._hw_banner = "cpu"  # pre-seed: skips the --list-devices probe spawn
+        monkeypatch.setattr(inference_local, "_HEALTH_TIMEOUT_S", 0.15)
+        monkeypatch.setattr(inference_local, "_HEALTH_POLL_S", 0.02)
+
+        real_exec = asyncio.create_subprocess_exec
+        spawned: list[asyncio.subprocess.Process] = []
+
+        async def recording_exec(*argv: str, **kwargs: Any) -> asyncio.subprocess.Process:
+            proc = await real_exec(*argv, **kwargs)
+            spawned.append(proc)
+            return proc
+
+        monkeypatch.setattr(inference_local.asyncio, "create_subprocess_exec", recording_exec)
+
+        with pytest.raises(LlamaServerError, match="did not become healthy"):
+            await sup.ensure_running()
+
+        assert len(spawned) == 1
+        assert spawned[0].returncode is not None  # terminated AND reaped — no zombie
+        assert sup._proc is None
+        assert sup._watcher_task is not None and sup._watcher_task.done()
+        assert sup._drain_task is not None and sup._drain_task.done()
+
+        # Immediately reusable: a fresh attempt spawns a new child (whose
+        # failed start cleans up after itself the same way).
+        with pytest.raises(LlamaServerError):
+            await sup.ensure_running()
+        assert len(spawned) == 2
+        assert spawned[1].returncode is not None
+
+    @pytest.mark.asyncio
+    async def test_watch_stays_silent_when_generation_superseded(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A watcher whose generation was replaced must neither clear the new
+        child's slot nor schedule a restart with a misattributed exit code."""
+        sup = LlamaServerSupervisor(
+            binary_path="llama-server",
+            models_dir=tmp_path / "models",
+            config_dir=tmp_path / "config",
+        )
+        old = FakeChildProc()
+        sup._proc = old  # type: ignore[assignment]
+        with caplog.at_level(logging.WARNING, logger="vesta.inference.local"):
+            watcher = asyncio.create_task(sup._watch(old))  # type: ignore[arg-type]
+            await asyncio.sleep(0)  # let the watcher register on the old proc
+            newer = FakeChildProc()
+            # a newer generation takes over…
+            sup._proc = newer  # type: ignore[assignment]
+            old.exit(9)  # …then the watched one dies
+            await asyncio.wait_for(watcher, timeout=2.0)
+
+        assert sup._proc is newer  # slot untouched by the stale watcher
+        assert sup._crashed is False
+        assert sup._restart_task is None  # no spurious restart scheduled
+        crashed = [r for r in caplog.records if r.getMessage() == "llama_server.crashed"]
+        assert crashed == []
+
+    @pytest.mark.asyncio
+    async def test_watch_reports_crash_of_current_generation(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Control for the supersede test: when the watched proc IS current,
+        the crash is logged with the captured return code and exactly one
+        restart loop is scheduled."""
+        import vesta.inference.local as inference_local
+
+        monkeypatch.setattr(inference_local, "_INITIAL_BACKOFF_S", 5.0)  # loop stays asleep
+        sup = LlamaServerSupervisor(
+            binary_path="llama-server",
+            models_dir=tmp_path / "models",
+            config_dir=tmp_path / "config",
+        )
+        proc = FakeChildProc()
+        sup._proc = proc  # type: ignore[assignment]
+        with caplog.at_level(logging.WARNING, logger="vesta.inference.local"):
+            watcher = asyncio.create_task(sup._watch(proc))  # type: ignore[arg-type]
+            proc.exit(7)
+            await asyncio.wait_for(watcher, timeout=2.0)
+
+        assert sup._proc is None
+        assert sup._crashed is True
+        assert sup._restart_task is not None and not sup._restart_task.done()
+        crashed = [r for r in caplog.records if r.getMessage() == "llama_server.crashed"]
+        assert len(crashed) == 1
+        assert getattr(crashed[0], "returncode", None) == 7
+
+        # Teardown: the loop only sleeps in backoff — don't leave it pending.
+        assert sup._restart_task is not None
+        sup._restart_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sup._restart_task
+
+    @pytest.mark.asyncio
+    async def test_rapid_failures_keep_single_restart_owner(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Two crash notifications in quick succession must never stack two
+        concurrent backoff loops — creation is refused while one lives."""
+        import vesta.inference.local as inference_local
+
+        monkeypatch.setattr(inference_local, "_INITIAL_BACKOFF_S", 5.0)
+        sup = LlamaServerSupervisor(
+            binary_path="llama-server",
+            models_dir=tmp_path / "models",
+            config_dir=tmp_path / "config",
+        )
+
+        first = FakeChildProc()
+        sup._proc = first  # type: ignore[assignment]
+        w1 = asyncio.create_task(sup._watch(first))  # type: ignore[arg-type]
+        first.exit(1)
+        await asyncio.wait_for(w1, timeout=2.0)
+        first_loop = sup._restart_task
+        assert first_loop is not None and not first_loop.done()
+
+        # A new generation appears (a fresh spawn resets _crashed), then also
+        # crashes while the first loop is still alive.
+        sup._crashed = False
+        second = FakeChildProc()
+        sup._proc = second  # type: ignore[assignment]
+        w2 = asyncio.create_task(sup._watch(second))  # type: ignore[arg-type]
+        second.exit(2)
+        await asyncio.wait_for(w2, timeout=2.0)
+
+        assert sup._restart_task is first_loop  # refused: still exactly one owner
+
+        first_loop.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await first_loop
+
+    @pytest.mark.asyncio
+    async def test_crash_storm_runs_exactly_one_restart_loop(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """End-to-end against real children that die mid-startup: exactly ONE
+        backoff loop with at most ``_MAX_RESTARTS`` attempts, and every spawned
+        child reaped. The old watcher stacked a second loop per generation —
+        doubling spawns and clobbering bookkeeping. The blocked health check
+        parks each poll in a thread so every crash-watcher completes first,
+        making the storm deterministic without timing races."""
+        import vesta.inference.local as inference_local
+
+        binary = tmp_path / "dies-mid-startup-llama-server"
+        binary.write_text("#!/bin/sh\nsleep 0.4\nexit 3\n")
+        binary.chmod(0o755)
+
+        sup = LlamaServerSupervisor(
+            binary_path=str(binary),
+            models_dir=tmp_path / "models",
+            config_dir=tmp_path / "config",
+            port=_free_port(),
+        )
+        sup._hw_banner = "cpu"  # skip the probe spawn
+        monkeypatch.setattr(inference_local, "_MAX_RESTARTS", 2)
+        monkeypatch.setattr(inference_local, "_INITIAL_BACKOFF_S", 0.02)
+        monkeypatch.setattr(inference_local, "_MAX_BACKOFF_S", 0.04)
+        monkeypatch.setattr(inference_local, "_HEALTH_POLL_S", 0.02)
+
+        def slow_health(url: str) -> int:
+            time.sleep(0.25)  # health polling loses every race vs crash detection
+            return 0
+
+        monkeypatch.setattr(inference_local, "_check_health", slow_health)
+
+        real_exec = asyncio.create_subprocess_exec
+        spawned: list[asyncio.subprocess.Process] = []
+
+        async def recording_exec(*argv: str, **kwargs: Any) -> asyncio.subprocess.Process:
+            proc = await real_exec(*argv, **kwargs)
+            spawned.append(proc)
+            return proc
+
+        monkeypatch.setattr(inference_local.asyncio, "create_subprocess_exec", recording_exec)
+
+        with caplog.at_level(logging.INFO, logger="vesta.inference.local"):
+            with pytest.raises(LlamaServerError):
+                await sup.ensure_running()
+            deadline = asyncio.get_event_loop().time() + 10.0
+            while sup._restart_task is None or not sup._restart_task.done():
+                assert asyncio.get_event_loop().time() < deadline, "restart loop never finished"
+                await asyncio.sleep(0.01)
+
+        msgs = [r.getMessage() for r in caplog.records]
+        assert msgs.count("llama_server.restarting") == 2  # one loop x _MAX_RESTARTS
+        assert msgs.count("llama_server.restart_gave_up") == 1
+        assert spawned
+        assert all(p.returncode is not None for p in spawned)  # nothing left unreaped
+        assert sup._proc is None
 
 
 class TestInferenceCapabilityProbe:
