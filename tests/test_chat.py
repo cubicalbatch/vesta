@@ -149,6 +149,64 @@ class TestSqliteConversationStore:
         assert [m.content for m in messages] == ["first", "second", "third"]
 
     @pytest.mark.asyncio
+    async def test_list_messages_past_limit_keeps_newest_not_oldest(self, db: Database) -> None:
+        """AUDIT_0822 C3: ``ORDER BY id ASC LIMIT ?`` pins the OLDEST window once
+        a conversation outgrows ``limit`` — recent turns silently vanished from
+        the detail view. DESC + Python-reverse keeps the newest while still
+        returning them oldest-first."""
+        store = SqliteConversationStore(db)
+        cid = await store.create_conversation("t")
+        for i in range(5):
+            await store.append_message(cid, "user", f"msg{i}")
+        messages = await store.list_messages(cid, limit=3)
+        assert [m.content for m in messages] == ["msg2", "msg3", "msg4"]
+
+    @pytest.mark.asyncio
+    async def test_list_recent_messages_keeps_newest_window_chronological(
+        self, db: Database
+    ) -> None:
+        """AUDIT_0822 C3 on the history path: past ``limit`` rows the window must
+        slide — newest turns kept, oldest dropped — and come back oldest-first so
+        the rewriter/model history stays chronological."""
+        store = SqliteConversationStore(db)
+        cid = await store.create_conversation("t")
+        contents = [f"m{i}" for i in range(6)]
+        for i, content in enumerate(contents):
+            await store.append_message(cid, "user" if i % 2 == 0 else "assistant", content)
+        messages = await store.list_recent_messages(cid, limit=4)
+        assert [m.content for m in messages] == contents[-4:]
+
+    @pytest.mark.asyncio
+    async def test_list_recent_messages_returns_only_role_and_content(self, db: Database) -> None:
+        """AUDIT_0822 C8: the chat-history read selects only ``(role, content)``;
+        every payload column is left defaulted instead of deserialized and thrown
+        away. Full rows remain available via ``list_messages``."""
+        store = SqliteConversationStore(db)
+        cid = await store.create_conversation("t")
+        await store.append_message(
+            cid,
+            "assistant",
+            "the answer",
+            sources_json='[{"zim_id": 1}]',
+            trace_json='{"version": 1, "stages": ["big"]}',
+            tokens_in=10,
+            tokens_out=20,
+            latency_ms=500,
+        )
+        slim = await store.list_recent_messages(cid, limit=10)
+        assert len(slim) == 1
+        m = slim[0]
+        assert m.role == "assistant"
+        assert m.content == "the answer"
+        assert m.id == 0
+        assert m.sources_json is None
+        assert m.trace_json is None
+        assert m.tokens_in is None
+        assert m.tokens_out is None
+        assert m.latency_ms is None
+        assert m.created_at is None
+
+    @pytest.mark.asyncio
     async def test_append_message_touches_conversation_updated_at(self, db: Database) -> None:
         store = SqliteConversationStore(db)
         cid = await store.create_conversation("t")

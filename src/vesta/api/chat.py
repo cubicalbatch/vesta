@@ -109,8 +109,9 @@ async def chat(request: Request, body: ChatRequest) -> StreamingResponse:
         conversation_id = await store.create_conversation(derive_title(body.query))
     else:
         # Verify the conversation exists; 404 if not (don't silently create a
-        # new one under a stranger's id).
-        existing = await store.list_messages(conversation_id, limit=1)
+        # new one under a stranger's id). Slim read: only role/content, no
+        # trace payloads deserialized just for a truthiness probe.
+        existing = await store.list_recent_messages(conversation_id, limit=1)
         if not existing:
             async with state.db.read() as conn:
                 cur = await conn.execute(
@@ -150,8 +151,11 @@ async def _run_chat_turn(
     """One chat turn: load history → persist user msg → stream → persist assistant."""
     # 1. Load history BEFORE persisting this turn's user message, so the current
     #    query is excluded from its own context. Only user/assistant rows are
-    #    conversation turns.
-    prior = await store.list_messages(conversation_id, limit=200)
+    #    conversation turns. Slim read: history consumes (role, content) only —
+    #    full-row selects deserialized every stored trace payload per turn
+    #    (AUDIT_0822 C8); the newest-window DESC+reverse keeps recent turns
+    #    once the conversation outgrows 200 rows (C3).
+    prior = await store.list_recent_messages(conversation_id, limit=200)
     pairs = tuple(
         (m.role, m.content or "") for m in prior if m.role in ("user", "assistant") and m.content
     )

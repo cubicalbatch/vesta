@@ -88,9 +88,10 @@ async def test_fresh_db_reaches_full_schema(tmp_db_path: Path) -> None:
                 12,
                 13,
                 14,
+                15,
             ]
-        )  # ...+bench_runs +token usage +retire_agentic_settings +retire_single_shot +article_documents +index_leases
-        assert await current_version(conn) == 14
+        )  # ...+bench_runs +token usage +retire_agentic_settings +retire_single_shot +article_documents +index_leases +messages_conversation_id
+        assert await current_version(conn) == 15
     tables = await _table_names(db)
     await db.stop()
     assert tables >= EXPECTED_TABLES
@@ -137,7 +138,7 @@ async def test_failed_migration_rolls_back_atomically(
     half-applied DDL. Proven here in four beats: raises ``MigrationError``;
     ``user_version`` unchanged; the script's own earlier ``CREATE TABLE`` is
     gone; a corrected retry applies cleanly on the same connection."""
-    # Reach the real latest version first (real 0001-0013), THEN substitute
+    # Reach the real latest version first (real 0001-0014), THEN substitute
     # one extra pending migration living in tmp_path — no packaged .sql is
     # touched, and the runner's available_migrations() lookup resolves through
     # module globals at call time, so the patch takes effect for pending runs.
@@ -145,14 +146,14 @@ async def test_failed_migration_rolls_back_atomically(
     await db.start()
     async with db.write() as conn:
         applied = await run_migrations(conn)
-        assert len(applied) == 14
-        assert await current_version(conn) == 14
+        assert len(applied) == 15
+        assert await current_version(conn) == 15
 
-        probe_sql = tmp_path / "0015_atomicity_probe.sql"
+        probe_sql = tmp_path / "0016_atomicity_probe.sql"
         monkeypatch.setattr(
             db_migrations,
             "available_migrations",
-            lambda: [(15, "atomicity_probe", probe_sql)],
+            lambda: [(16, "atomicity_probe", probe_sql)],
         )
 
         # First half succeeds (CREATE TABLE), second half errors mid-script.
@@ -164,7 +165,7 @@ async def test_failed_migration_rolls_back_atomically(
         with pytest.raises(MigrationError):
             await run_migrations(conn)
 
-        assert await current_version(conn) == 14  # bump rolled back
+        assert await current_version(conn) == 15  # bump rolled back
         async with conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='m6_atomicity_probe'"
         ) as cur:
@@ -176,8 +177,8 @@ async def test_failed_migration_rolls_back_atomically(
             "INSERT INTO m6_atomicity_probe VALUES (1);\n",
             encoding="utf-8",
         )
-        assert await run_migrations(conn) == [15]
-        assert await current_version(conn) == 15
+        assert await run_migrations(conn) == [16]
+        assert await current_version(conn) == 16
         async with conn.execute("SELECT COUNT(*) FROM m6_atomicity_probe") as cur:
             row = await cur.fetchone()
         assert row is not None and row[0] == 1
@@ -199,6 +200,23 @@ async def test_articles_zim_index_created(tmp_db_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_messages_conversation_id_index_created(tmp_db_path: Path) -> None:
+    """AUDIT_0822 P1/C7: every chat turn reads a conversation's recent messages,
+    so ``messages.conversation_id`` must have an index — the bare FK left the
+    per-turn history query a full scan of an unbounded table."""
+    db = Database(str(tmp_db_path), busy_timeout_ms=1000)
+    await db.start()
+    async with db.write() as conn:
+        await run_migrations(conn)
+        cur = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='messages'"
+        )
+        indexes = {row[0] for row in await cur.fetchall()}
+    await db.stop()
+    assert "messages_conversation_id" in indexes
+
+
+@pytest.mark.asyncio
 async def test_previous_version_reaches_same_state(tmp_db_path: Path) -> None:
     """An empty DB and a DB 'from a previous version' must end in the same state
     (01-foundations Traps)."""
@@ -214,9 +232,9 @@ async def test_previous_version_reaches_same_state(tmp_db_path: Path) -> None:
         v2 = await current_version(conn)
     second_tables = await _table_names(db)
     await db.stop()
-    assert v1 == v2 == 14  # 0001-0014: init+aliases+eval pins+vectors+answer_runs+catalog_fts+
+    assert v1 == v2 == 15  # 0001-0015: init+aliases+eval pins+vectors+answer_runs+catalog_fts+
     #                   zim_kind+article_media+bench_runs+token_usage+retire_agentic_settings+retire_single_shot
-    #                   +article_documents+index_leases
+    #                   +article_documents+index_leases+messages_conversation_id
     assert first_tables == second_tables
 
 
