@@ -57,6 +57,7 @@ from vesta.zim.types import (
     RawEntry,
     ScanResult,
     Scope,
+    entry_title,
 )
 
 _log = logging.getLogger(__name__)
@@ -185,6 +186,34 @@ def _random_entry_path_sync(archive: LibzimArchive, *, articles_only: bool = Fal
     return cast("EntryPath", entry.path)
 
 
+def _read_counter(archive: LibzimArchive) -> str | None:
+    """The raw ``Counter`` metadata text, or ``None`` when the archive lacks it
+    (very old ZIMs). One reader for both parsers below — they must never
+    disagree about how the metadata is fetched or split."""
+    try:
+        return cast(str, archive.get_metadata("Counter").decode("utf-8", "replace"))
+    except Exception:
+        return None
+
+
+def _counter_pairs(raw: str) -> list[tuple[str, str]]:
+    """Split a ``Counter`` histogram into ``(mime_key, count_text)`` pairs.
+
+    The metadata is ``;``-separated ``key=value`` fragments; parameterized
+    entries such as ``text/html; charset=iso-8859-1=1`` need ``rpartition``
+    so the charset rides along in the key. Keys are returned UNSTRIPPED —
+    each consumer applies its own key policy. Fragments without ``=``
+    are skipped.
+    """
+    pairs: list[tuple[str, str]] = []
+    for kv in raw.split(";"):
+        if "=" not in kv:
+            continue
+        key, _, value = kv.rpartition("=")
+        pairs.append((key, value))
+    return pairs
+
+
 def _parse_counter_html(archive: LibzimArchive) -> int:
     """Exact article count from ``Counter['text/html']``.
 
@@ -192,20 +221,17 @@ def _parse_counter_html(archive: LibzimArchive) -> int:
     ``Counter`` metadata is a mimetype histogram present in every ZIM and read
     instantly; summing every ``text/html*`` key is exact.
     """
-    try:
-        raw = archive.get_metadata("Counter").decode("utf-8", "replace")
-    except Exception:  # very old ZIMs may lack Counter
+    raw = _read_counter(archive)
+    if raw is None:
         return int(archive.article_count)
     total = 0
-    for kv in raw.split(";"):
-        if "=" not in kv:
+    for key, value in _counter_pairs(raw):
+        if not key.startswith("text/html"):
             continue
-        key, _, value = kv.rpartition("=")
-        if key.startswith("text/html"):
-            try:
-                total += int(value)
-            except ValueError:
-                continue
+        try:
+            total += int(value)
+        except ValueError:
+            continue
     return total
 
 
@@ -219,16 +245,12 @@ def _counter_dict(archive: LibzimArchive) -> dict[str, int]:
     ``text/html; charset=iso-8859-1=1``. Returns ``{}`` if the archive lacks a
     Counter (very old ZIMs).
     """
-    try:
-        raw = archive.get_metadata("Counter").decode("utf-8", "replace")
-    except Exception:
+    raw = _read_counter(archive)
+    if raw is None:
         return {}
     out: dict[str, int] = {}
-    for kv in raw.split(";"):
-        if "=" not in kv:
-            continue
-        key, _, value = kv.rpartition("=")
-        key = key.strip()
+    for raw_key, value in _counter_pairs(raw):
+        key = raw_key.strip()
         if "/" not in key:  # drop non-mime fragments (charset params, etc.)
             continue
         try:
@@ -600,8 +622,7 @@ class ArchiveRegistry:
         out: list[str] = []
         seen: set[str] = set()
         for target in rows:
-            name = target.rsplit("/", 1)[-1] if "/" in target else target
-            name = name.replace("_", " ").strip()
+            name = entry_title(target)
             low = name.lower()
             if name and low not in seen:
                 seen.add(low)

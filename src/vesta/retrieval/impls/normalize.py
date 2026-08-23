@@ -17,35 +17,10 @@ from pydantic import BaseModel
 from vesta.config.capabilities import Capability
 from vesta.retrieval.contracts import PreparedQuery
 from vesta.retrieval.registry import register
-from vesta.zim.query import DEFAULT_STOPWORDS
+from vesta.zim.query import DEFAULT_STOPWORDS, looks_like_question
 
 if TYPE_CHECKING:
     from vesta.retrieval.trace import Trace
-
-# Interrogatives that suggest a natural-language question rather than a bare
-# keyword search. Kept short — the query ladder handles stopword-heavy questions
-# separately.
-_QUESTION_WORDS: frozenset[str] = frozenset(
-    {
-        "what",
-        "who",
-        "how",
-        "when",
-        "where",
-        "why",
-        "which",
-        "whose",
-        "whom",
-        "explain",
-        "describe",
-        "define",
-        "tell",
-        "list",
-        "compare",
-        "summarize",
-        "calculate",
-    }
-)
 
 
 def _is_keyword_query(text: str) -> bool:
@@ -54,10 +29,7 @@ def _is_keyword_query(text: str) -> bool:
     A query ending in ``?`` or starting with an interrogative is a question;
     everything else is a keyword query (the "bare search term" mode).
     """
-    if text.endswith("?"):
-        return False
-    first_word = text.split(maxsplit=1)[0] if text else ""
-    return first_word.lower() not in _QUESTION_WORDS
+    return not looks_like_question(text)
 
 
 @register("query_preparer", "normalize")

@@ -34,6 +34,7 @@ from vesta.retrieval.contracts import (
     ScoredPassage,
 )
 from vesta.retrieval.registry import resolve as resolve_component
+from vesta.zim.query import CORE_QUESTION_WORDS, looks_like_question
 
 if TYPE_CHECKING:
     from vesta.config.settings import SettingsSnapshot
@@ -404,12 +405,13 @@ async def run_pipeline(  # noqa: PLR0912,PLR0915
 
 
 def _looks_like_question(text: str) -> bool:
-    """True when ``text`` looks like a question rather than a keyword query."""
-    if text.endswith("?"):
-        return True
-    first_word = text.split(maxsplit=1)[0].lower() if text else ""
-    question_words = {"what", "who", "how", "when", "where", "why", "which"}
-    return first_word in question_words
+    """True when ``text`` looks like a question rather than a keyword query.
+
+    Uses the CORE interrogative set (see :mod:`vesta.zim.query`): widening it
+    would change which queries retrieve as keyword lookups — a measured
+    retrieval change, not a cleanup.
+    """
+    return looks_like_question(text, CORE_QUESTION_WORDS)
 
 
 def _flat_union(groups: dict[FusionKey, list[Candidate]]) -> list[Candidate]:

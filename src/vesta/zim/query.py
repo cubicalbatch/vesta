@@ -109,6 +109,49 @@ class QueryRung:
     prefix: str | None  # suggest prefix, for the title rung
 
 
+# Interrogatives that suggest a natural-language question rather than a bare
+# keyword search. One home, two exported sets: the FULL set (interrogatives
+# plus task verbs) drives the normalize preparer's classification; the CORE
+# set is the narrower interrogative-only list the pipeline's search-term gate
+# and the answer path have always used. The sets are kept deliberately
+# separate — widening the core set changes which queries retrieve as keyword
+# lookups (a measured retrieval change), so it must not happen as a side
+# effect of a cleanup.
+QUESTION_WORDS: frozenset[str] = frozenset(
+    {
+        "what",
+        "who",
+        "how",
+        "when",
+        "where",
+        "why",
+        "which",
+        "whose",
+        "whom",
+        "explain",
+        "describe",
+        "define",
+        "tell",
+        "list",
+        "compare",
+        "summarize",
+        "calculate",
+    }
+)
+CORE_QUESTION_WORDS: frozenset[str] = frozenset(
+    {"what", "who", "how", "when", "where", "why", "which"}
+)
+
+
+def looks_like_question(text: str, words: frozenset[str] = QUESTION_WORDS) -> bool:
+    """True when ``text`` looks like a question rather than a keyword lookup:
+    it ends in ``?`` or starts with one of ``words``."""
+    if text.endswith("?"):
+        return True
+    first_word = text.split(maxsplit=1)[0].lower() if text else ""
+    return first_word in words
+
+
 # Interrogatives + common English stopwords. These turn a 0-hit NL question
 # into correct hits ("how do i mount a usb drive" → "mount usb drive" →
 # 6 correct results). Kept short: a longer list risks stripping meaningful
@@ -372,12 +415,15 @@ class QueryPreparer:
 
 
 __all__ = [
+    "CORE_QUESTION_WORDS",
     "DEFAULT_STOPWORDS",
+    "QUESTION_WORDS",
     "QueryPreparer",
     "QueryRung",
     "SearchFn",
     "StageSink",
     "SuggestFn",
     "Tracer",
+    "looks_like_question",
     "normalize_terms",
 ]

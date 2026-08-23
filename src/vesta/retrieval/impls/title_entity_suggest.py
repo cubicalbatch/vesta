@@ -63,6 +63,7 @@ from vesta.config.capabilities import Capability
 from vesta.retrieval.contracts import Candidate, PreparedQuery, Scope
 from vesta.retrieval.registry import register
 from vesta.zim.query import DEFAULT_STOPWORDS
+from vesta.zim.types import entry_title_key
 
 if TYPE_CHECKING:
     from vesta.retrieval.trace import Trace
@@ -358,8 +359,7 @@ def _exact_title_hits(span: str, paths: list[str]) -> list[str]:
         return []
     out: list[str] = []
     for p in paths:
-        name = p.rsplit("/", 1)[-1] if "/" in p else p
-        if name.replace("_", " ").strip().lower() == wanted:
+        if entry_title_key(p) == wanted:
             out.append(p)
     return out
 

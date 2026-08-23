@@ -49,7 +49,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from vesta.zim.types import DocumentRef, EntryPath
+from vesta.zim.types import DocumentRef, EntryPath, strip_entry_prefix
 
 if TYPE_CHECKING:
     from libzim.reader import Archive as LibzimArchive
@@ -139,15 +139,13 @@ def _parse_database_js(text: str) -> list[dict[str, object]]:
 def _resolve_doc_path(fp: str, files_prefix: str) -> str:
     """Resolve a manifest ``fp`` to its ZIM entry path.
 
-    Strips a leading ``./`` or ``/``. A path already carrying a directory is
-    kept verbatim; a bare filename is joined under ``files_prefix`` (the
-    nautiluszim convention).
+    Strips a leading ``./`` or ``/`` (the shared
+    :func:`~vesta.zim.types.strip_entry_prefix` — not ``lstrip``, which would
+    also eat leading dots of real filenames). A path already carrying a
+    directory is kept verbatim; a bare filename is joined under
+    ``files_prefix`` (the nautiluszim convention).
     """
-    fp = fp.strip()
-    if fp.startswith("./"):
-        fp = fp[2:]
-    elif fp.startswith("/"):
-        fp = fp[1:]
+    fp = strip_entry_prefix(fp.strip())
     if "/" in fp:
         return fp
     return f"{files_prefix}{fp}"

@@ -29,6 +29,7 @@ from pydantic import BaseModel
 from vesta.config.capabilities import Capability
 from vesta.retrieval.contracts import Candidate, PreparedQuery, Scope
 from vesta.retrieval.registry import register
+from vesta.zim.types import entry_title_key
 
 if TYPE_CHECKING:
     from vesta.retrieval.trace import Trace
@@ -114,9 +115,7 @@ class AliasTitleResolve:
             return []
         matches: list[Candidate] = []
         for p in paths:
-            name = p.rsplit("/", 1)[-1] if "/" in p else p
-            name = name.replace("_", " ").strip().lower()
-            if name == wanted:
+            if entry_title_key(p) == wanted:
                 matches.append(
                     Candidate(
                         zim_id=archive.id, path=p, source="alias_title_resolve", rank=0, score=None

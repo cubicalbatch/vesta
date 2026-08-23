@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 
-from vesta.zim.types import EntryFlags, EntryPath
+from vesta.zim.types import EntryFlags, EntryPath, strip_entry_prefix
 
 #: A ``<meta http-equiv="refresh" content="0; url=TARGET">`` soft redirect. The
 #: URL attribute may be single- or double-quoted and may use ``./`` prefixes.
@@ -68,9 +68,14 @@ def extract_soft_redirect_target(
     if not raw:
         return None
     target = raw.decode("utf-8", "replace").strip()
-    # ZIM soft redirects point at ``./Target`` or ``A/Target``; normalise the
-    # ``./`` away but keep whatever namespace libzim uses for this archive.
-    return target.lstrip("./").strip()
+    # ZIM soft redirects point at ``./Target``, ``A/Target``, or a
+    # parent-relative ``../Target``; normalise those prefixes away.
+    # Deliberate prefix checks, not lstrip("./"): lstrip eats ANY leading run
+    # of '.' and '/', mangling targets that legitimately begin with extra
+    # dots (``..hidden`` → ``hidden``).
+    while target.startswith("../"):
+        target = target[3:]
+    return strip_entry_prefix(target).strip()
 
 
 def is_soft_redirect(content: bytes) -> bool:

@@ -32,6 +32,35 @@ from typing import Protocol, TypeAlias, runtime_checkable
 EntryPath: TypeAlias = str
 
 
+def strip_entry_prefix(path: str) -> str:
+    """Strip ONE leading ``./`` or ``/`` from a ZIM entry reference.
+
+    Deliberately not ``lstrip("./")``: that removes any leading run of ``.`` and
+    ``/`` characters, silently mangling targets that legitimately begin with
+    dots (``..hidden`` → ``hidden``). Exactly one leading separator goes.
+    """
+    if path.startswith("./"):
+        return path[2:]
+    if path.startswith("/"):
+        return path[1:]
+    return path
+
+
+def entry_title(path: str) -> str:
+    """Human-readable title text for a ZIM entry path: the basename with
+    underscores turned into spaces, trimmed. The one convention shared by the
+    redirect-alias lookup and the exact-title matchers (ZIM paths use
+    underscores for spaces)."""
+    name = path.rsplit("/", 1)[-1] if "/" in path else path
+    return name.replace("_", " ").strip()
+
+
+def entry_title_key(path: str) -> str:
+    """Case-folded :func:`entry_title` — the comparable form for equality
+    checks between a query phrase and an entry path."""
+    return entry_title(path).lower()
+
+
 class EntryFlags(IntFlag):
     """Per-article classification bits, stored in ``articles.flags``.
 
@@ -251,4 +280,7 @@ __all__ = [
     "ScanResult",
     "Scope",
     "Section",
+    "entry_title",
+    "entry_title_key",
+    "strip_entry_prefix",
 ]
