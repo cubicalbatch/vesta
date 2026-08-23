@@ -46,6 +46,16 @@ class OnnxCrossEncoder:
         self._semaphore = semaphore
         self.id = spec.repo_id
         self.max_tokens = max_tokens
+        #: Padding + truncation are configured ONCE here rather than re-asserted
+        #: inside :meth:`_score_sync`. Every input is one ``(query, passage)``
+        #: batch against the fixed ``max_tokens`` (fixed at construction — see
+        #: the module docstring), so the config never varies per call; what
+        #: ``enable_*`` DO vary is tokenizer state, which mutating on every call
+        #: was hot-path overhead (and can invalidate cached encodings). This
+        #: instance's tokenizer is role-private (the manager loads one per model
+        #: dir), so no other encoder mutates it back.
+        self._tokenizer.enable_padding()
+        self._tokenizer.enable_truncation(max_length=max_tokens)
 
     async def score(self, query: str, passages: Sequence[str]) -> Sequence[float]:
         if not passages:
@@ -54,8 +64,6 @@ class OnnxCrossEncoder:
             return await asyncio.to_thread(self._score_sync, query, list(passages))
 
     def _score_sync(self, query: str, passages: list[str]) -> list[float]:
-        self._tokenizer.enable_padding()
-        self._tokenizer.enable_truncation(max_length=self.max_tokens)
         encoded = self._tokenizer.encode_batch([(query, p) for p in passages])
         input_ids = np.array([e.ids for e in encoded], dtype=np.int64)
         attention_mask = np.array([e.attention_mask for e in encoded], dtype=np.int64)

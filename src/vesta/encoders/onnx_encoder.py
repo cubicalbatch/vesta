@@ -158,7 +158,12 @@ class OnnxBiEncoder:
         self._session = session
         self._tokenizer = tokenizer
         self._semaphore = semaphore
-        self._output_names = {o.name for o in session.get_outputs()}
+        #: Output-name → position in the session's output list, resolved once
+        #: from static session metadata. :meth:`_run_padded` runs once per
+        #: length bucket, and re-introspecting ``get_outputs()`` plus rebuilding
+        #: a name→tensor dict inside that loop was pure overhead — the mapping
+        #: cannot change after the session is built.
+        self._output_indices = {o.name: i for i, o in enumerate(session.get_outputs())}
         #: ``enable_padding``/``enable_truncation`` mutate shared tokenizer state,
         #: and the manager's semaphore is shared across all three roles (size
         #: ``encoders.pool_size``) rather than per-encoder — so two concurrent
@@ -236,10 +241,10 @@ class OnnxBiEncoder:
         outputs = self._session.run(
             None, {"input_ids": input_ids, "attention_mask": attention_mask}
         )
-        output_map = dict(zip((o.name for o in self._session.get_outputs()), outputs, strict=True))
-        if "sentence_embedding" in output_map:
-            return np.asarray(output_map["sentence_embedding"], dtype=np.float32)
-        last_hidden = np.asarray(output_map["last_hidden_state"], dtype=np.float32)
+        indices = self._output_indices
+        if "sentence_embedding" in indices:
+            return np.asarray(outputs[indices["sentence_embedding"]], dtype=np.float32)
+        last_hidden = np.asarray(outputs[indices["last_hidden_state"]], dtype=np.float32)
         return _mean_pool(last_hidden, attention_mask)
 
     def _embed_ragged(self, texts: list[str]) -> NDArray[np.float32]:

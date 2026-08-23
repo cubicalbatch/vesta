@@ -462,6 +462,43 @@ async def test_single_oversized_item_runs_alone_rather_than_stalling(
     assert all(p["count"] == 1 for p in seen)
 
 
+@pytest.mark.asyncio
+async def test_output_metadata_resolved_once_not_per_bucket_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (AUDIT_0822 P7): output positions come from static session
+    metadata resolved at construction — ``get_outputs()`` re-introspection plus
+    a name→tensor dict rebuild used to run inside EVERY bucket pass."""
+    import vesta.encoders.onnx_encoder as onnx_encoder_module
+
+    monkeypatch.setattr(onnx_encoder_module, "_MAX_BUCKET_ITEMS", 1)  # force 4 passes
+
+    class CountingSession(FakeSession):
+        def __init__(self) -> None:
+            super().__init__(
+                ["last_hidden_state", "sentence_embedding"],
+                lambda feed: [
+                    np.zeros((feed["input_ids"].shape[0], 1, 1), dtype=np.float32),
+                    feed["input_ids"][:, :1].astype(np.float32),
+                ],
+            )
+            self.get_outputs_calls = 0
+
+        def get_outputs(self) -> list[Any]:
+            self.get_outputs_calls += 1
+            return super().get_outputs()
+
+    session = CountingSession()
+    spec = _spec(dim=1, normalize=False)
+    enc = OnnxBiEncoder(spec, session, FakeTokenizer(), semaphore=asyncio.Semaphore(2))
+
+    await enc.embed(["1:5", "2:9", "3:2", "4:7"], kind="passage")
+
+    # Four forward passes happened, but session metadata was read exactly
+    # once — in __init__. The hot loop only indexes the precomputed mapping.
+    assert session.get_outputs_calls == 1
+
+
 # ── OnnxCrossEncoder mechanics ───────────────────────────────────────────────
 
 
@@ -517,6 +554,44 @@ async def test_cross_encoder_truncates_to_configured_max_tokens() -> None:
     long_passage = " ".join(f"word{i}" for i in range(50))
     await enc.score("q", [long_passage])
     assert captured["input_ids"].shape[1] <= 3
+
+
+@pytest.mark.asyncio
+async def test_cross_encoder_configures_tokenizer_once_at_construction() -> None:
+    """Regression (AUDIT_0822 P7): padding/truncation are configured once in
+    the constructor — score() must not re-mutate shared tokenizer state (and
+    risk retokenizer invalidation) on every call."""
+    spec = _spec(role="rerank", kind="cross_encoder_pair", dim=0)
+
+    class SpyTokenizer(FakeTokenizer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.padding_enables = 0
+            self.truncation_enables: list[int] = []
+
+        def enable_padding(self) -> None:
+            self.padding_enables += 1
+            super().enable_padding()
+
+        def enable_truncation(self, max_length: int) -> None:
+            self.truncation_enables.append(max_length)
+            super().enable_truncation(max_length)
+
+    tok = SpyTokenizer()
+
+    def run_fn(feed: dict[str, Any]) -> list[Any]:
+        return [np.zeros((feed["input_ids"].shape[0], 1), dtype=np.float32)]
+
+    enc = OnnxCrossEncoder(
+        spec, FakeSession(["logits"], run_fn), tok, max_tokens=16, semaphore=asyncio.Semaphore(2)
+    )
+    assert tok.padding_enables == 1
+    assert tok.truncation_enables == [16]
+
+    await enc.score("q", ["a relevant passage"])
+    await enc.score("q", ["another passage"])
+    assert tok.padding_enables == 1
+    assert tok.truncation_enables == [16]  # score() reconfigured nothing
 
 
 # ── registry.resolve_spec ────────────────────────────────────────────────────
