@@ -15,8 +15,8 @@ An implementation carries:
 
 * ``requires: ClassVar[frozenset[Capability]]`` — what it needs to function.
 * ``Params`` — a Pydantic ``BaseModel`` subclass with typed, defaulted fields.
-  Extracted via introspection and served by ``GET /api/retrieval/components`` so
-  the profile editor renders per-component forms generically.
+  Extracted via introspection (``component_schemas``) so tooling can render
+  per-component forms generically.
 """
 
 from __future__ import annotations
@@ -82,7 +82,7 @@ def _get_requires(cls: type) -> frozenset[Capability]:
 
 
 def component_schemas() -> dict[str, list[dict[str, Any]]]:
-    """Registry introspection for ``GET /api/retrieval/components``.
+    """Registry introspection: per kind, the registered impls + param schemas.
 
     Returns::
 
