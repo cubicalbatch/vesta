@@ -213,59 +213,6 @@ def list_profiles() -> list[dict[str, str]]:
     ]
 
 
-def clone_profile(name: str, overrides: dict[str, Any]) -> RetrievalProfile | None:
-    """Clone a built-in profile, applying param overrides.
-
-    Returns ``None`` if the named profile doesn't exist. Overrides are applied at
-    the component level: ``{"fusion": {"params": {"k": 30}}}`` replaces ``k`` in
-    the fusion component's params.
-    """
-    original = BUILTIN_PROFILES.get(name)
-    if original is None:
-        return None
-
-    def _apply_overrides(
-        components: tuple[ProfileComponent, ...], key: str
-    ) -> tuple[ProfileComponent, ...]:
-        override = overrides.get(key, {})
-        new_params = dict(override.get("params", {}))
-        return tuple(
-            ProfileComponent(impl=c.impl, params={**c.params, **new_params}) for c in components
-        )
-
-    def _apply_single(component: ProfileComponent, key: str) -> ProfileComponent:
-        override = overrides.get(key, {})
-        new_params = dict(override.get("params", {}))
-        return ProfileComponent(impl=component.impl, params={**component.params, **new_params})
-
-    # Build a new profile with overrides applied and a fresh hash.
-    new = RetrievalProfile(
-        name=original.name,
-        description=f"{original.description} (user override)",
-        hash="",  # recomputed below
-        preparers=_apply_overrides(original.preparers, "preparers"),
-        sources=_apply_overrides(original.sources, "sources"),
-        fusion=_apply_single(original.fusion, "fusion"),
-        passages=_apply_single(original.passages, "passages"),
-        scorers=_apply_overrides(original.scorers, "scorers"),
-        assembler=_apply_single(original.assembler, "assembler"),
-    )
-    # Recompute hash from the canonical YAML representation.
-    yaml_text = profile_to_yaml(new)
-    new = RetrievalProfile(
-        name=new.name,
-        description=new.description,
-        hash=_hash_yaml(yaml_text),
-        preparers=new.preparers,
-        sources=new.sources,
-        fusion=new.fusion,
-        passages=new.passages,
-        scorers=new.scorers,
-        assembler=new.assembler,
-    )
-    return new
-
-
 def _component_dict(pc: ProfileComponent) -> dict[str, Any]:
     d: dict[str, Any] = {"impl": pc.impl}
     if pc.params:

@@ -611,15 +611,11 @@ class TestProfiles:
         for name, profile in BUILTIN_PROFILES.items():
             assert len(profile.hash) == 64, f"{name} hash is not SHA-256"
 
-    def test_profile_loading_cloning_and_validation(self) -> None:
-        """Profile resolution, clone overrides, and invalid profile rejection."""
-        from vesta.retrieval.profiles import _validate_components, clone_profile, load_profile
+    def test_profile_loading_and_validation(self) -> None:
+        """Profile resolution and invalid profile rejection."""
+        from vesta.retrieval.profiles import _validate_components, load_profile
 
         assert load_profile("nonexistent") is None
-
-        cloned = clone_profile("lexical", {"fusion": {"params": {"k": 30}}})
-        assert cloned is not None
-        assert cloned.fusion.params["k"] == 30
 
         with pytest.raises(ValueError, match="at least one candidate source"):
             _validate_components(
