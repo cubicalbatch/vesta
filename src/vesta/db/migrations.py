@@ -17,7 +17,6 @@ because migrations run before anything reads. Re-running the runner is a no-op.
 from __future__ import annotations
 
 import contextlib
-from importlib import resources
 from pathlib import Path
 
 import aiosqlite
@@ -90,9 +89,3 @@ async def run_migrations(write_conn: aiosqlite.Connection) -> list[int]:
         applied.append(number)
         version = number
     return applied
-
-
-def migrations_table_sql() -> str:
-    """The init SQL, exposed for tests that assert schema completeness."""
-    res = resources.files(__package__).joinpath("migrations/0001_init.sql")
-    return res.read_text(encoding="utf-8")
