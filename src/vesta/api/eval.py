@@ -156,11 +156,16 @@ def _row_to_record(row: aiosqlite.Row) -> RunRecord:
 
 
 class LivePipelineRunner(PipelineRunner):
-    """Run one retrieval query through the real pipeline + open archives."""
+    """Run one retrieval query through the real pipeline + open archives.
 
-    def __init__(self, state: AppState, profile: RetrievalProfile) -> None:
+    The single PipelineRunner implementation for both API-driven eval runs and
+    the CLI (``vesta bench``/``vesta eval`` alias it as ``CLIPipelineRunner``)
+    — the two former copies could silently drift and break the
+    measure-before-ship comparability guarantee.
+    """
+
+    def __init__(self, state: AppState, profile: RetrievalProfile | None = None) -> None:
         self._state = state
-        self._profile = profile
 
     async def run(
         self, profile: RetrievalProfile, query: str

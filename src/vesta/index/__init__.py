@@ -29,6 +29,7 @@ from vesta.config.settings import setting
 if TYPE_CHECKING:
     from starlette.middleware.base import BaseHTTPMiddleware
 
+    from vesta.db.connection import Database
     from vesta.index.preempt import PreemptionCoordinator
 
 # ── Settings ─────────────────────────────────────────────────────────────
@@ -165,6 +166,26 @@ def set_indexed_state(any_indexed: bool) -> None:
     _ANY_INDEXED = any_indexed
 
 
+async def reseed_indexed_state(db: Database) -> None:
+    """Recompute :func:`set_indexed_state` from the ``zims`` table: on iff some
+    enabled archive has depth ≥ 1 and a complete/running build.
+
+    The single copy of the seed query — run at startup (main), when the CLI
+    composition root opens its runtime, and whenever an archive's index rows
+    change outside a build. Error policy stays with the caller: startup and CLI
+    degrade to flag-off, mutation endpoints let a failure surface.
+    """
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT 1 FROM zims WHERE enabled=1 AND index_depth>=1 "
+            "AND index_status IN ('complete','running') LIMIT 1"
+        ) as cur,
+    ):
+        row = await cur.fetchone()
+    set_indexed_state(row is not None)
+
+
 def _capability_probe() -> CapabilitySet:
     if _ANY_INDEXED:
         return frozenset({Capability.VECTORS})
@@ -266,5 +287,6 @@ __all__ = [
     "bind_coordinator",
     "get_coordinator",
     "make_middleware",
+    "reseed_indexed_state",
     "set_indexed_state",
 ]

@@ -53,6 +53,7 @@ from vesta.index import (
     bind_coordinator,
     bind_runtime,
     make_middleware,
+    reseed_indexed_state,
     set_indexed_state,
 )
 from vesta.index import job as _index_job  # noqa: F401 — registers the index_zim job type
@@ -452,15 +453,7 @@ async def _prune_conversation_traces(db: Database, log: Any) -> None:
 async def _seed_indexed_state(db: Database) -> None:
     """Turn VECTORS on iff some enabled archive already has a usable index."""
     try:
-        async with (
-            db.read() as conn,
-            conn.execute(
-                "SELECT 1 FROM zims WHERE enabled=1 AND index_depth>=1 "
-                "AND index_status IN ('complete','running') LIMIT 1"
-            ) as cur,
-        ):
-            row = await cur.fetchone()
-        set_indexed_state(row is not None)
+        await reseed_indexed_state(db)
     except Exception:  # a schema/migration mismatch never blocks startup
         set_indexed_state(False)
 

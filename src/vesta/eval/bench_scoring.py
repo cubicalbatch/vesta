@@ -233,6 +233,31 @@ def score_question(
     )
 
 
+# ── Reading metrics back ────────────────────────────────────────────────────
+
+
+def metric_lookup(metrics: dict[str, object], path: str, *, flat_fallback: bool = False) -> object:
+    """Look one metric up in a persisted ``metrics_json`` blob by dotted path
+    (``answer.strict_accuracy``).
+
+    ``flat_fallback`` also accepts the retired flat layout
+    (``answer_strict_accuracy``): historical eval_runs rows predate the nested
+    shape. Only the CLI report paths need it; API responses read nested rows
+    only.
+    """
+    node: object = metrics
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            node = None
+            break
+        node = node[part]
+    if node is not None:
+        return node
+    if flat_fallback:
+        return metrics.get(path.replace(".", "_"))
+    return None
+
+
 # ── A. Source metrics (deterministic, no LLM) ───────────────────────────────
 
 

@@ -209,6 +209,34 @@ def filter(
     return tuple(out)
 
 
+def apply_flag_filters(
+    questions: Sequence[BenchQuestion],
+    *,
+    slice: str | None = None,
+    level: int | None = None,
+    capabilities: Sequence[str] | None = None,
+    difficulties: Sequence[str] | None = None,
+    limit: int | None = None,
+) -> list[BenchQuestion]:
+    """The run-entry-point filter ladder shared by the API request body and
+    the CLI flags (``vesta bench run``/``bench retrieval``): slice/level/
+    capability/difficulty selection plus a head limit, skipping unset flags.
+    Thin composition over :func:`filter` — same order, same falsy skips — so
+    the two entry points can never drift apart on what a filter selects."""
+    qs = list(questions)
+    if slice and slice != "all":
+        qs = list(filter(qs, slice=slice))
+    if level is not None:
+        qs = list(filter(qs, level=level))
+    if capabilities:
+        qs = list(filter(qs, capabilities=capabilities))
+    if difficulties:
+        qs = list(filter(qs, difficulties=difficulties))
+    if limit is not None:
+        qs = qs[:limit]
+    return qs
+
+
 # ── Loader ──────────────────────────────────────────────────────────────────
 
 _REQUIRED_FIELDS: tuple[str, ...] = (

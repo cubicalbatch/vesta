@@ -132,6 +132,30 @@ BENCH_REQUIRE_FRESH_ORACLE = setting(
 )
 
 
+def resolve_matrix_axes(
+    systems: Sequence[str] | None,
+    profiles: Sequence[str] | None,
+    models: Sequence[str] | None,
+    *,
+    default_systems: str,
+    default_model: str,
+) -> tuple[list[str], list[str], list[str]]:
+    """Resolve the systems / profiles / models matrix axes from (possibly
+    empty) explicit selections. One copy of the defaults ladder shared by the
+    API route and the CLI flag path so bench numbers stay comparable:
+    ``bench.systems`` comma-split with an ``agentic_pydantic`` floor, the
+    active/default profile (empty string), and ``inference.llm.model``
+    filtered for emptiness. Model-PRESENCE validation stays with the caller —
+    the two entry points fail differently (HTTP 400 vs ``SystemExit``) and the
+    CLI additionally exempts ``retrieval_only``.
+    """
+    systems = list(systems or [s.strip() for s in default_systems.split(",") if s.strip()])
+    systems = systems or ["agentic_pydantic"]
+    profiles = list(profiles or [""])  # empty → active/default profile
+    models = [m for m in (list(models or [default_model])) if m]
+    return [s for s in systems if s], profiles, models
+
+
 # ── QuestionOutput (the seam) ───────────────────────────────────────────────
 
 

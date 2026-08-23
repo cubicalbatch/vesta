@@ -45,7 +45,7 @@ from vesta.eval.answer_metrics import JudgeLLM
 from vesta.eval.bench_dataset import (
     BENCH_DATASET,
     BenchQuestion,
-    filter,
+    apply_flag_filters,
     load_bench_dataset,
     subset_hash,
 )
@@ -60,6 +60,7 @@ from vesta.eval.bench_runner import (
     QuestionOutput,
     compare_runs,
     resolve_judge_concurrency,
+    resolve_matrix_axes,
     run_benchmark,
 )
 from vesta.eval.bench_scoring import (
@@ -68,6 +69,7 @@ from vesta.eval.bench_scoring import (
     JudgeOutcome,
     Verdict,
     _parse_judge_json,
+    metric_lookup,
 )
 from vesta.eval.golden import (
     EVAL_JUDGE_API_KEY,
@@ -1550,13 +1552,7 @@ _progress: dict[str, dict[int, dict[str, object]]] = {}
 
 def _metric(metrics: dict[str, object], path: str) -> object:
     """Look a metric up in ``metrics_json`` by dotted path (``answer.strict_accuracy``)."""
-    node: object = metrics
-    for part in path.split("."):
-        if isinstance(node, dict) and part in node:
-            node = node[part]
-        else:
-            return None
-    return node
+    return metric_lookup(metrics, path)
 
 
 class BenchRunRequest(BaseModel):
@@ -1723,26 +1719,25 @@ class BenchDatasetInfo(BaseModel):
 
 def _resolve_questions(body: BenchRunRequest, dataset: Any) -> list[Any]:
     """Apply slice / level / capabilities / limit filters from the request body."""
-    qs = list(dataset.questions)
-    if body.slice and body.slice != "all":
-        qs = list(filter(qs, slice=body.slice))
-    if body.level is not None:
-        qs = list(filter(qs, level=body.level))
-    if body.capabilities:
-        qs = list(filter(qs, capabilities=body.capabilities))
-    if body.limit is not None:
-        qs = qs[: body.limit]
-    return qs
+    return apply_flag_filters(
+        dataset.questions,
+        slice=body.slice,
+        level=body.level,
+        capabilities=body.capabilities,
+        limit=body.limit,
+    )
 
 
 def _resolve_matrix(body: BenchRunRequest) -> tuple[list[str], list[str], list[str]]:
     """Resolve the systems / profiles / models matrix axes (empty → defaults)."""
-    systems = body.systems or [
-        s.strip() for s in str(app_config.get(BENCH_SYSTEMS)).split(",") if s.strip()
-    ]
-    systems = systems or ["agentic_pydantic"]
-    profiles = body.profiles or [""]  # empty → active/default profile
-    models = [m for m in (body.models or [str(app_config.get(INFERENCE_LLM_MODEL))]) if m]
+
+    systems, profiles, models = resolve_matrix_axes(
+        body.systems,
+        body.profiles,
+        body.models,
+        default_systems=str(app_config.get(BENCH_SYSTEMS)),
+        default_model=str(app_config.get(INFERENCE_LLM_MODEL)),
+    )
     if not models:
         # The model default is inert on a fresh install ("") — say so instead
         # of silently running the matrix against an
@@ -1751,7 +1746,7 @@ def _resolve_matrix(body: BenchRunRequest) -> tuple[list[str], list[str], list[s
             status_code=400,
             detail="no model configured; pass models=[...] or set inference.llm.model",
         )
-    return [s for s in systems if s], profiles, models
+    return systems, profiles, models
 
 
 def _profile_hash(name: str) -> str:

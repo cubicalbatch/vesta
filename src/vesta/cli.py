@@ -49,9 +49,8 @@ import structlog
 
 # Top-level composition root: may import broadly (composition roots hold wires, not logic).
 from vesta import config
-from vesta.api.eval import SqliteEvalStore
+from vesta.api.eval import LivePipelineRunner, SqliteEvalStore
 from vesta.api.state import AppState
-from vesta.config.capabilities import compute_capabilities
 from vesta.db.connection import Database
 from vesta.db.migrations import run_migrations
 from vesta.db.settings_store import load_settings
@@ -61,6 +60,8 @@ from vesta.encoders.registry import MODEL_SPECS
 from vesta.eval.article_recall import ArticleRecallReport, QuestionRecall
 from vesta.eval.bench import encoder, extraction, hardware
 from vesta.eval.bench_dataset import BenchDataset
+from vesta.eval.bench_runner import BENCH_SYSTEMS, resolve_matrix_axes
+from vesta.eval.bench_scoring import metric_lookup
 from vesta.eval.calibrate import ConfidenceSample, fit_thresholds
 from vesta.eval.golden import (
     EVAL_ARCHIVE_CHECKSUM,
@@ -81,12 +82,10 @@ from vesta.eval.runner import (
     parse_sweep,
     persist_run,
 )
-from vesta.index import INDEX_EMBEDDER, set_indexed_state
+from vesta.index import INDEX_EMBEDDER, reseed_indexed_state, set_indexed_state
 from vesta.index import bind_runtime as bind_index_runtime
-from vesta.retrieval.contracts import Scope as RetScope
-from vesta.retrieval.pipeline import Deps, run_pipeline
 from vesta.retrieval.profiles import RetrievalProfile, load_profile, resolve_profile
-from vesta.vectors import VECTORS_OVERSAMPLE, VECTORS_QUANTIZER, bind_store, get_store
+from vesta.vectors import VECTORS_OVERSAMPLE, VECTORS_QUANTIZER, bind_store
 from vesta.vectors.sqlite_vec_store import SqliteVecStore
 from vesta.zim import bind_registry
 from vesta.zim.registry import ArchiveRegistry
@@ -605,29 +604,21 @@ def _parse_set_pairs(args: argparse.Namespace) -> dict[str, str]:
 
 def _metric(metrics: dict[str, object], path: str) -> object:
     """Look a metric up in ``metrics_json`` by dotted path (``answer.strict_accuracy``);
-    falls back to a top-level key for flat layouts."""
-    node: object = metrics
-    for part in path.split("."):
-        if not isinstance(node, dict) or part not in node:
-            node = None
-            break
-        node = node[part]
-    if node is not None:
-        return node
-    return metrics.get(path.replace(".", "_"))
+    falls back to a top-level key for the retired flat layout (old eval_runs rows)."""
+    return metric_lookup(metrics, path, flat_fallback=True)
 
 
 def _resolve_matrix(args: argparse.Namespace) -> tuple[list[str], list[str], list[str]]:
     """Resolve the systems / profiles / models matrix axes."""
-    from vesta.eval.bench_runner import BENCH_SYSTEMS
     from vesta.inference import INFERENCE_LLM_MODEL
 
-    systems = args.system or [
-        s.strip() for s in str(config.get(BENCH_SYSTEMS)).split(",") if s.strip()
-    ]
-    systems = systems or ["agentic_pydantic"]
-    profiles = args.profile or [""]  # empty → active/default profile
-    models = [m for m in (args.model or [str(config.get(INFERENCE_LLM_MODEL))]) if m]
+    systems, profiles, models = resolve_matrix_axes(
+        args.system,
+        args.profile,
+        args.model,
+        default_systems=str(config.get(BENCH_SYSTEMS)),
+        default_model=str(config.get(INFERENCE_LLM_MODEL)),
+    )
     if not models and any(s != "retrieval_only" for s in systems):
         # The model default is inert on a fresh install ("") — a
         # clear CLI error instead of a silent run against an empty model id.
@@ -635,7 +626,7 @@ def _resolve_matrix(args: argparse.Namespace) -> tuple[list[str], list[str], lis
         raise SystemExit("no model configured; pass --model or set inference.llm.model")
     if not models:
         models = [""]
-    return [s for s in systems if s], profiles, models
+    return systems, profiles, models
 
 
 def _resolve_questions(args: argparse.Namespace) -> tuple[Any, list[Any]]:
@@ -644,25 +635,18 @@ def _resolve_questions(args: argparse.Namespace) -> tuple[Any, list[Any]]:
     Shared by ``bench run`` and ``bench retrieval --dataset``; the getattr
     defaults let the lighter dataset-mode flag set omit slice/difficulty.
     """
-    from vesta.eval.bench_dataset import BENCH_DATASET, filter, load_bench_dataset
+    from vesta.eval.bench_dataset import BENCH_DATASET, apply_flag_filters, load_bench_dataset
 
     path = args.dataset or str(config.get(BENCH_DATASET))
     dataset = load_bench_dataset(path)
-    qs = list(dataset.questions)
-    slice_ = getattr(args, "slice", None)
-    if slice_ and slice_ != "all":
-        qs = list(filter(qs, slice=slice_))
-    level = getattr(args, "level", None)
-    if level is not None:
-        qs = list(filter(qs, level=level))
-    capability = getattr(args, "capability", None)
-    if capability:
-        qs = list(filter(qs, capabilities=capability))
-    difficulty = getattr(args, "difficulty", None)
-    if difficulty:
-        qs = list(filter(qs, difficulties=difficulty))
-    if args.limit is not None:
-        qs = qs[: args.limit]
+    qs = apply_flag_filters(
+        dataset.questions,
+        slice=getattr(args, "slice", None),
+        level=getattr(args, "level", None),
+        capabilities=getattr(args, "capability", None),
+        difficulties=getattr(args, "difficulty", None),
+        limit=args.limit,
+    )
     return dataset, qs
 
 
@@ -1635,15 +1619,7 @@ async def _open_runtime(  # noqa: PLR0915
     # it at startup; the CLI needs the same seeding or vector_knn always
     # capability-drops regardless of the store wiring above.
     try:
-        async with (
-            db.read() as conn,
-            conn.execute(
-                "SELECT 1 FROM zims WHERE enabled=1 AND index_depth>=1 "
-                "AND index_status IN ('complete','running') LIMIT 1"
-            ) as cur,
-        ):
-            row = await cur.fetchone()
-        set_indexed_state(row is not None)
+        await reseed_indexed_state(db)
     except Exception:
         set_indexed_state(False)
 
@@ -1707,31 +1683,11 @@ def _resolve_profile(state: AppState, name: str) -> RetrievalProfile:
     return load_profile("lexical")  # type: ignore[return-value]
 
 
-class CLIPipelineRunner(PipelineRunner):
-    """Run one query through the real pipeline (CLI mirrors the API runner)."""
-
-    def __init__(self, state: AppState) -> None:
-        self._state = state
-
-    async def run(
-        self, profile: RetrievalProfile, query: str
-    ) -> tuple[tuple[str, ...], dict[str, object]]:
-        deps = Deps(
-            archives=self._state.registry,
-            settings=config.snapshot(),
-            capabilities=compute_capabilities(),
-            semaphore=asyncio.Semaphore(8),
-            encoders=self._state.encoders,
-            vectors=get_store(),
-        )
-        from vesta.retrieval.pipeline import NoCandidatesError
-
-        try:
-            result = await run_pipeline(profile=profile, query=query, scope=RetScope(), deps=deps)
-        except NoCandidatesError as exc:
-            return (), exc.trace.to_dict()
-        paths = tuple(c.path for c in result.cards)
-        return paths, result.trace.to_dict()
+# The API runner is the single pipeline-runner implementation (the CLI's
+# former near-verbatim clone could silently drift and break the
+# CLI↔API comparability of bench numbers). ``profile`` is accepted-and-ignored
+# so both historical call shapes work.
+CLIPipelineRunner = LivePipelineRunner
 
 
 # ── `vesta bench retrieval` ─────────────────────────────────────────────────────────

@@ -606,7 +606,7 @@ async def delete_index(zim_id: int, state: AppState = Depends(app_state)) -> dic
     un-indexed, and the dense source must skip it as "no index" rather than
     find a stale compat record over empty tables.
     """
-    from vesta.index import set_indexed_state
+    from vesta.index import reseed_indexed_state
     from vesta.vectors import get_store
 
     async with (
@@ -627,14 +627,7 @@ async def delete_index(zim_id: int, state: AppState = Depends(app_state)) -> dic
         )
     # Recompute the capability flag: if no other archive is indexed, VECTORS
     # turns off and dense profiles degrade to lexical (degrade-don't-fail).
-    async with (
-        state.db.read() as conn,
-        conn.execute(
-            "SELECT 1 FROM zims WHERE enabled=1 AND index_depth>=1 "
-            "AND index_status IN ('complete','running') LIMIT 1"
-        ) as cur,
-    ):
-        set_indexed_state(await cur.fetchone() is not None)
+    await reseed_indexed_state(state.db)
     return {"ok": True, "zim_id": zim_id, "depth": 0}
 
 
