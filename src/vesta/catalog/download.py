@@ -466,7 +466,6 @@ async def _download_one(
             # would silently drift onto any leftover tail a failed mirror left
             # behind (audit M5). The caller trims the .part to ``start``; the
             # explicit seek keeps the write offset honest regardless.
-            digest = hashlib.sha256()
             last_disk_check = last_disk_check_init
 
             with part_path.open("wb" if start == 0 else "r+b") as fh:
@@ -476,7 +475,6 @@ async def _download_one(
                     if job.cancelled():
                         raise asyncio.CancelledError
                     fh.write(chunk)
-                    digest.update(chunk)
                     written += len(chunk)
                     # Periodic free-space re-check.
                     if written - last_disk_check >= _DISK_CHECK_EVERY:
