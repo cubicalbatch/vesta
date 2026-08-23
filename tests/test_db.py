@@ -6,8 +6,14 @@ from pathlib import Path
 
 import pytest
 
+from vesta.db import migrations as db_migrations
 from vesta.db.connection import Database
-from vesta.db.migrations import available_migrations, current_version, run_migrations
+from vesta.db.migrations import (
+    MigrationError,
+    available_migrations,
+    current_version,
+    run_migrations,
+)
 
 EXPECTED_TABLES = {
     "zims",
@@ -116,6 +122,64 @@ async def test_re_running_migrations_is_noop(tmp_db_path: Path) -> None:
         again = await run_migrations(conn)
     await db.stop()
     assert again == []
+
+
+@pytest.mark.asyncio
+async def test_failed_migration_rolls_back_atomically(
+    tmp_db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A migration that fails mid-script must leave NOTHING behind (AUDIT_0822
+    M6): each script runs as one ``BEGIN IMMEDIATE … COMMIT`` transaction, so a
+    failure rolls back the earlier DDL *and* the version bump — the next boot
+    retries from a clean slate instead of dying forever on re-run against
+    half-applied DDL. Proven here in four beats: raises ``MigrationError``;
+    ``user_version`` unchanged; the script's own earlier ``CREATE TABLE`` is
+    gone; a corrected retry applies cleanly on the same connection."""
+    # Reach the real latest version first (real 0001-0013), THEN substitute
+    # one extra pending migration living in tmp_path — no packaged .sql is
+    # touched, and the runner's available_migrations() lookup resolves through
+    # module globals at call time, so the patch takes effect for pending runs.
+    db = Database(str(tmp_db_path), busy_timeout_ms=1000)
+    await db.start()
+    async with db.write() as conn:
+        applied = await run_migrations(conn)
+        assert len(applied) == 13
+        assert await current_version(conn) == 13
+
+        probe_sql = tmp_path / "0014_atomicity_probe.sql"
+        monkeypatch.setattr(
+            db_migrations,
+            "available_migrations",
+            lambda: [(14, "atomicity_probe", probe_sql)],
+        )
+
+        # First half succeeds (CREATE TABLE), second half errors mid-script.
+        probe_sql.write_text(
+            "CREATE TABLE m6_atomicity_probe (id INTEGER PRIMARY KEY);\n"
+            "INSERT INTO no_such_table VALUES (1);\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(MigrationError):
+            await run_migrations(conn)
+
+        assert await current_version(conn) == 13  # bump rolled back
+        async with conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='m6_atomicity_probe'"
+        ) as cur:
+            assert await cur.fetchone() is None  # partial DDL rolled back
+
+        # Corrected migration applies cleanly on the same boot/connection.
+        probe_sql.write_text(
+            "CREATE TABLE m6_atomicity_probe (id INTEGER PRIMARY KEY);\n"
+            "INSERT INTO m6_atomicity_probe VALUES (1);\n",
+            encoding="utf-8",
+        )
+        assert await run_migrations(conn) == [14]
+        assert await current_version(conn) == 14
+        async with conn.execute("SELECT COUNT(*) FROM m6_atomicity_probe") as cur:
+            row = await cur.fetchone()
+        assert row is not None and row[0] == 1
+    await db.stop()
 
 
 @pytest.mark.asyncio
