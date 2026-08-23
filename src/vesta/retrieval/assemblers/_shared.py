@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from vesta.retrieval.contracts import ConfidenceSignals, RetrievalResult, ScoredPassage, SourceCard
-from vesta.retrieval.dedup import DEFAULT_THRESHOLD, is_near_duplicate
+from vesta.retrieval.dedup import DEFAULT_THRESHOLD, NearDuplicateGate
 from vesta.retrieval.snippets import build_snippet
 
 if TYPE_CHECKING:
@@ -64,6 +64,9 @@ def apply_budget(
         rel_part = (score_floor_rel * top_score) if score_floor_rel is not None else 0.0
         floor = max(abs_part, rel_part)
 
+    dedup_gate: NearDuplicateGate | None = (
+        NearDuplicateGate(threshold=dedup_threshold) if dedup_threshold is not None else None
+    )
     selected: list[ScoredPassage] = []
     per_article: dict[str, int] = {}
     tokens_used = 0
@@ -71,9 +74,7 @@ def apply_budget(
         key = sp.passage.path
         if per_article.get(key, 0) >= max_per_article:
             continue
-        if dedup_threshold is not None and is_near_duplicate(
-            sp, selected, threshold=dedup_threshold
-        ):
+        if dedup_gate is not None and dedup_gate.is_near_duplicate(sp):
             continue
         if (
             floor is not None
@@ -86,6 +87,8 @@ def apply_budget(
         if passage_tokens + tokens_used > token_budget and selected:
             break
         selected.append(sp)
+        if dedup_gate is not None:
+            dedup_gate.accept(sp)
         per_article[key] = per_article.get(key, 0) + 1
         tokens_used += passage_tokens
     return selected

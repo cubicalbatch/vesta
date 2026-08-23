@@ -3,16 +3,23 @@
 
 from __future__ import annotations
 
+import random
+from itertools import pairwise
 from typing import Any
 
 import pytest
 
-from vesta.retrieval.assemblers._shared import apply_budget
+from vesta.retrieval.assemblers._shared import (
+    apply_budget,
+    apply_ordering,
+    build_result,
+)
 from vesta.retrieval.assemblers.diverse import Diverse
 from vesta.retrieval.assemblers.lead_boost import LeadBoost
 from vesta.retrieval.assemblers.section_window import SectionWindow
 from vesta.retrieval.assemblers.topk_budget import TopKBudget
 from vesta.retrieval.contracts import Budget, PreparedQuery, ScoredPassage
+from vesta.retrieval.dedup import DEFAULT_THRESHOLD
 from vesta.retrieval.registry import resolve
 from vesta.zim.types import Passage
 
@@ -693,3 +700,396 @@ def test_diverse_enforces_max_per_archive() -> None:
     zim_ids = [sp.passage.zim_id for sp in result.passages]
     assert zim_ids.count(1) == 1
     assert 2 in zim_ids
+
+
+# ── AUDIT_0822 P2: cached bigram/word-set paths vs naive references ──────────
+#
+# The near-dedup and MMR paths now precompute each passage's bigram/word set
+# once instead of re-splitting per candidate x selected pair (AUDIT_0822 P2).
+# Pure caching — selections must be IDENTICAL to the old logic. The reference
+# functions below are that old logic, verbatim (re-tokenizing inside every
+# comparison). Randomized corpora mix exact duplicates, near-duplicates around
+# the threshold, plain passages, and short/empty edge shapes; quantized scores
+# produce ties so both implementations' identical tie-breaking is exercised.
+
+
+_VOCAB = [
+    "time",
+    "person",
+    "year",
+    "way",
+    "day",
+    "thing",
+    "man",
+    "world",
+    "life",
+    "hand",
+    "part",
+    "child",
+    "eye",
+    "woman",
+    "place",
+    "work",
+    "week",
+    "case",
+    "point",
+    "government",
+    "company",
+    "number",
+    "group",
+    "problem",
+    "fact",
+]
+
+
+def _ref_bigrams(text: str) -> frozenset[tuple[str, str]]:
+    return frozenset(pairwise(text.lower().split()))
+
+
+def _ref_is_near_duplicate(
+    candidate: ScoredPassage,
+    selected: list[ScoredPassage],
+    *,
+    threshold: float,
+) -> bool:
+    cand_bg = _ref_bigrams(candidate.passage.text)
+    if len(cand_bg) < 4:
+        return False
+    for other in selected:
+        other_bg = _ref_bigrams(other.passage.text)
+        if not other_bg:
+            continue
+        union = cand_bg | other_bg
+        if not union:
+            continue
+        if len(cand_bg & other_bg) / len(union) > threshold:
+            return True
+    return False
+
+
+def _ref_similarity(a_text: str, b_text: str) -> float:
+    """Old string-based unigram Jaccard — both texts split on every call."""
+    wa = frozenset(a_text.lower().split())
+    wb = frozenset(b_text.lower().split())
+    if not wa or not wb:
+        return 0.0
+    union = wa | wb
+    return len(wa & wb) / len(union) if union else 0.0
+
+
+def _ref_apply_budget(
+    ranked: list[ScoredPassage],
+    *,
+    token_budget: int,
+    max_per_article: int,
+    dedup_threshold: float | None,
+    score_floor_abs: float | None = None,
+    score_floor_rel: float | None = None,
+    min_articles: int = 8,
+) -> list[ScoredPassage]:
+    floor: float | None = None
+    if score_floor_abs is not None or score_floor_rel is not None:
+        top_score = ranked[0].score if ranked else 0.0
+        abs_part = score_floor_abs if score_floor_abs is not None else 0.0
+        rel_part = (score_floor_rel * top_score) if score_floor_rel is not None else 0.0
+        floor = max(abs_part, rel_part)
+
+    selected: list[ScoredPassage] = []
+    per_article: dict[str, int] = {}
+    tokens_used = 0
+    for sp in ranked:
+        key = sp.passage.path
+        if per_article.get(key, 0) >= max_per_article:
+            continue
+        if dedup_threshold is not None and _ref_is_near_duplicate(
+            sp, selected, threshold=dedup_threshold
+        ):
+            continue
+        if (
+            floor is not None
+            and sp.score < floor
+            and key not in per_article
+            and len(per_article) >= min_articles
+        ):
+            continue
+        passage_tokens = len(sp.passage.text.split())
+        if passage_tokens + tokens_used > token_budget and selected:
+            break
+        selected.append(sp)
+        per_article[key] = per_article.get(key, 0) + 1
+        tokens_used += passage_tokens
+    return selected
+
+
+def _ref_diverse_assemble(
+    scored: list[ScoredPassage],
+    *,
+    token_budget: int,
+    max_per_article: int,
+    max_per_archive: int,
+    lambda_relevance: float,
+    threshold: float | None,
+) -> list[ScoredPassage]:
+    pool = sorted(scored, key=lambda sp: sp.score, reverse=True)
+    if not pool:
+        return []
+    max_score = pool[0].score or 1.0
+
+    selected: list[ScoredPassage] = []
+    per_article: dict[str, int] = {}
+    per_archive: dict[int, int] = {}
+    tokens_used = 0
+
+    while pool:
+        best: ScoredPassage | None = None
+        best_mmr = float("-inf")
+        for sp in pool:
+            if per_article.get(sp.passage.path, 0) >= max_per_article:
+                continue
+            if per_archive.get(sp.passage.zim_id, 0) >= max_per_archive:
+                continue
+            relevance = (sp.score / max_score) if max_score else 0.0
+            redundancy = max(
+                (_ref_similarity(sp.passage.text, s.passage.text) for s in selected),
+                default=0.0,
+            )
+            mmr = lambda_relevance * relevance - (1.0 - lambda_relevance) * redundancy
+            if mmr > best_mmr:
+                best_mmr = mmr
+                best = sp
+        if best is None:
+            break
+        pool.remove(best)
+        if threshold is not None and _ref_is_near_duplicate(best, selected, threshold=threshold):
+            continue
+        passage_tokens = len(best.passage.text.split())
+        if passage_tokens + tokens_used > token_budget and selected:
+            break
+        selected.append(best)
+        per_article[best.passage.path] = per_article.get(best.passage.path, 0) + 1
+        per_archive[best.passage.zim_id] = per_archive.get(best.passage.zim_id, 0) + 1
+        tokens_used += passage_tokens
+    return selected
+
+
+def _ref_section_window_assemble(
+    scored: list[ScoredPassage],
+    *,
+    token_budget: int,
+    max_per_article: int,
+    window: int,
+    threshold: float | None,
+) -> list[ScoredPassage]:
+    by_key: dict[tuple[int, str, int], ScoredPassage] = {
+        (sp.passage.zim_id, sp.passage.path, sp.passage.ordinal): sp for sp in scored
+    }
+    ranked = sorted(scored, key=lambda sp: sp.score, reverse=True)
+
+    expanded: list[ScoredPassage] = []
+    seen: set[tuple[int, str, int]] = set()
+    per_article: dict[str, int] = {}
+    tokens_used = 0
+
+    for sp in ranked:
+        key = (sp.passage.zim_id, sp.passage.path, sp.passage.ordinal)
+        if key in seen:
+            continue
+        if per_article.get(sp.passage.path, 0) >= max_per_article:
+            continue
+        if threshold is not None and _ref_is_near_duplicate(sp, expanded, threshold=threshold):
+            continue
+        group = [sp]
+        for delta in range(1, window + 1):
+            for direction in (-1, 1):
+                nk = (sp.passage.zim_id, sp.passage.path, sp.passage.ordinal + direction * delta)
+                neighbour = by_key.get(nk)
+                if neighbour is not None and neighbour.passage.breadcrumb == sp.passage.breadcrumb:
+                    group.append(neighbour)
+        group.sort(key=lambda g: g.passage.ordinal)
+        group_tokens = sum(len(g.passage.text.split()) for g in group)
+        if group_tokens + tokens_used > token_budget and expanded:
+            break
+        for g in group:
+            gkey = (g.passage.zim_id, g.passage.path, g.passage.ordinal)
+            if gkey in seen:
+                continue
+            seen.add(gkey)
+            expanded.append(g)
+        per_article[sp.passage.path] = per_article.get(sp.passage.path, 0) + 1
+        tokens_used += group_tokens
+    return expanded
+
+
+def _rand_text(rng: random.Random, lo: int, hi: int) -> str:
+    return " ".join(rng.choice(_VOCAB) for _ in range(rng.randint(lo, hi)))
+
+
+def _mutate(rng: random.Random, text: str) -> str:
+    """One or two word swaps — near-duplicate Jaccard around the threshold."""
+    out = text.split()
+    for _ in range(rng.choice([1, 2])):
+        out[rng.randrange(len(out))] = rng.choice(_VOCAB)
+    return " ".join(out)
+
+
+def _random_corpus(rng: random.Random) -> list[ScoredPassage]:
+    """Articles with several same-section passages each; texts are exact
+    duplicates of the article base, mutations of it (near-duplicates), or
+    plain draws. Quantized scores force rank ties. Edge shapes (empty/short
+    text, a cross-archive exact duplicate) are appended deterministically so
+    every seed exercises them."""
+    scored: list[ScoredPassage] = []
+    ordinals: dict[str, int] = {}
+
+    def add(text: str, *, path: str, score: float, zim_id: int, breadcrumb: str) -> None:
+        o = ordinals.get(path, 0)
+        ordinals[path] = o + 1
+        scored.append(
+            _sp(text, path=path, score=score, ordinal=o, breadcrumb=breadcrumb, zim_id=zim_id)
+        )
+
+    for a in range(rng.randint(3, 7)):
+        path = f"art{a}"
+        zim_id = rng.choice([1, 2])
+        base = _rand_text(rng, 8, 24)
+        for k in range(rng.randint(1, 5)):
+            roll = rng.random()
+            if roll < 0.35:
+                text = base  # exact duplicate
+            elif roll < 0.65:
+                text = _mutate(rng, base)  # near-duplicate
+            else:
+                text = _rand_text(rng, 2, 18)  # plain
+            score = rng.choice([0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+            add(text, path=path, score=score, zim_id=zim_id, breadcrumb=f"Art{a} > Sec{k // 2}")
+
+    # Deterministic edge shapes, independent of the rng rolls.
+    add("", path="edge_empty", score=0.5, zim_id=1, breadcrumb="Edge")
+    add("tiny", path="edge_short", score=0.5, zim_id=1, breadcrumb="Edge")
+    anchor = _rand_text(rng, 10, 20)
+    add(anchor, path="edge_dup_a", score=0.5, zim_id=1, breadcrumb="Edge")
+    add(anchor, path="edge_dup_b", score=0.5, zim_id=2, breadcrumb="Edge")
+
+    rng.shuffle(scored)
+    return scored
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_selections_identical_to_naive_reference_randomized(seed: int) -> None:
+    rng = random.Random(1000 + seed)
+    corpus = _random_corpus(rng)
+    q = _pq()
+    token_budget = rng.choice([40, 150, 500])
+    max_per_article = rng.choice([1, 2])
+    budget = Budget(token_total=100_000, max_per_article=100)
+    min_articles = rng.choice([1, 8])
+
+    # apply_budget — the shared selection core behind topk_budget AND lead_boost.
+    for dedup_threshold in (DEFAULT_THRESHOLD, None):
+        for floor_abs, floor_rel in ((None, None), (0.02, 0.02)):
+            ranked = sorted(corpus, key=lambda sp: sp.score, reverse=True)
+            got = apply_budget(
+                ranked,
+                token_budget=token_budget,
+                max_per_article=max_per_article,
+                dedup_threshold=dedup_threshold,
+                score_floor_abs=floor_abs,
+                score_floor_rel=floor_rel,
+                min_articles=min_articles,
+            )
+            want = _ref_apply_budget(
+                ranked,
+                token_budget=token_budget,
+                max_per_article=max_per_article,
+                dedup_threshold=dedup_threshold,
+                score_floor_abs=floor_abs,
+                score_floor_rel=floor_rel,
+                min_articles=min_articles,
+            )
+            assert got == want
+
+    # topk_budget — full result (passages, cards, confidence), not just picks.
+    ordering = rng.choice(["score_desc", "edges"])
+    topk = TopKBudget(
+        params=TopKBudget.Params(
+            budget_tokens=token_budget,
+            max_per_article=max_per_article,
+            dedup="near_exact",
+            ordering=ordering,
+        )
+    )
+    got_result = topk.assemble(list(corpus), budget, q, tr=None)  # type: ignore[arg-type]
+    ref_ranked = sorted(corpus, key=lambda sp: sp.score, reverse=True)
+    ref_selected = _ref_apply_budget(
+        ref_ranked,
+        token_budget=token_budget,
+        max_per_article=max_per_article,
+        dedup_threshold=DEFAULT_THRESHOLD,
+    )
+    want_result = build_result(
+        ref_selected,
+        apply_ordering(ref_selected, ordering),
+        q.terms,
+        None,  # type: ignore[arg-type]
+        source="topk_budget",
+    )
+    assert got_result == want_result
+
+    # diverse — MMR grid over lambda, dedup, and archive cap.
+    max_per_archive = rng.choice([1, 4])
+    for lambda_relevance in (0.0, 0.7, 1.0):
+        for dedup_on in (True, False):
+            diverse = Diverse(
+                params=Diverse.Params(
+                    budget_tokens=token_budget,
+                    max_per_article=max_per_article,
+                    max_per_archive=max_per_archive,
+                    dedup="near_exact" if dedup_on else "none",
+                    lambda_relevance=lambda_relevance,
+                )
+            )
+            got_result = diverse.assemble(list(corpus), budget, q, tr=None)  # type: ignore[arg-type]
+            ref_selected = _ref_diverse_assemble(
+                corpus,
+                token_budget=token_budget,
+                max_per_article=max_per_article,
+                max_per_archive=max_per_archive,
+                lambda_relevance=lambda_relevance,
+                threshold=DEFAULT_THRESHOLD if dedup_on else None,
+            )
+            want_result = build_result(
+                ref_selected,
+                apply_ordering(ref_selected, "score_desc"),
+                q.terms,
+                None,  # type: ignore[arg-type]
+                source="diverse",
+            )
+            assert got_result == want_result
+
+    # section_window — window expansion feeds neighbours into later dedup checks.
+    for window in (0, 1, 2):
+        for dedup_on in (True, False):
+            section_window = SectionWindow(
+                params=SectionWindow.Params(
+                    budget_tokens=token_budget,
+                    max_per_article=max_per_article,
+                    dedup="near_exact" if dedup_on else "none",
+                    window=window,
+                )
+            )
+            got_result = section_window.assemble(list(corpus), budget, q, tr=None)  # type: ignore[arg-type]
+            ref_selected = _ref_section_window_assemble(
+                corpus,
+                token_budget=token_budget,
+                max_per_article=max_per_article,
+                window=window,
+                threshold=DEFAULT_THRESHOLD if dedup_on else None,
+            )
+            want_result = build_result(
+                ref_selected,
+                apply_ordering(ref_selected, "score_desc"),
+                q.terms,
+                None,  # type: ignore[arg-type]
+                source="section_window",
+            )
+            assert got_result == want_result

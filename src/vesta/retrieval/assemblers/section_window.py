@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from vesta.config.capabilities import Capability
 from vesta.retrieval.assemblers._shared import apply_ordering, build_result
 from vesta.retrieval.contracts import Budget, PreparedQuery, RetrievalResult, ScoredPassage
-from vesta.retrieval.dedup import DEFAULT_THRESHOLD, is_near_duplicate
+from vesta.retrieval.dedup import DEFAULT_THRESHOLD, NearDuplicateGate
 from vesta.retrieval.registry import register
 
 if TYPE_CHECKING:
@@ -70,6 +70,7 @@ class SectionWindow:
 
         expanded: list[ScoredPassage] = []
         seen: set[_PassageKey] = set()
+        dedup_gate = NearDuplicateGate(threshold) if threshold is not None else None
         per_article: dict[str, int] = {}
         tokens_used = 0
 
@@ -79,7 +80,7 @@ class SectionWindow:
                 continue
             if per_article.get(sp.passage.path, 0) >= max_per_article:
                 continue
-            if threshold is not None and is_near_duplicate(sp, expanded, threshold=threshold):
+            if dedup_gate is not None and dedup_gate.is_near_duplicate(sp):
                 continue
             group = self._window_group(sp, by_key)
             group_tokens = sum(len(g.passage.text.split()) for g in group)
@@ -91,6 +92,10 @@ class SectionWindow:
                     continue
                 seen.add(gkey)
                 expanded.append(g)
+                # neighbours are part of the selection later winners are
+                # deduped against, so the gate tracks them too.
+                if dedup_gate is not None:
+                    dedup_gate.accept(g)
             per_article[sp.passage.path] = per_article.get(sp.passage.path, 0) + 1
             tokens_used += group_tokens
 

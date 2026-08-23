@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from vesta.config.capabilities import Capability
 from vesta.retrieval.assemblers._shared import apply_ordering, build_result
 from vesta.retrieval.contracts import Budget, PreparedQuery, RetrievalResult, ScoredPassage
-from vesta.retrieval.dedup import DEFAULT_THRESHOLD, is_near_duplicate
+from vesta.retrieval.dedup import DEFAULT_THRESHOLD, NearDuplicateGate
 from vesta.retrieval.registry import register
 
 if TYPE_CHECKING:
@@ -36,12 +36,13 @@ def _word_set(text: str) -> frozenset[str]:
     return frozenset(text.lower().split())
 
 
-def _similarity(a: str, b: str) -> float:
-    wa, wb = _word_set(a), _word_set(b)
-    if not wa or not wb:
+def _similarity(a: frozenset[str], b: frozenset[str]) -> float:
+    """Word-unigram Jaccard over precomputed word sets (each text is split
+    exactly once per ``assemble`` call, not once per candidate x selected pair)."""
+    if not a or not b:
         return 0.0
-    union = wa | wb
-    return len(wa & wb) / len(union) if union else 0.0
+    union = a | b
+    return len(a & b) / len(union) if union else 0.0
 
 
 @register("context_assembler", "diverse")
@@ -81,21 +82,24 @@ class Diverse:
         max_score = pool[0].score or 1.0
 
         selected: list[ScoredPassage] = []
+        selected_sets: list[frozenset[str]] = []
+        dedup_gate = NearDuplicateGate(threshold) if threshold is not None else None
         per_article: dict[str, int] = {}
         per_archive: dict[int, int] = {}
         tokens_used = 0
+        pool_sets = [_word_set(sp.passage.text) for sp in pool]
 
         while pool:
-            best: ScoredPassage | None = None
+            best_idx: int | None = None
             best_mmr = float("-inf")
-            for sp in pool:
+            for i, (sp, sp_set) in enumerate(zip(pool, pool_sets, strict=True)):
                 if per_article.get(sp.passage.path, 0) >= max_per_article:
                     continue
                 if per_archive.get(sp.passage.zim_id, 0) >= self._params.max_per_archive:
                     continue
                 relevance = (sp.score / max_score) if max_score else 0.0
                 redundancy = max(
-                    (_similarity(sp.passage.text, s.passage.text) for s in selected),
+                    (_similarity(sp_set, s_set) for s_set in selected_sets),
                     default=0.0,
                 )
                 mmr = (
@@ -104,16 +108,23 @@ class Diverse:
                 )
                 if mmr > best_mmr:
                     best_mmr = mmr
-                    best = sp
-            if best is None:
+                    best_idx = i
+            if best_idx is None:
                 break
-            pool.remove(best)
-            if threshold is not None and is_near_duplicate(best, selected, threshold=threshold):
+            # Strict ``>`` above means the scan lands on the FIRST occurrence
+            # of the winning MMR — exactly the element ``list.remove`` would
+            # drop even among equal-valued passages.
+            best = pool.pop(best_idx)
+            best_set = pool_sets.pop(best_idx)
+            if dedup_gate is not None and dedup_gate.is_near_duplicate(best):
                 continue
             passage_tokens = len(best.passage.text.split())
             if passage_tokens + tokens_used > token_budget and selected:
                 break
             selected.append(best)
+            selected_sets.append(best_set)
+            if dedup_gate is not None:
+                dedup_gate.accept(best)
             per_article[best.passage.path] = per_article.get(best.passage.path, 0) + 1
             per_archive[best.passage.zim_id] = per_archive.get(best.passage.zim_id, 0) + 1
             tokens_used += passage_tokens
