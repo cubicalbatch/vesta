@@ -34,7 +34,6 @@ Protocols defined here (or in eval siblings). The composition root
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -298,36 +297,6 @@ class BenchRunRecord:
             "metrics_json": dict(self.metrics_json),
         }
 
-    @classmethod
-    def from_dict(cls, d: Mapping[str, object]) -> BenchRunRecord:
-        cfg = d.get("config_json", {})
-        metrics = d.get("metrics_json", {})
-        cal = d.get("calibration")
-        rid = d.get("id")
-        return cls(
-            id=int(rid) if isinstance(rid, int) else 0,
-            run_group=str(d.get("run_group") or ""),
-            label=str(d.get("label") or ""),
-            started_at=str(d.get("started_at") or ""),
-            finished_at=str(d["finished_at"]) if d.get("finished_at") is not None else None,
-            status=str(d.get("status") or "running"),
-            dataset_name=str(d.get("dataset_name") or ""),
-            dataset_hash=str(d.get("dataset_hash") or ""),
-            subset_hash=str(d.get("subset_hash") or ""),
-            system=str(d.get("system") or ""),
-            profile_name=str(d.get("profile_name") or ""),
-            profile_hash=str(d.get("profile_hash") or ""),
-            answer_model=str(d.get("answer_model") or ""),
-            judge_model=str(d.get("judge_model") or ""),
-            scope=str(d.get("scope") or ""),
-            trusted=bool(d.get("trusted") or False),
-            calibration=float(cal) if isinstance(cal, int | float) else None,
-            judge_shares_endpoint=bool(d.get("judge_shares_endpoint") or False),
-            abort_reason=str(d.get("abort_reason") or ""),
-            config_json=dict(cfg) if isinstance(cfg, Mapping) else {},
-            metrics_json=dict(metrics) if isinstance(metrics, Mapping) else {},
-        )
-
 
 @dataclass(frozen=True)
 class BenchQuestionResult:
@@ -377,60 +346,6 @@ class BenchQuestionResult:
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
         }
-
-    @classmethod
-    def from_dict(cls, d: Mapping[str, object]) -> BenchQuestionResult:
-        raw_paths = d.get("retrieved_paths")
-        if isinstance(raw_paths, str):
-            try:
-                raw_paths = json.loads(raw_paths)
-            except (json.JSONDecodeError, TypeError):
-                raw_paths = []
-        paths: tuple[str, ...] = (
-            tuple(str(p) for p in raw_paths) if isinstance(raw_paths, list) else ()
-        )
-        raw_trace = d.get("trace_json") or d.get("trace")
-        trace_obj: dict[str, object] | None = None
-        if isinstance(raw_trace, Mapping):
-            trace_obj = dict(raw_trace)
-        elif isinstance(raw_trace, str):
-            try:
-                parsed = json.loads(raw_trace)
-                if isinstance(parsed, Mapping):
-                    trace_obj = dict(parsed)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        shr = d.get("source_hit_rank")
-        sfc = d.get("sub_fact_coverage")
-        err = d.get("error")
-        run_id = d.get("run_id")
-        scov_raw = d.get("source_coverage")
-        rounds_raw = d.get("rounds")
-        latency_raw = d.get("latency_ms")
-        in_tok_raw = d.get("input_tokens")
-        out_tok_raw = d.get("output_tokens")
-        return cls(
-            run_id=int(run_id) if isinstance(run_id, int) else 0,
-            question_id=str(d.get("question_id") or ""),
-            capability=str(d.get("capability") or ""),
-            difficulty=str(d.get("difficulty") or ""),
-            question_text=str(d.get("question_text") or ""),
-            expected_answer=str(d.get("expected_answer") or ""),
-            answer_text=str(d.get("answer_text") or ""),
-            abstained=bool(d.get("abstained") or False),
-            verdict=str(d.get("verdict") or Verdict.PENDING.value),
-            verdict_reason=str(d.get("verdict_reason") or ""),
-            source_hit_rank=int(shr) if isinstance(shr, int) and shr is not None else None,
-            source_coverage=float(scov_raw) if isinstance(scov_raw, int | float) else 0.0,
-            sub_fact_coverage=float(sfc) if isinstance(sfc, int | float) else None,
-            retrieved_paths=paths,
-            rounds=int(rounds_raw) if isinstance(rounds_raw, int) else 0,
-            latency_ms=float(latency_raw) if isinstance(latency_raw, int | float) else 0.0,
-            error=str(err) if err is not None else None,
-            trace=trace_obj,
-            input_tokens=int(in_tok_raw) if isinstance(in_tok_raw, int) else 0,
-            output_tokens=int(out_tok_raw) if isinstance(out_tok_raw, int) else 0,
-        )
 
 
 # ── Compare (per-question diff across two runs) ────────────────────────────
