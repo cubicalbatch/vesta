@@ -209,3 +209,47 @@ async def test_download_accepts_manual_url_when_catalog_empty(
 async def test_download_unknown_entry_id_404(app_client: httpx.AsyncClient) -> None:
     resp = await app_client.post("/api/zims/download", json={"entry_id": "urn:uuid:nope"})
     assert resp.status_code == 404
+
+
+# ── POST /api/zims/download — filename hygiene (audit M2) ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_download_rejects_unsafe_names_before_submitting(
+    app_client: httpx.AsyncClient,
+) -> None:
+    """Absolute paths, traversal, and separators are rejected with a 400 before
+    any job row exists — ``zims_dir / name`` would otherwise escape the zims
+    dir (pathlib lets absolute paths win and ``..`` climb out)."""
+    bad_names = (
+        "/etc/evil.zim",  # absolute wins outright in pathlib
+        "../evil",
+        "sub/dir/evil",  # nested names are rejected, not rewritten
+        "a\\b",  # backslash separator
+        "..evil.zim",  # contains ..
+        ".zim",  # empty stem
+    )
+    for bad in bad_names:
+        resp = await app_client.post(
+            "/api/zims/download",
+            json={"url": "https://example.com/x.zim.meta4", "name": bad},
+        )
+        assert resp.status_code == 400, bad
+    jobs = (await app_client.get("/api/jobs")).json()["jobs"]
+    assert jobs == []
+
+
+@pytest.mark.asyncio
+async def test_download_validates_name_even_with_entry_id(
+    app_client: httpx.AsyncClient,
+) -> None:
+    """An explicit name overrides the catalog entry's — the override must pass
+    the same guard."""
+    await _seed_catalog(app_client)
+    resp = await app_client.post(
+        "/api/zims/download",
+        json={"entry_id": "urn:uuid:fff", "name": "../../evil"},
+    )
+    assert resp.status_code == 400
+    jobs = (await app_client.get("/api/jobs")).json()["jobs"]
+    assert jobs == []

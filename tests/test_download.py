@@ -41,11 +41,20 @@ from vesta.jobs.types import RESUME_CHECKPOINT_KEY
 
 class _RangeHandler(BaseHTTPRequestHandler):
     serve_bytes: bytes = b""  # set per server instance via subclass attribute
+    serve_meta4: str | None = None  # when set, *.meta4 paths get this XML
 
     def log_message(self, format: str, *args: object) -> None:  # silence
         pass
 
     def do_GET(self) -> None:
+        if self.serve_meta4 is not None and self.path.endswith(".meta4"):
+            body = self.serve_meta4.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/xml")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         data = self.serve_bytes
         total = len(data)
         range_header = self.headers.get("Range")
@@ -77,16 +86,22 @@ def _free_port() -> int:
 
 
 class _Server:
-    """A threaded HTTP server serving fixed bytes with range support."""
+    """A threaded HTTP server serving fixed bytes (and optionally metalink
+    XML on ``*.meta4`` paths, with ``{base_url}`` placeholders filled in)
+    with range support."""
 
-    def __init__(self, data: bytes) -> None:
+    def __init__(self, data: bytes, meta4: str | None = None) -> None:
         self.data = data
 
         class Handler(_RangeHandler):
             pass
 
         Handler.serve_bytes = data
+        if meta4 is not None:
+            Handler.serve_meta4 = meta4
         self._srv = ThreadingHTTPServer(("127.0.0.1", _free_port()), Handler)
+        if meta4 is not None and "{base_url}" in meta4:
+            Handler.serve_meta4 = meta4.format(base_url=self.base_url)
         self._thread = threading.Thread(target=self._srv.serve_forever, daemon=True)
 
     @property
@@ -416,3 +431,98 @@ async def test_model_job_writes_bare_basename_to_final_and_part_paths(
     # The .part was atomically renamed away.
     assert not (models_dir / "my.model.gguf.part").exists()
     assert ready == [final]
+
+
+# ── the download_zim sink (vesta.catalog.download, audit M2) ────────────────
+
+
+async def test_job_rejects_hostile_user_names_before_touching_disk(
+    zims_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /api/jobs forwards arbitrary params to any registered type, so the
+    job itself must refuse anything that is not a bare ``*.zim`` basename —
+    pathlib would let absolute paths win and ``..`` climb out."""
+    canary = tmp_path / "canary.txt"
+    canary.write_text("safe")
+    monkeypatch.setenv("download.mirror_policy", "first")  # no metalink fetch
+    for bad in ("/etc/passwd.zim", "../../escaped", "sub/dir/x", "..evil"):
+        with pytest.raises(DownloadError, match="unsafe ZIM filename"):
+            await _run_job(
+                zims_dir,
+                {"url": "https://example.com/x.zim.meta4", "name": bad},
+            )
+    assert canary.read_text() == "safe"
+    assert list(zims_dir.iterdir()) == []
+
+
+async def test_hostile_metalink_name_fails_job_and_writes_nothing(
+    zims_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A metalink ``<file name>`` is REMOTE-controlled data: a traversal name
+    there must fail the job cleanly with the offending value named — never
+    silently rewritten, never written outside the zims dir."""
+    payload = os.urandom(512)
+    meta4 = (
+        '<?xml version="1.0"?><metalink xmlns="urn:ietf:params:xml:ns:metalink">'
+        '<file name="../../evil.zim">'
+        '<url priority="1">{base_url}/payload</url></file></metalink>'
+    )
+    server = _Server(payload, meta4=meta4)
+    server.start()
+    monkeypatch.setenv("download.min_free_space_gb", "0")
+    try:
+        with pytest.raises(DownloadError, match="unsafe ZIM filename") as excinfo:
+            await _run_job(
+                zims_dir,
+                {"url": f"{server.base_url}/x.zim.meta4", "name": "benign"},
+            )
+    finally:
+        server.stop()
+    # The error names the offending value.
+    assert "../../evil.zim" in str(excinfo.value)
+    # Nothing landed in the zims dir or escaped it.
+    assert list(zims_dir.iterdir()) == []
+    assert not list(tmp_path.rglob("evil*"))
+    assert not list(tmp_path.rglob("*.part"))
+
+
+async def test_metalink_name_downloads_to_expected_path(
+    zims_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The benign path is unchanged: a well-formed suffix-less metalink name
+    lands as ``<name>.zim`` (appended exactly once) inside the zims dir."""
+    payload = os.urandom(1024)
+    sha = hashlib.sha256(payload).hexdigest()
+    registered: list[Path] = []
+
+    async def register(path: object) -> None:
+        registered.append(Path(path))  # type: ignore[arg-type]
+
+    meta4 = (
+        '<?xml version="1.0"?><metalink xmlns="urn:ietf:params:xml:ns:metalink">'
+        '<file name="wikimed_en_all_maxi_2026-08">'
+        f"<size>{len(payload)}</size>"
+        f'<hash type="sha-256">{sha}</hash>'
+        '<url priority="1">{base_url}/payload</url></file></metalink>'
+    )
+    server = _Server(payload, meta4=meta4)
+    server.start()
+    monkeypatch.setenv("download.min_free_space_gb", "0")
+    try:
+        await _run_job(
+            zims_dir,
+            {"url": f"{server.base_url}/x.zim.meta4", "name": "ignored_stem"},
+            register=register,
+        )
+    finally:
+        server.stop()
+
+    final = zims_dir / "wikimed_en_all_maxi_2026-08.zim"  # suffix appended once
+    assert final.read_bytes() == payload
+    assert not (zims_dir / "wikimed_en_all_maxi_2026-08.zim.part").exists()
+    assert registered == [final]

@@ -30,6 +30,7 @@ from pydantic import BaseModel
 from vesta.api.state import AppState, app_state
 from vesta.catalog import CATALOG_ENABLED
 from vesta.catalog.curated import curated_entries, curated_warning_for
+from vesta.catalog.download import safe_zim_basename
 from vesta.catalog.opds import (
     CatalogFilter,
     catalog_languages,
@@ -273,6 +274,14 @@ async def download_zim(
         raise HTTPException(status_code=400, detail="url or entry_id required")
     if not name:
         raise HTTPException(status_code=400, detail="name required (or supply entry_id)")
+
+    # Validate BEFORE anything is submitted (audit M2): a traversal name here
+    # used to land in the job's ``zims_dir / <name>`` write path. User input
+    # is refused with a 400, never rewritten.
+    try:
+        safe_zim_basename(name, append_suffix=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid zim filename") from exc
 
     params: dict[str, Any] = {"url": url, "name": name}
     if size:

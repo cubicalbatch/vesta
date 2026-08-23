@@ -71,6 +71,33 @@ class DownloadError(RuntimeError):
     """Raised when a download cannot complete. The runner records it on the job."""
 
 
+def safe_zim_basename(filename: str, *, append_suffix: bool = False) -> str:
+    """Validate that ``filename`` is a bare ``*.zim`` name that cannot escape
+    the zims dir, returning it unchanged.
+
+    The single guard behind every path that turns an untrusted filename into
+    ``zims_dir / <name>`` (pathlib lets absolute paths win and ``..`` climb
+    out). With ``append_suffix=True`` a bare name gets ``.zim`` appended first,
+    so catalog/manual-entry stems stay friendly; otherwise the name must
+    already end in ``.zim``. Rejects path separators, ``..``, absolute paths,
+    and empty stems. The filename can arrive from REMOTE metalink XML
+    (``<file name>``), where interactive rejection is impossible — the job
+    translates :class:`ValueError` into a :class:`DownloadError` (fail closed,
+    never silently rewrite).
+    """
+    name = f"{filename}.zim" if append_suffix and not filename.endswith(".zim") else filename
+    if (
+        not name.endswith(".zim")
+        or not name.removesuffix(".zim")
+        or "/" in name
+        or "\\" in name
+        or ".." in name
+        or Path(name).name != name
+    ):
+        raise ValueError(f"unsafe ZIM filename: {filename!r}")
+    return name
+
+
 # ── metalink parsing ────────────────────────────────────────────────────────
 
 
@@ -139,6 +166,22 @@ def _direct_url_from_meta4(meta4_url: str) -> str:
     return meta4_url[:-6] if meta4_url.endswith(".meta4") else meta4_url
 
 
+def _validated_filename(info: MetalinkInfo, name: str) -> str:
+    """Turn the resolved filename into a bare ``*.zim`` basename or fail the job.
+
+    Last-line defense (audit M2): the name comes from EITHER the request
+    params or the REMOTE metalink XML (``<file name>``) — nothing touches disk
+    until it is a bare basename under the zims dir. A hostile remote name
+    cannot be rejected interactively, so this raises :class:`DownloadError`
+    rather than silently rewriting it (two rewritten names could collide onto
+    one path).
+    """
+    try:
+        return safe_zim_basename(info.filename or name, append_suffix=True)
+    except ValueError as exc:
+        raise DownloadError(str(exc)) from exc
+
+
 # ── the job ─────────────────────────────────────────────────────────────────
 
 
@@ -146,8 +189,10 @@ class DownloadZimJob:
     """Registered as job type ``download_zim``.
 
     Params: ``url`` (the catalog acquisition / ``.meta4`` URL), ``name`` (the
-    filename stem to write under ``data/zims/``), optional ``title``,
-    ``sha256``, ``size`` (fallbacks when the metalink can't be fetched).
+    filename stem to write under ``data/zims/`` — validated by
+    :func:`safe_zim_basename` together with the metalink's own ``<file name>``;
+    anything unsafe fails the job), optional ``title``, ``sha256``, ``size``
+    (fallbacks when the metalink can't be fetched).
     """
 
     name = "download_zim"
@@ -173,9 +218,7 @@ async def _run_download(job: JobHandle, params: Mapping[str, Any]) -> None:
     size = info.size or fallback_size
     sha256 = info.sha256 or fallback_sha
     mirrors = info.mirrors or (_direct_url_from_meta4(meta4_url),)
-    filename = info.filename or f"{name}.zim"
-    if not filename.endswith(".zim"):
-        filename = f"{filename}.zim"
+    filename = _validated_filename(info, name)
 
     # 2. Resume: read the checkpoint written at the last successful chunk flush.
     resume = params.get(RESUME_CHECKPOINT_KEY)
@@ -468,4 +511,5 @@ __all__ = [
     "DownloadZimJob",
     "MetalinkInfo",
     "parse_metalink",
+    "safe_zim_basename",
 ]
