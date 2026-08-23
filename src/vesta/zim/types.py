@@ -77,10 +77,6 @@ class EntryFlags(IntFlag):
     DISAMBIGUATION = 1 << 2  # ".mw-disambig" / "(disambiguation)"
     LIST = 1 << 3  # "List of" / "Timeline of" / "Index of" / "Glossary of"
     STUB = 1 << 4  # extracted text below ~1 200 chars
-    MEDIA = 1 << 5  # text harvested from a non-HTML sidecar (vtt/plain/markdown) —
-    # set by the mimetype-aware extractor so consumers can tell a transcript
-    # (or media-ZIM stub) from a real article body. Never in _SKIP_FLAGS:
-    # sidecar text IS the indexable content for media/SPA ZIMs.
 
 
 @dataclass(frozen=True)

@@ -306,10 +306,7 @@ def _single_section(text: str) -> tuple[Section, ...]:
 
 def extract_entry(raw: RawEntry) -> ExtractedArticle:
     """Mimetype-aware extraction: HTML → resiliparse; vtt/plain/markdown/pdf →
-    plain text. Returns an :class:`ExtractedArticle` whose ``flags`` carries
-    :attr:`EntryFlags.MEDIA` for non-HTML sources so consumers can tell a
-    transcript/notes sidecar (or a nautiluszim document-library PDF) from a
-    real article body.
+    plain text with a single implicit lead section.
 
     HTML soft/hard redirects are handled upstream by ``LocalArchive.extract``
     (which short-circuits to empty text); this function only runs for entries
@@ -328,12 +325,12 @@ def extract_entry(raw: RawEntry) -> ExtractedArticle:
     elif mime.startswith("application/pdf"):
         text = _extract_pdf(raw.content)
     else:
-        # Not a text-bearing entry — nothing to index. No MEDIA flag (this isn't
-        # harvested text), empty text drops out at the keep-filter.
+        # Not a text-bearing entry — nothing to index; empty text drops out at
+        # the keep-filter.
         return ExtractedArticle(
             path=raw.path, title=title, text="", sections=(), flags=EntryFlags.NONE
         )
-    flags = EntryFlags.MEDIA
+    flags = EntryFlags.NONE
     if len(text) < STUB_CHAR_THRESHOLD:
         flags |= EntryFlags.STUB
     return ExtractedArticle(

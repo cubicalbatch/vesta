@@ -11,7 +11,7 @@ from itertools import pairwise
 import pytest
 
 from vesta.zim.extract import _extract_pdf, extract_article, extract_entry
-from vesta.zim.types import EntryFlags, RawEntry
+from vesta.zim.types import RawEntry
 
 _SAMPLE_HTML = """<html><body>
 <h1>Albert Einstein</h1>
@@ -72,42 +72,37 @@ def _raw(mimetype: str, content: bytes, *, path: str = "x", title: str = "x") ->
 
 
 @pytest.mark.parametrize(
-    ("mimetype", "content", "expected_needles", "unexpected_needles", "has_media_flag"),
+    ("mimetype", "content", "expected_needles", "unexpected_needles"),
     [
         (
             "text/vtt",
             b"WEBVTT\n\n00:00:00.000 --> 00:01:39.000\nIntro\n",
             ["Intro"],
             ["WEBVTT", "00:00", "-->"],
-            True,
         ),
         (
             "text/plain",
             b"a   b\n   c\n",
             ["a b", "c"],
             [],
-            True,
         ),
         (
             "text/markdown",
             b"# Title\n**bold** [t](u)\n",
             ["Title", "bold"],
             ["**", "[](u)", "[t]"],
-            True,
         ),
         (
             "text/html",
             b"<html><body><h1>X</h1><p>Hello world.</p></body></html>",
             ["Hello world"],
             [],
-            False,
         ),
         (
             "application/json",
             b'{"k": 1}',
             [],
             [],
-            False,
         ),
     ],
 )
@@ -116,7 +111,6 @@ def test_extract_entry_mimetype_dispatch(
     content: bytes,
     expected_needles: list[str],
     unexpected_needles: list[str],
-    has_media_flag: bool,
 ) -> None:
     article = extract_entry(_raw(mimetype, content, title="intro"))
     if mimetype == "application/json":
@@ -125,10 +119,6 @@ def test_extract_entry_mimetype_dispatch(
         assert needle in article.text
     for needle in unexpected_needles:
         assert needle not in article.text
-    if has_media_flag:
-        assert EntryFlags.MEDIA in article.flags
-    else:
-        assert EntryFlags.MEDIA not in article.flags
 
 
 def test_extract_entry_non_html_single_implicit_section() -> None:
@@ -184,9 +174,9 @@ def test_extract_pdf_yields_text_from_synthesized_pdf() -> None:
     assert "Water Treatment" in text
 
 
-def test_extract_entry_pdf_dispatch_sets_media_flag_and_single_section() -> None:
+def test_extract_entry_pdf_dispatch_yields_single_section() -> None:
     """``application/pdf`` routes through ``_extract_pdf`` and, like the other
-    non-HTML text sources, carries ``MEDIA`` + one implicit lead section."""
+    non-HTML text sources, gets one implicit lead section."""
     article = extract_entry(
         _raw(
             "application/pdf",
@@ -196,7 +186,6 @@ def test_extract_entry_pdf_dispatch_sets_media_flag_and_single_section() -> None
         )
     )
     assert "Giardia" in article.text
-    assert EntryFlags.MEDIA in article.flags
     assert len(article.sections) == 1
     assert article.sections[0].char_start == 0
     assert article.sections[0].char_end == len(article.text)
