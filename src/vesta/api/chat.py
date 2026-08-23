@@ -51,14 +51,15 @@ router = APIRouter(prefix="/api", tags=["chat"])
 
 
 class ChatRequest(BaseModel):
-    """``POST /api/chat`` body. Mirrors ``GET /api/answer``'s query params plus
-    ``conversation_id`` (null ⇒ start a new conversation)."""
+    """``POST /api/chat`` body. Mirrors ``GET /api/answer``'s retrieval-relevant
+    query params plus ``conversation_id`` (null ⇒ start a new conversation).
+    (The answer strategy is not client-selectable here: this endpoint always
+    runs the streaming agent.)"""
 
     query: str
     conversation_id: int | None = None
     scope: str | None = None
     profile: str | None = None
-    strategy: str | None = None
 
 
 class ConversationSummary(BaseModel):
