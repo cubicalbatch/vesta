@@ -2151,7 +2151,207 @@ def _budget_audit(ctx: _TurnContext) -> dict[str, Any]:
     return d
 
 
-async def run_one_turn(  # noqa: PLR0912, PLR0915
+@dataclass
+class _TurnRecoveryState:
+    """Mutable outcome state for the shared turn-recovery phase.
+
+    Both drivers (:func:`run_one_turn` and :func:`iter_agent_turn_events`) run
+    their first model attempt themselves (in-process ``agent.run`` vs streamed
+    ``run_stream`` — deliberately different), classify a crash, then hand the
+    outcome to :func:`_iter_recovery_events`, which mutates this state in place.
+    ``reask`` is the compact-reask trace record both drivers embed in their
+    trace payloads.
+    """
+
+    crashed: bool
+    answer: str
+    usage: RunUsage
+    final_messages: list[ModelMessage]
+    overflow_fallbacks: int
+    reask: dict[str, Any] = field(default_factory=lambda: {"fired": False, "trigger": None})
+
+
+async def _iter_recovery_events(  # noqa: PLR0912, PLR0915
+    ctx: _TurnContext,
+    st: _TurnRecoveryState,
+    *,
+    agent: Agent,
+    message_history: list[ModelMessage] | None,
+    stream_events: bool,
+) -> AsyncIterator[object]:
+    """The shared recovery core behind both turn drivers — THE canonical copy.
+
+    Covers, in order: the context-overflow / request-cap fallback (a forced
+    no-tool single-shot from the Round-0 pre-seed), the compact-reask lever
+    (round-cap / ledger / calibrated-abstention triggers), and the abstention
+    retry gate. ``stream_events=True`` (the SSE driver) additionally yields the
+    protocol events each arm owes the client — ``AnswerResetEvent`` before the
+    replacement text and a trailing ``TokenEvent`` — while ``False`` (the
+    benchmark driver) yields nothing and only records outcomes. Everything
+    else — crash classification of the FIRST attempt, usage folding, cleanup,
+    trace assembly — stays in the drivers, whose observable outputs are
+    unchanged by construction.
+    """
+    reask_fired = False
+    p6_abstain_triggered = False
+    if st.crashed:
+        # No tools on the fallback: force a direct answer from the initial sources.
+        if stream_events:
+            yield AnswerResetEvent(reason="fallback")
+        try:
+            fb = await ctx.build_agent(with_tools=False).run(
+                ctx.user_message,
+                usage_limits=UsageLimits(request_limit=2),
+            )
+        except ModelHTTPError as exc:
+            if not _is_context_overflow_error(exc):
+                raise  # a real bug — stay loud
+            # Even the pre-seed alone overflowed the context window. Degrade to an
+            # empty-but-recorded answer rather than propagating a second crash — the
+            # metered accounting already reflects everything actually spent, so the
+            # counters stay honest even though no answer text was produced.
+            st.answer = ""
+            st.overflow_fallbacks += 1
+        else:
+            st.answer = fb.output
+            st.final_messages = fb.all_messages()
+            st.usage = st.usage + fb.usage
+            if stream_events and st.answer:
+                yield TokenEvent(st.answer)
+    else:
+        if ctx.compact_reask:
+            trigger = _compact_reask_trigger(ctx, st.answer)
+            if trigger is not None:
+                p6_abstain_triggered = trigger == "abstain_p6"
+                st.reask["trigger"] = trigger
+                # Price the choice up front (recorded even when the
+                # re-ask then cannot run): what one more STEERED request
+                # on this transcript would have cost, in estimate.
+                st.reask["steered_est_tokens"] = estimate_tokens_for_chars(
+                    _steered_alternative_est_chars(ctx)
+                )
+                p6_trace: dict[str, Any] | None = None
+                if trigger == "abstain_p6":
+                    p6_trace = {
+                        "top_score": ctx.evidence_directive_trace["top_score"],
+                        "floor": ctx.abstention_floor,
+                        "focused_chars": 0,
+                        "fired": False,
+                    }
+                    st.reask["p6_abstain"] = p6_trace
+                    planned = _p6_abstain_reask_message(ctx)
+                    if planned is None:
+                        message = None
+                    else:
+                        message, p6_trace["focused_chars"] = planned
+                else:
+                    # The established round-cap / ledger request shape is
+                    # intentionally untouched; P6 changes abstentions only.
+                    message = _compact_reask_message(ctx)
+                if message is None:
+                    st.reask["reason"] = "fit"  # nothing fits — keep the answer we have
+                else:
+                    if stream_events and not p6_abstain_triggered:
+                        yield AnswerResetEvent(reason="compact_reask")
+                    started_reask = time.monotonic()
+                    try:
+                        ra = await ctx.build_agent(with_tools=False).run(
+                            message, usage_limits=UsageLimits(request_limit=2)
+                        )
+                    except UsageLimitExceeded:
+                        pass  # keep the steered answer; don't crash
+                    except ModelHTTPError as exc:
+                        if not _is_context_overflow_error(exc):
+                            raise  # a real bug — stay loud
+                        # The estimate-checked re-ask overflowed anyway —
+                        # counted, and the steered answer stands.
+                        st.overflow_fallbacks += 1
+                    else:
+                        reask_fired = True
+                        st.answer = ra.output
+                        st.usage = st.usage + ra.usage
+                        ra_in = ra.usage.input_tokens or 0
+                        ra_out = ra.usage.output_tokens or 0
+                        st.reask.update(
+                            fired=True,
+                            chars=len(message),
+                            input_tokens=ra_in,
+                            output_tokens=ra_out,
+                        )
+                        if p6_trace is not None:
+                            p6_trace["fired"] = True
+                        step_inputs: dict[str, Any] = {"trigger": trigger}
+                        step_outputs: dict[str, Any] = {
+                            "chars": len(message),
+                            "input_tokens": ra_in,
+                            "output_tokens": ra_out,
+                            "answer_chars": len(st.answer),
+                        }
+                        if p6_trace is not None:
+                            step_inputs.update(
+                                top_score=p6_trace["top_score"], floor=p6_trace["floor"]
+                            )
+                            step_outputs["focused_chars"] = p6_trace["focused_chars"]
+                        ctx.add_step(
+                            "compact_reask",
+                            "pydantic_ai",
+                            (time.monotonic() - started_reask) * 1000.0,
+                            inputs=step_inputs,
+                            outputs=step_outputs,
+                        )
+                        if stream_events:
+                            if p6_abstain_triggered:
+                                yield AnswerResetEvent(reason="compact_reask")
+                            if st.answer:
+                                yield TokenEvent(st.answer)
+        if (
+            not reask_fired
+            and not p6_abstain_triggered
+            and ctx.seed_hit
+            and ctx.read_count == 0
+            and looks_abstained(st.answer)
+        ):
+            # ── Abstention gate: if the model refused in Round 0 WITHOUT reading any
+            #    source (read_count == 0) despite relevant evidence, retry once with
+            #    explicit steering to read + answer. Gated on read_count so expensive
+            #    spirals that already exhausted their reads aren't re-run (they keep
+            #    their refusal). The cheap-refusal case is the fixable one. ──
+            # Under a window plan the retry shape is chosen by
+            # _plan_abstain_retry (fit the window, else dedup, else skip).
+            # When the compact re-ask fired it REPLACES this
+            # retry (one planned recovery channel, not two stacked).
+            if stream_events:
+                yield AnswerResetEvent(reason="abstention_retry")
+            plan = _plan_abstain_retry(ctx, message_history)
+            if plan is None:
+                pass  # even the dedup retry would overflow — keep the refusal
+            else:
+                retry_prompt, retry_history = plan
+                try:
+                    retry = await agent.run(
+                        retry_prompt,
+                        # ORIGINAL pre-turn history, NOT the failed attempt's
+                        # transcript — re-sending it roughly doubles the retry's
+                        # input tokens and the failed attempt contributes nothing.
+                        message_history=retry_history,
+                        usage_limits=UsageLimits(request_limit=_REQUEST_LIMIT),
+                    )
+                    st.answer = retry.output
+                    st.final_messages = retry.all_messages()
+                    st.usage = st.usage + retry.usage
+                    if stream_events:
+                        yield TokenEvent(st.answer)
+                except UsageLimitExceeded:
+                    pass  # keep the original refusal; don't crash
+                except ModelHTTPError as exc:
+                    if not _is_context_overflow_error(exc):
+                        raise  # a real bug — stay loud
+                    # Context overflow on the retry too — keep the original
+                    # refusal; still an overflow recovery, so it is counted.
+                    st.overflow_fallbacks += 1
+
+
+async def run_one_turn(
     state: AppState,
     sn: Any,
     question: str,
@@ -2252,162 +2452,24 @@ async def run_one_turn(  # noqa: PLR0912, PLR0915
             crashed = True
             overflow_fallbacks += 1
 
-        total_tokens = run_usage.total_tokens or 0
-        input_tokens = run_usage.input_tokens or 0
-        output_tokens = run_usage.output_tokens or 0
-
-        # The compact-reask trace record — present on every turn (fired False at
-        # full / no trigger) so bench can count firings and price each one.
-        reask: dict[str, Any] = {"fired": False, "trigger": None}
-        if crashed:
-            # No tools on the fallback: force a direct answer from the initial sources.
-            fallback = ctx.build_agent(with_tools=False)
-            try:
-                fb = await fallback.run(ctx.user_message, usage_limits=UsageLimits(request_limit=2))
-            except ModelHTTPError as exc:
-                if not _is_context_overflow_error(exc):
-                    raise  # a real bug — stay loud
-                # Even the pre-seed alone overflowed the context window. Degrade to an
-                # empty-but-recorded answer rather than propagating a second crash — the
-                # token counters above already reflect everything actually spent, so the
-                # accounting stays honest even though no answer text was produced.
-                overflow_fallbacks += 1
-            else:
-                answer = fb.output
-                final_messages = fb.all_messages()
-                total_tokens += fb.usage.total_tokens
-                input_tokens += fb.usage.input_tokens or 0
-                output_tokens += fb.usage.output_tokens or 0
-        else:
-            reask_fired = False
-            p6_abstain_triggered = False
-            if ctx.compact_reask:
-                trigger = _compact_reask_trigger(ctx, answer)
-                if trigger is not None:
-                    p6_abstain_triggered = trigger == "abstain_p6"
-                    reask["trigger"] = trigger
-                    # Price the choice up front (recorded even when the
-                    # re-ask then cannot run): what one more STEERED request
-                    # on this transcript would have cost, in estimate.
-                    reask["steered_est_tokens"] = estimate_tokens_for_chars(
-                        _steered_alternative_est_chars(ctx)
-                    )
-                    p6_trace: dict[str, Any] | None = None
-                    if trigger == "abstain_p6":
-                        p6_trace = {
-                            "top_score": ctx.evidence_directive_trace["top_score"],
-                            "floor": ctx.abstention_floor,
-                            "focused_chars": 0,
-                            "fired": False,
-                        }
-                        reask["p6_abstain"] = p6_trace
-                        planned = _p6_abstain_reask_message(ctx)
-                        if planned is None:
-                            message = None
-                        else:
-                            message, p6_trace["focused_chars"] = planned
-                    else:
-                        # The established round-cap / ledger request shape is
-                        # intentionally untouched; P6 changes abstentions only.
-                        message = _compact_reask_message(ctx)
-                    if message is None:
-                        reask["reason"] = "fit"  # nothing fits — keep the answer we have
-                    else:
-                        started_reask = time.monotonic()
-                        try:
-                            ra = await ctx.build_agent(with_tools=False).run(
-                                message, usage_limits=UsageLimits(request_limit=2)
-                            )
-                        except UsageLimitExceeded:
-                            pass  # keep the steered answer; don't crash
-                        except ModelHTTPError as exc:
-                            if not _is_context_overflow_error(exc):
-                                raise  # a real bug — stay loud
-                            # The estimate-checked re-ask overflowed anyway —
-                            # counted, and the steered answer stands.
-                            overflow_fallbacks += 1
-                        else:
-                            reask_fired = True
-                            answer = ra.output
-                            final_messages = ra.all_messages()
-                            ra_in = ra.usage.input_tokens or 0
-                            ra_out = ra.usage.output_tokens or 0
-                            total_tokens += ra.usage.total_tokens
-                            input_tokens += ra_in
-                            output_tokens += ra_out
-                            reask.update(
-                                fired=True,
-                                chars=len(message),
-                                input_tokens=ra_in,
-                                output_tokens=ra_out,
-                            )
-                            if p6_trace is not None:
-                                p6_trace["fired"] = True
-                            step_inputs: dict[str, Any] = {"trigger": trigger}
-                            step_outputs: dict[str, Any] = {
-                                "chars": len(message),
-                                "input_tokens": ra_in,
-                                "output_tokens": ra_out,
-                                "answer_chars": len(answer),
-                            }
-                            if p6_trace is not None:
-                                step_inputs.update(
-                                    top_score=p6_trace["top_score"], floor=p6_trace["floor"]
-                                )
-                                step_outputs["focused_chars"] = p6_trace["focused_chars"]
-                            ctx.add_step(
-                                "compact_reask",
-                                "pydantic_ai",
-                                (time.monotonic() - started_reask) * 1000.0,
-                                inputs=step_inputs,
-                                outputs=step_outputs,
-                            )
-            if (
-                not reask_fired
-                and not p6_abstain_triggered
-                and ctx.seed_hit
-                and ctx.read_count == 0
-                and looks_abstained(answer)
-            ):
-                # ── Abstention gate: if the model refused in Round 0 WITHOUT reading any
-                #    source (read_count == 0) despite relevant evidence, retry once with
-                #    explicit steering to read + answer. Gated on read_count so expensive
-                #    spirals that already exhausted their reads aren't re-run (they keep
-                #    their refusal). The cheap-refusal case is the fixable one. ──
-                # Under a window plan the retry shape is chosen by
-                # _plan_abstain_retry (fit the window, else dedup, else skip).
-                # When the compact re-ask fired it REPLACES this
-                # retry (one planned recovery channel, not two stacked).
-                plan = _plan_abstain_retry(ctx, message_history)
-                if plan is None:
-                    pass  # even the dedup retry would overflow — keep the refusal
-                else:
-                    retry_prompt, retry_history = plan
-                    try:
-                        retry = await agent.run(
-                            retry_prompt,
-                            # ORIGINAL pre-turn history, NOT the failed attempt's
-                            # transcript — re-sending it roughly doubles the retry's
-                            # input tokens and the failed attempt contributes nothing.
-                            message_history=retry_history,
-                            usage_limits=UsageLimits(request_limit=_REQUEST_LIMIT),
-                        )
-                        answer = retry.output
-                        final_messages = retry.all_messages()
-                        total_tokens += retry.usage.total_tokens
-                        input_tokens += retry.usage.input_tokens or 0
-                        output_tokens += retry.usage.output_tokens or 0
-                    except UsageLimitExceeded:
-                        pass  # keep the original refusal; don't crash
-                    except ModelHTTPError as exc:
-                        if not _is_context_overflow_error(exc):
-                            raise  # a real bug — stay loud
-                        # Context overflow on the retry too — keep the original
-                        # refusal; still an overflow recovery, so it is counted.
-                        overflow_fallbacks += 1
+        st = _TurnRecoveryState(
+            crashed=crashed,
+            answer=answer,
+            usage=run_usage,
+            final_messages=final_messages,
+            overflow_fallbacks=overflow_fallbacks,
+        )
+        async for _event in _iter_recovery_events(
+            ctx,
+            st,
+            agent=agent,
+            message_history=message_history,
+            stream_events=False,
+        ):
+            pass  # pragma: no cover — the silent mode never yields
 
         if ctx.answer_cleanup:
-            answer = _cleanup_answer(answer)
+            answer = _cleanup_answer(st.answer)
 
         elapsed_ms = int((time.monotonic() - ctx.started) * 1000)
         cards = sorted(ctx.turn_cards.values(), key=lambda c: c.n)
@@ -2415,11 +2477,11 @@ async def run_one_turn(  # noqa: PLR0912, PLR0915
             answer=answer,
             cards=cards,
             tool_calls=ctx.calls,
-            total_tokens=total_tokens,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
+            total_tokens=st.usage.total_tokens or 0,
+            input_tokens=st.usage.input_tokens or 0,
+            output_tokens=st.usage.output_tokens or 0,
             elapsed_ms=elapsed_ms,
-            all_messages=final_messages,
+            all_messages=st.final_messages,
             trace={
                 # Non-streaming analogue of the streaming path's TraceEvent
                 # payload, so benchmark drivers can merge budget/steps into
@@ -2434,12 +2496,12 @@ async def run_one_turn(  # noqa: PLR0912, PLR0915
                 # constrains, unlike the cumulative ``input_tokens`` above.
                 "peak_input_tokens": ctx.meter.peak_input_tokens,
                 "requests": ctx.meter.requests,
-                "overflow_fallbacks": overflow_fallbacks,
+                "overflow_fallbacks": st.overflow_fallbacks,
                 "request_log": ctx.meter.request_log,
                 # The compact-reask record — fired/trigger plus
                 # the per-firing token cost (a stage entry carries the same
                 # numbers with duration).
-                "compact_reask": reask,
+                "compact_reask": st.reask,
                 # How many tool calls the round cap steered
                 # away (0 when no cap / nothing blocked).
                 "round_cap_fires": ctx.round_cap_fires,
@@ -2572,151 +2634,24 @@ async def iter_agent_turn_events(  # noqa: PLR0912, PLR0915
             else:
                 raise  # a real bug (bad request, auth, provider 500) — stay loud
 
-        # The compact-reask trace record — present on every turn (fired False at
-        # full / no trigger / crash), same as run_one_turn.
-        reask: dict[str, Any] = {"fired": False, "trigger": None}
-        if crashed:
-            yield AnswerResetEvent(reason="fallback")
-            try:
-                fb = await ctx.build_agent(with_tools=False).run(
-                    ctx.user_message,
-                    usage_limits=UsageLimits(request_limit=2),
-                )
-                answer = fb.output
-                usage = usage + fb.usage
-                if answer:
-                    yield TokenEvent(answer)
-            except ModelHTTPError as exc:
-                if not _is_context_overflow_error(exc):
-                    raise  # a real bug — stay loud
-                # Even the pre-seed alone overflowed the context window. Degrade to an
-                # empty-but-recorded answer rather than propagating a second crash.
-                answer = ""
-                overflow_fallbacks += 1
-        else:
-            # Same compact-reask flow as run_one_turn, plus
-            # the reset/token events the stream contract needs.
-            reask_fired = False
-            p6_abstain_triggered = False
-            if ctx.compact_reask:
-                trigger = _compact_reask_trigger(ctx, answer)
-                if trigger is not None:
-                    p6_abstain_triggered = trigger == "abstain_p6"
-                    reask["trigger"] = trigger
-                    # Price the choice up front (recorded even when the
-                    # re-ask then cannot run): what one more STEERED request
-                    # on this transcript would have cost, in estimate.
-                    reask["steered_est_tokens"] = estimate_tokens_for_chars(
-                        _steered_alternative_est_chars(ctx)
-                    )
-                    p6_trace: dict[str, Any] | None = None
-                    if trigger == "abstain_p6":
-                        p6_trace = {
-                            "top_score": ctx.evidence_directive_trace["top_score"],
-                            "floor": ctx.abstention_floor,
-                            "focused_chars": 0,
-                            "fired": False,
-                        }
-                        reask["p6_abstain"] = p6_trace
-                        planned = _p6_abstain_reask_message(ctx)
-                        if planned is None:
-                            message = None
-                        else:
-                            message, p6_trace["focused_chars"] = planned
-                    else:
-                        # Keep the established round-cap / ledger request
-                        # shape byte-for-byte intact; P6 changes abstentions only.
-                        message = _compact_reask_message(ctx)
-                    if message is None:
-                        reask["reason"] = "fit"  # nothing fits — keep the streamed answer
-                    else:
-                        if not p6_abstain_triggered:
-                            yield AnswerResetEvent(reason="compact_reask")
-                        started_reask = time.monotonic()
-                        try:
-                            ra = await ctx.build_agent(with_tools=False).run(
-                                message, usage_limits=UsageLimits(request_limit=2)
-                            )
-                        except UsageLimitExceeded:
-                            pass  # keep the steered answer; don't crash
-                        except ModelHTTPError as exc:
-                            if not _is_context_overflow_error(exc):
-                                raise  # a real bug — stay loud
-                            overflow_fallbacks += 1
-                        else:
-                            reask_fired = True
-                            answer = ra.output
-                            usage = usage + ra.usage
-                            ra_in = ra.usage.input_tokens or 0
-                            ra_out = ra.usage.output_tokens or 0
-                            reask.update(
-                                fired=True,
-                                chars=len(message),
-                                input_tokens=ra_in,
-                                output_tokens=ra_out,
-                            )
-                            if p6_trace is not None:
-                                p6_trace["fired"] = True
-                            step_inputs: dict[str, Any] = {"trigger": trigger}
-                            step_outputs: dict[str, Any] = {
-                                "chars": len(message),
-                                "input_tokens": ra_in,
-                                "output_tokens": ra_out,
-                                "answer_chars": len(answer),
-                            }
-                            if p6_trace is not None:
-                                step_inputs.update(
-                                    top_score=p6_trace["top_score"], floor=p6_trace["floor"]
-                                )
-                                step_outputs["focused_chars"] = p6_trace["focused_chars"]
-                            ctx.add_step(
-                                "compact_reask",
-                                "pydantic_ai",
-                                (time.monotonic() - started_reask) * 1000.0,
-                                inputs=step_inputs,
-                                outputs=step_outputs,
-                            )
-                            if p6_abstain_triggered:
-                                yield AnswerResetEvent(reason="compact_reask")
-                            if answer:
-                                yield TokenEvent(answer)
-            if (
-                not reask_fired
-                and not p6_abstain_triggered
-                and ctx.seed_hit
-                and ctx.read_count == 0
-                and looks_abstained(answer)
-            ):
-                yield AnswerResetEvent(reason="abstention_retry")
-                # Under a window plan the retry shape is chosen by
-                # _plan_abstain_retry (fit the window, else dedup, else skip) —
-                # same as run_one_turn. When the compact re-ask fired it
-                # REPLACES this retry.
-                plan = _plan_abstain_retry(ctx, message_history)
-                if plan is None:
-                    pass  # even the dedup retry would overflow — keep the answer
-                else:
-                    retry_prompt, retry_history = plan
-                    try:
-                        retry = await agent.run(
-                            retry_prompt,
-                            # ORIGINAL pre-turn history, NOT the failed attempt's
-                            # transcript — re-sending it roughly doubles the retry's
-                            # input tokens and the failed attempt contributes nothing.
-                            message_history=retry_history,
-                            usage_limits=UsageLimits(request_limit=_REQUEST_LIMIT),
-                        )
-                        answer = retry.output
-                        usage = usage + retry.usage
-                        yield TokenEvent(answer)
-                    except UsageLimitExceeded:
-                        pass  # keep the original answer; don't crash
-                    except ModelHTTPError as exc:
-                        if not _is_context_overflow_error(exc):
-                            raise  # a real bug — stay loud
-                        # Context overflow on the retry too — keep the original
-                        # answer; still an overflow recovery, so it is counted.
-                        overflow_fallbacks += 1
+        st = _TurnRecoveryState(
+            crashed=crashed,
+            answer=answer,
+            usage=usage,
+            final_messages=[],
+            overflow_fallbacks=overflow_fallbacks,
+        )
+        async for event in _iter_recovery_events(
+            ctx,
+            st,
+            agent=agent,
+            message_history=message_history,
+            stream_events=True,
+        ):
+            yield event
+        answer = st.answer
+        usage = st.usage
+        overflow_fallbacks = st.overflow_fallbacks
 
         if ctx.answer_cleanup:
             cleaned_answer = _cleanup_answer(answer)
@@ -2788,7 +2723,7 @@ async def iter_agent_turn_events(  # noqa: PLR0912, PLR0915
             "request_log": ctx.meter.request_log,
             # The compact-reask record (same fields as
             # run_one_turn's trace).
-            "compact_reask": reask,
+            "compact_reask": st.reask,
             # Round-cap firings (same field as run_one_turn).
             "round_cap_fires": ctx.round_cap_fires,
             # What the aging wrapper actually trimmed (same
