@@ -109,6 +109,27 @@ async def test_create_job_rejects_unknown_type(app_client: httpx.AsyncClient) ->
 
 
 @pytest.mark.asyncio
+async def test_create_download_model_job_validates_params(
+    app_client: httpx.AsyncClient,
+) -> None:
+    """``POST /api/jobs`` must not bypass the download endpoint's filename
+    hygiene: hostile filenames, missing keys, and unknown params are rejected
+    before any job row exists (audit M1)."""
+    bad_submissions = [
+        {"url": "https://x/a.gguf", "filename": "../evil.gguf"},
+        {"url": "https://x/a.gguf", "filename": "/abs/a.gguf"},
+        {"url": "https://x/a.gguf", "filename": "sub/dir/a.gguf"},
+        {"url": "https://x/a.gguf"},  # missing filename
+        {"filename": "ok.gguf"},  # missing url
+        {"url": "https://x/a.gguf", "filename": "a.gguf", "resume": {}},  # unknown param
+    ]
+    for params in bad_submissions:
+        resp = await app_client.post("/api/jobs", json={"type": "download_model", "params": params})
+        assert resp.status_code == 400, params
+    assert (await app_client.get("/api/jobs")).json()["jobs"] == []
+
+
+@pytest.mark.asyncio
 async def test_job_sse_stream_emits_snapshot_then_progress(
     app_client: httpx.AsyncClient,
 ) -> None:

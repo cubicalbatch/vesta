@@ -106,24 +106,19 @@ class ActivateRequest(BaseModel):
     filename: str
 
 
-def _safe_gguf_name(filename: str) -> str:
+def _safe_gguf_name(filename: str, *, append_suffix: bool = False) -> str:
     """Validate a bare ``*.gguf`` filename that cannot escape the models dir.
 
-    Rejects path separators (URL-decoded ``%2F`` included), ``..``, absolute
-    paths, and anything that is not a ``.gguf`` name — the models dir also
-    holds the ONNX encoder trees and stray deletes there break retrieval, not
-    just answers.
+    Thin HTTP translation of the shared sink guard
+    (:func:`vesta.inference.download.safe_gguf_basename`) — one predicate for
+    activate/delete/download so they cannot drift apart.
     """
-    if (
-        not filename.endswith(".gguf")
-        or not filename.removesuffix(".gguf")
-        or "/" in filename
-        or "\\" in filename
-        or ".." in filename
-        or Path(filename).name != filename
-    ):
-        raise HTTPException(status_code=400, detail="invalid model filename")
-    return filename
+    from vesta.inference.download import safe_gguf_basename
+
+    try:
+        return safe_gguf_basename(filename, append_suffix=append_suffix)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid model filename") from exc
 
 
 def _active_model_name() -> str:
@@ -230,8 +225,9 @@ async def download_model(
     if not filename:
         raise HTTPException(status_code=400, detail="filename required (or supply preset_id)")
 
-    if not filename.endswith(".gguf"):
-        filename = f"{filename}.gguf"
+    # Validate BEFORE anything persists or is submitted — a traversal name
+    # here used to land in inference.llm.model and the job's write path.
+    filename = _safe_gguf_name(filename, append_suffix=True)
 
     # Write inference settings immediately — the job just downloads the file.
     # Reload the config resolver so the new values are visible to GET /api/settings

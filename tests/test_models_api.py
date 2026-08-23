@@ -174,6 +174,64 @@ async def test_activate_rejects_traversal_names(
         assert resp.status_code == 400, bad
 
 
+# ── POST /api/models/download — filename hygiene (audit M1) ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_download_rejects_unsafe_filenames_before_persisting(
+    app_client: httpx.AsyncClient,
+) -> None:
+    """Absolute paths, traversal, separators, and nested names are rejected
+    with a 400 before any setting is written or job submitted — pathlib would
+    otherwise let ``models_dir / filename`` escape the models dir."""
+    bad_names = (
+        "/etc/passwd.gguf",  # absolute wins outright in pathlib
+        "../evil.gguf",
+        "sub/dir/evil.gguf",  # nested names are rejected, not rewritten
+        "a\\b.gguf",  # backslash separator
+        "..evil.gguf",  # contains ..
+        ".gguf",  # empty stem
+    )
+    for bad in bad_names:
+        resp = await app_client.post(
+            "/api/models/download", json={"url": "https://example.com/x.gguf", "filename": bad}
+        )
+        assert resp.status_code == 400, bad
+
+    got = await app_client.get("/api/settings")
+    assert got.json()["values"]["inference.llm.model"] == ""
+    jobs = (await app_client.get("/api/jobs")).json()["jobs"]
+    assert jobs == []
+
+
+@pytest.mark.asyncio
+async def test_download_validates_filename_even_with_preset_id(
+    app_client: httpx.AsyncClient,
+) -> None:
+    """An explicit filename overrides the preset's — the override must pass
+    the same guard."""
+    resp = await app_client.post(
+        "/api/models/download",
+        json={"preset_id": "qwen3.5-4b-q4_k_s", "filename": "../../evil"},
+    )
+    assert resp.status_code == 400
+    got = await app_client.get("/api/settings")
+    assert got.json()["values"]["inference.llm.model"] == ""
+
+
+def test_safe_gguf_name_modes() -> None:
+    """Download normalizes bare names to ``*.gguf``; activate/delete stay
+    strict (a bare name there is a user error, not a download request)."""
+    from fastapi import HTTPException
+
+    from vesta.api.models import _safe_gguf_name
+
+    assert _safe_gguf_name("my.model", append_suffix=True) == "my.model.gguf"
+    assert _safe_gguf_name(QWEN) == QWEN
+    with pytest.raises(HTTPException):
+        _safe_gguf_name("bare")
+
+
 # ── POST /api/models/load and /unload ────────────────────────────────────────
 
 

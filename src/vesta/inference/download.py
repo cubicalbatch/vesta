@@ -6,9 +6,12 @@ to a single file. GGUF URLs point at HuggingFace ``resolve/main/<file>``; HF
 honours HTTP range requests so resume works identically to the ZIM path.
 
 The job writes to ``<models_dir>/<filename>.part`` and atomically renames on
-completion. The post-download "configure settings" step is owned by the API
-endpoint (``POST /api/models/download``), not the job — the job's sole
-responsibility is the file on disk.
+completion. Untrusted filenames are validated to bare ``*.gguf`` basenames by
+:func:`safe_gguf_basename` before anything touches disk — ``POST /api/jobs``
+forwards arbitrary params, so the endpoint's guard cannot be the only one. The
+post-download "configure settings" step is owned by the API endpoint
+(``POST /api/models/download``), not the job — the job's sole responsibility
+is the file on disk.
 """
 
 from __future__ import annotations
@@ -37,11 +40,38 @@ class DownloadModelError(RuntimeError):
     """Raised when a model download cannot complete."""
 
 
+def safe_gguf_basename(filename: str, *, append_suffix: bool = False) -> str:
+    """Validate that ``filename`` is a bare ``*.gguf`` name that cannot escape
+    the models dir, returning it unchanged.
+
+    The single guard behind every path that turns an untrusted filename into
+    ``models_dir / <name>`` (pathlib lets absolute paths win and ``..`` climb
+    out). With ``append_suffix=True`` a bare name gets ``.gguf`` appended
+    first, so custom downloads stay friendly; otherwise the name must already
+    end in ``.gguf``. Rejects path separators (URL-decoded ``%2F`` included),
+    ``..``, absolute paths, and empty stems — the models dir also holds the
+    ONNX encoder trees. Raises :class:`ValueError`; callers translate it into
+    their own error type.
+    """
+    name = f"{filename}.gguf" if append_suffix and not filename.endswith(".gguf") else filename
+    if (
+        not name.endswith(".gguf")
+        or not name.removesuffix(".gguf")
+        or "/" in name
+        or "\\" in name
+        or ".." in name
+        or Path(name).name != name
+    ):
+        raise ValueError(f"unsafe GGUF filename: {filename!r}")
+    return name
+
+
 class DownloadModelJob:
     """Registered as job type ``download_model``.
 
     Params: ``url`` (the direct GGUF URL), ``filename`` (the basename to write
-    under ``data/models/``).
+    under ``data/models/`` — validated by :func:`safe_gguf_basename`; anything
+    else fails the job).
     """
 
     name = "download_model"
@@ -53,15 +83,18 @@ class DownloadModelJob:
 async def _run_download(job: JobHandle, params: Mapping[str, Any]) -> None:
     from vesta.inference import get_models_dir
 
+    url = str(params["url"])
+    # Last-line defense: nothing touches disk until the filename is a bare
+    # *.gguf basename under the models dir.
+    try:
+        filename = safe_gguf_basename(str(params["filename"]), append_suffix=True)
+    except ValueError as exc:
+        raise DownloadModelError(str(exc)) from exc
+
     models_dir = get_models_dir()
     if models_dir is None:
         raise RuntimeError("download_model: models dir not bound (run inside the app lifespan)")
     models_dir.mkdir(parents=True, exist_ok=True)
-
-    url = str(params["url"])
-    filename = str(params["filename"])
-    if not filename.endswith(".gguf"):
-        filename = f"{filename}.gguf"
 
     final_path = models_dir / filename
     part_path = models_dir / f"{filename}.part"
@@ -208,4 +241,5 @@ register_job_type(DownloadModelJob())
 __all__ = [
     "DownloadModelError",
     "DownloadModelJob",
+    "safe_gguf_basename",
 ]

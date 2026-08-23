@@ -52,8 +52,37 @@ async def create_job(
 ) -> dict[str, object]:
     if req.type not in job_types():
         raise HTTPException(status_code=400, detail=f"unknown job type {req.type!r}")
+    if req.type == "download_model":
+        _validate_download_model_params(req.params)
     job_id = await state.runner.submit(req.type, req.target, req.params)
     return {"id": job_id}
+
+
+def _validate_download_model_params(params: dict[str, Any]) -> None:
+    """Minimal per-type param gate for ``download_model`` submissions.
+
+    The runner accepts arbitrary params for any registered type; without this,
+    ``POST /api/jobs`` would bypass the download endpoint's filename hygiene
+    entirely. Only the two known keys are accepted and the filename must pass
+    the same guard the endpoint uses — the job still re-validates at the sink.
+    """
+    from vesta.inference.download import safe_gguf_basename
+
+    extra = set(params) - {"url", "filename"}
+    if extra:
+        raise HTTPException(
+            status_code=400, detail=f"unexpected download_model params: {sorted(extra)}"
+        )
+    url = params.get("url")
+    if not isinstance(url, str) or not url:
+        raise HTTPException(status_code=400, detail="download_model requires a non-empty url")
+    filename = params.get("filename")
+    if not isinstance(filename, str) or not filename:
+        raise HTTPException(status_code=400, detail="download_model requires a filename")
+    try:
+        safe_gguf_basename(filename, append_suffix=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid model filename") from exc
 
 
 @router.get("/{job_id}")

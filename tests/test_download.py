@@ -347,3 +347,72 @@ async def test_disk_space_guard_fails_loudly(
     finally:
         os.environ.pop("download.mirror_policy", None)
         server.stop()
+
+
+# ── the download_model job sink (vesta.inference.download, audit M1) ────────
+
+
+async def test_model_job_rejects_hostile_filenames_before_touching_disk(
+    tmp_path: Path,
+) -> None:
+    """POST /api/jobs forwards arbitrary params to any registered type, so the
+    job itself must refuse anything that is not a bare ``*.gguf`` basename —
+    pathlib would let absolute paths win and ``..`` climb out."""
+    from vesta.inference import bind_models_dir
+    from vesta.inference.download import DownloadModelError, DownloadModelJob
+
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    canary = tmp_path / "canary.txt"
+    canary.write_text("safe")
+    bind_models_dir(models_dir)
+    try:
+        for bad in ("/etc/passwd.gguf", "../../escaped", "sub/dir/x", "..evil"):
+            handle = JobHandleImpl(_FakeRunner(), job_id=1)  # type: ignore[arg-type]
+            with pytest.raises(DownloadModelError, match="unsafe GGUF filename"):
+                await DownloadModelJob().run(
+                    handle, {"url": "https://example.com/x.gguf", "filename": bad}
+                )
+    finally:
+        bind_models_dir(None)
+    assert canary.read_text() == "safe"
+    assert list(models_dir.iterdir()) == []
+
+
+async def test_model_job_writes_bare_basename_to_final_and_part_paths(
+    tmp_path: Path,
+) -> None:
+    """A bare custom name is normalized once and used for both the ``.part``
+    and the final file, inside the bound models dir only."""
+    from vesta.inference import bind_models_dir, bind_on_model_ready
+    from vesta.inference.download import DownloadModelJob
+
+    payload = os.urandom(1024)
+    server = _Server(payload)
+    server.start()
+    models_dir = tmp_path / "models"
+    ready: list[Path] = []
+
+    async def on_ready(path: object) -> None:
+        ready.append(Path(path))  # type: ignore[arg-type]
+
+    bind_models_dir(models_dir)
+    bind_on_model_ready(on_ready)
+    config.configure()  # the job resolves catalog.download.bandwidth_limit_kbps
+    try:
+        handle = JobHandleImpl(_FakeRunner(), job_id=1)  # type: ignore[arg-type]
+        await DownloadModelJob().run(
+            handle, {"url": f"{server.base_url}/m.gguf", "filename": "my.model"}
+        )
+    finally:
+        bind_on_model_ready(None)
+        bind_models_dir(None)
+        config.reset_for_test()
+        server.stop()
+
+    final = models_dir / "my.model.gguf"
+    assert final.is_file()
+    assert final.read_bytes() == payload
+    # The .part was atomically renamed away.
+    assert not (models_dir / "my.model.gguf.part").exists()
+    assert ready == [final]
