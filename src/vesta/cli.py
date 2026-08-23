@@ -413,6 +413,19 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 — one parser 
     p_verify.add_argument("--judge-endpoint", default=None, help="Judge endpoint override.")
     p_verify.add_argument("--judge-api-key", default=None, help="Judge API key override.")
     p_verify.add_argument("--limit", type=int, default=None, help="Run only the first N questions.")
+    p_verify.add_argument(
+        "--concurrency",
+        type=int,
+        default=None,
+        help="Answer-pass questions in flight (default: bench.max_concurrent). Verify "
+        "reports no latency, so raising it cannot contaminate a reported p50/p95.",
+    )
+    p_verify.add_argument(
+        "--judge-concurrency",
+        type=int,
+        default=None,
+        help="Judge calls in flight (default 4; clamped to 1 when the judge shares the answer endpoint).",
+    )
     p_verify.add_argument("--data-dir", default=None, help="Override data.dir.")
     p_list = bsub.add_parser("list", help="List persisted bench runs.")
     p_list.add_argument("--limit", type=int, default=50, help="Max runs to list (default 50).")
@@ -1246,9 +1259,14 @@ async def _cmd_bench_verify(args: argparse.Namespace) -> int:
     """Three passes: support check (no LLM), closed-book, oracle → review file."""
     from vesta.api.bench import make_judge_llm
     from vesta.eval.bench_dataset import BENCH_DATASET, load_bench_dataset
+    from vesta.eval.bench_runner import (
+        BENCH_JUDGE_CONCURRENCY,
+        BENCH_MAX_CONCURRENT,
+        resolve_judge_concurrency,
+    )
     from vesta.eval.bench_scoring import Verdict
-    from vesta.eval.golden import EVAL_JUDGE_MODEL
-    from vesta.inference import INFERENCE_LLM_MODEL
+    from vesta.eval.golden import EVAL_JUDGE_ENDPOINT_URL, EVAL_JUDGE_MODEL
+    from vesta.inference import INFERENCE_LLM_ENDPOINT_URL, INFERENCE_LLM_MODEL
 
     overrides = _build_apply_overrides(args)
     async with _open_runtime(
@@ -1264,17 +1282,36 @@ async def _cmd_bench_verify(args: argparse.Namespace) -> int:
             qs = qs[: args.limit]
         judge_model = args.judge_model or str(config.get(EVAL_JUDGE_MODEL))
         judge, judge_gateway = make_judge_llm(state, judge_model)
+        # Stage bounds — same machinery as `bench run` (semaphore + ordered
+        # gather). Defaults mirror each stage's sibling: pipeline questions
+        # bench.max_concurrent (verify reports no latency, so raise freely via
+        # --concurrency), judges bench.judge.concurrency clamped to 1 when the
+        # judge shares the answer endpoint, archive ops the retrieval fan-out.
+        answer_concurrency = max(1, args.concurrency or int(BENCH_MAX_CONCURRENT.default))
+        judge_concurrency, _shares = resolve_judge_concurrency(
+            args.judge_concurrency or int(BENCH_JUDGE_CONCURRENCY.default),
+            answer_endpoint=str(config.get(INFERENCE_LLM_ENDPOINT_URL)),
+            judge_endpoint=str(config.get(EVAL_JUDGE_ENDPOINT_URL)),
+        )
         try:
             # Pass 1: support check (no LLM) — answer tokens present in each
             # required source's extracted article body.
             support = await _verify_support(state, qs)
             # Pass 2: closed-book (floor).
-            closed = await _verify_pass(state, qs, "closed_book", answer_model)
+            closed = await _verify_pass(
+                state, qs, "closed_book", answer_model, max_concurrent=answer_concurrency
+            )
             # Pass 3: oracle (ceiling).
-            oracle = await _verify_pass(state, qs, "oracle", answer_model)
+            oracle = await _verify_pass(
+                state, qs, "oracle", answer_model, max_concurrent=answer_concurrency
+            )
             # Judge both passes.
-            closed_judged = await _verify_judge(judge, judge_model, qs, closed, support)
-            oracle_judged = await _verify_judge(judge, judge_model, qs, oracle, support)
+            closed_judged = await _verify_judge(
+                judge, judge_model, qs, closed, support, max_concurrent=judge_concurrency
+            )
+            oracle_judged = await _verify_judge(
+                judge, judge_model, qs, oracle, support, max_concurrent=judge_concurrency
+            )
         finally:
             if judge_gateway is not None:
                 with contextlib.suppress(Exception):
@@ -1308,26 +1345,40 @@ async def _cmd_bench_verify(args: argparse.Namespace) -> int:
         return 0
 
 
-async def _verify_support(state: Any, qs: Sequence[Any]) -> dict[str, bool]:
-    """Pass 1: the answer's distinctive tokens appear in each required source."""
+async def _verify_support(
+    state: Any, qs: Sequence[Any], *, max_concurrent: int | None = None
+) -> dict[str, bool]:
+    """Pass 1: the answer's distinctive tokens appear in each required source.
+
+    Questions run concurrently bounded by ``max_concurrent`` (default:
+    ``retrieval.max_archives_concurrent`` — the pipeline's own archive fan-out,
+    so libzim never sees more concurrent readers than a normal query allows).
+    Sources stay sequential *within* a question so the token short-circuit
+    still skips extraction exactly like the serial implementation did.
+    """
+    from vesta.retrieval import RETRIEVAL_MAX_ARCHIVES_CONCURRENT
 
     def _tokens(text: str) -> set[str]:
         return {w for w in _tokenize(text) if len(w) >= 4}
 
     answer_tokens: dict[str, set[str]] = {q.id: _tokens(q.answer) for q in qs}
-    out: dict[str, bool] = {}
-    for q in qs:
-        ok = True
-        for src in q.sources:
-            if not src.required:
-                continue
-            text = await _extract_article(state, q, src)
-            at = answer_tokens[q.id]
-            if at and not (at & _tokens(text)):
-                ok = False
-                break
-        out[q.id] = ok
-    return out
+    bound = max(1, int(max_concurrent or int(config.get(RETRIEVAL_MAX_ARCHIVES_CONCURRENT))))
+    sem = asyncio.Semaphore(bound)
+
+    async def _one(q: Any) -> tuple[str, bool]:
+        async with sem:
+            ok = True
+            for src in q.sources:
+                if not src.required:
+                    continue
+                text = await _extract_article(state, q, src)
+                at = answer_tokens[q.id]
+                if at and not (at & _tokens(text)):
+                    ok = False
+                    break
+            return q.id, ok
+
+    return dict(await asyncio.gather(*(_one(q) for q in qs)))
 
 
 def _tokenize(text: str) -> list[str]:
@@ -1363,19 +1414,35 @@ async def _extract_article(state: Any, q: Any, src: Any) -> str:
         return ""
 
 
-async def _verify_pass(state: Any, qs: Sequence[Any], system: str, model: str) -> dict[str, str]:
-    """Run the closed-book or oracle system over each question → answer text."""
+async def _verify_pass(
+    state: Any,
+    qs: Sequence[Any],
+    system: str,
+    model: str,
+    *,
+    max_concurrent: int | None = None,
+) -> dict[str, str]:
+    """Run the closed-book or oracle system over each question → answer text.
+
+    Questions run concurrently bounded by ``max_concurrent`` (default:
+    ``bench.max_concurrent``, the same knob ``bench run`` uses for pipeline
+    questions); gather keeps results keyed in input order either way.
+    """
     from vesta.api.bench import make_system
+    from vesta.eval.bench_runner import BENCH_MAX_CONCURRENT
 
     sut = make_system(system, state, model_id=model)
-    out: dict[str, str] = {}
-    for q in qs:
-        try:
-            output = await sut.run_one(q)
-            out[q.id] = output.answer_text
-        except Exception:
-            out[q.id] = ""
-    return out
+    sem = asyncio.Semaphore(max(1, int(max_concurrent or int(BENCH_MAX_CONCURRENT.default))))
+
+    async def _one(q: Any) -> tuple[str, str]:
+        async with sem:
+            try:
+                output = await sut.run_one(q)
+                return q.id, output.answer_text
+            except Exception:
+                return q.id, ""
+
+    return dict(await asyncio.gather(*(_one(q) for q in qs)))
 
 
 async def _verify_judge(
@@ -1384,22 +1451,33 @@ async def _verify_judge(
     qs: Sequence[Any],
     answers: dict[str, str],
     support: dict[str, bool],
+    *,
+    max_concurrent: int | None = None,
 ) -> dict[str, Any]:
-    """Grade each pass's answers via the structured rubric."""
+    """Grade each pass's answers via the structured rubric.
+
+    Judgments run concurrently bounded by ``max_concurrent`` (default:
+    ``bench.judge.concurrency``; `_cmd_bench_verify` pre-clamps it to 1 when
+    the judge shares the answer endpoint, via ``resolve_judge_concurrency``).
+    """
+    from vesta.eval.bench_runner import BENCH_JUDGE_CONCURRENCY
     from vesta.eval.bench_scoring import judge_verdict
 
-    out: dict[str, Any] = {}
-    for q in qs:
+    sem = asyncio.Semaphore(max(1, int(max_concurrent or int(BENCH_JUDGE_CONCURRENCY.default))))
+
+    async def _one(q: Any) -> tuple[str, Any]:
         ans = answers.get(q.id, "")
-        outcome = await judge_verdict(
-            question=q,
-            model_answer=ans,
-            abstained=not bool(ans.strip()),
-            judge=judge,
-            judge_model=judge_model,
-        )
-        out[q.id] = outcome
-    return out
+        async with sem:
+            outcome = await judge_verdict(
+                question=q,
+                model_answer=ans,
+                abstained=not bool(ans.strip()),
+                judge=judge,
+                judge_model=judge_model,
+            )
+        return q.id, outcome
+
+    return dict(await asyncio.gather(*(_one(q) for q in qs)))
 
 
 def _write_verification_review(

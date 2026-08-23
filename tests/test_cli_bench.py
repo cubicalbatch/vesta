@@ -12,8 +12,12 @@ lists, ``bench compare`` buckets, and the ``vesta eval`` deprecation pointer.
 from __future__ import annotations
 
 import argparse
+import asyncio
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from pytest import MonkeyPatch
@@ -542,3 +546,337 @@ async def test_run_benchmark_defaults_leave_forced_keys_untouched() -> None:
     assert isinstance(snapshot_json, dict)
     assert "economy" not in snapshot_json
     assert "settings_set" not in records[0].config_json
+
+
+# ── `vesta bench verify` bounded-concurrency passes (AUDIT_0822 P4) ─────────
+
+
+def _out(text: str) -> QuestionOutput:
+    return QuestionOutput(
+        answer_text=text,
+        retrieved_paths=(),
+        abstained=False,
+        error=None,
+        trace={},
+        resolved_strategy="stub",
+    )
+
+
+def _vq(
+    qid: str,
+    *,
+    capability: str = "lookup",
+    answer: str = "alpha beta",
+    paths: tuple[str, ...] = ("a",),
+) -> BenchQuestion:
+    """A verify fixture question; article texts live in _VERIFY_EXTRACTS."""
+    return BenchQuestion(
+        id=qid,
+        question=f"Question {qid}?",
+        capability=capability,
+        difficulty="easy",
+        slice="core",
+        expected_behavior="answer",
+        answer=answer,
+        sources=tuple(
+            BenchSource(zim="z.zim", article_title=p.upper(), article_path=p) for p in paths
+        ),
+    )
+
+
+# (qid, article_path) → extracted text. q2/q3's first required source MISMATCHES
+# the answer tokens, so the serial short-circuit never extracts their second
+# source — concurrency must preserve that exactly.
+_VERIFY_EXTRACTS: dict[tuple[str, str], str] = {
+    ("q0", "a"): "alpha story",  # token overlap → support PASS
+    ("q1", "b"): "epsilon zeta",  # no overlap → support FAIL
+    ("q2", "c1"): "nothing here",  # mismatch → short-circuit before "c2"
+    ("q2", "c2"): "omega here",
+    ("q3", "d1"): "nope",  # mismatch → short-circuit before "d2"
+    ("q3", "d2"): "omega here",
+}
+
+
+def _verify_qs() -> tuple[BenchQuestion, ...]:
+    return (
+        _vq("q0", answer="alpha beta"),
+        _vq("q1", answer="gamma delta", paths=("b",)),
+        # fact capability → counts toward the floor (non-lookup denominator).
+        _vq("q2", capability="fact", answer="omega psi", paths=("c1", "c2")),
+        _vq("q3", capability="fact", answer="omega psi", paths=("d1", "d2")),
+    )
+
+
+_CB_ANSWERS = {"q0": "yes cb0", "q1": "cb1", "q2": "yes cb2", "q3": "cb3"}
+_OR_ANSWERS = {f"q{i}": f"yes or-q{i}" for i in range(4)}
+
+
+class _ScriptedSUT:
+    """closed_book/oracle stand-in answering from a fixed table."""
+
+    def __init__(self, answers: dict[str, str]) -> None:
+        self._answers = answers
+
+    async def run_one(self, q: BenchQuestion) -> QuestionOutput:
+        return _out(self._answers[q.id])
+
+
+async def _stub_judge_verdict(
+    *,
+    question: BenchQuestion,
+    model_answer: str,
+    abstained: bool,
+    judge: object,
+    judge_model: str,
+) -> Any:
+    from vesta.eval.bench_scoring import Verdict
+
+    return SimpleNamespace(
+        verdict=Verdict.CORRECT if model_answer.startswith("yes") else Verdict.INCORRECT,
+        reason="stub-rule",
+    )
+
+
+def _serial_reference_stdout(qs: Sequence[BenchQuestion]) -> str:
+    """The pre-P4 serial algorithm's printed lines, computed independently."""
+    support: dict[str, bool] = {}
+    for q in qs:
+        at = {w for w in cli._tokenize(q.answer) if len(w) >= 4}
+        ok = True
+        for src in q.sources:
+            if not src.required:
+                continue
+            text = _VERIFY_EXTRACTS[(q.id, src.article_path)]
+            if at and not (at & {w for w in cli._tokenize(text) if len(w) >= 4}):
+                ok = False
+                break
+        support[q.id] = ok
+
+    def _correct(answer: str) -> bool:
+        return answer.startswith("yes")
+
+    active = [q for q in qs if q.status == "active"]
+    ceiling = sum(1 for q in active if _correct(_OR_ANSWERS[q.id])) / len(active)
+    non_lookup = [q for q in active if q.capability != "lookup"]
+    floor = sum(1 for q in non_lookup if _correct(_CB_ANSWERS[q.id])) / len(non_lookup)
+    return (
+        f"ceiling (oracle) ≥ 85%? {ceiling * 100:.1f}% "
+        f"{'PASS' if ceiling >= 0.85 else 'FAIL'}\n"
+        f"floor (closed-book, excl lookup) ≤ 20%? {floor * 100:.1f}% "
+        f"{'PASS' if floor <= 0.20 else 'FAIL'}\n"
+        "wrote benchmarks/verification review files (.md + .json).\n"
+    )
+
+
+async def _run_verify_once(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    extra_args: list[str],
+) -> tuple[int, str, bytes, dict[str, Any]]:
+    """One full `bench verify` run against the offline fixture; returns exit
+    code + stdout + the review md bytes + the review json (minus timestamp)."""
+    import json as _json
+
+    from vesta.eval.bench_dataset import dataset_hash
+
+    qs = _verify_qs()
+    dataset = BenchDataset(name="vesta_test", version=1, questions=qs, hash=dataset_hash(qs))
+
+    @asynccontextmanager
+    async def _fake_open(*_args: object, **_kwargs: object):
+        config.configure()
+        yield _fake_state(Database(":memory:"))
+
+    async def _noop_extract(state: object, q: Any, src: Any) -> str:
+        await asyncio.sleep(0)
+        return _VERIFY_EXTRACTS[(q.id, src.article_path)]
+
+    def _make_system(system: str, *_args: object, **_kwargs: object) -> _ScriptedSUT:
+        return _ScriptedSUT(_CB_ANSWERS if system == "closed_book" else _OR_ANSWERS)
+
+    monkeypatch.setattr(cli, "_open_runtime", _fake_open)
+    monkeypatch.setattr("vesta.eval.bench_dataset.load_bench_dataset", lambda _path=None: dataset)
+    monkeypatch.setattr("vesta.api.bench.make_judge_llm", lambda *_a, **_k: (None, None))
+    monkeypatch.setattr("vesta.api.bench.make_system", _make_system)
+    monkeypatch.setattr("vesta.eval.bench_scoring.judge_verdict", _stub_judge_verdict)
+    monkeypatch.setattr(cli, "_extract_article", _noop_extract)
+
+    run_dir = tmp_path / f"run-{'-'.join(extra_args) or 'defaults'}"
+    run_dir.mkdir()
+    monkeypatch.chdir(run_dir)
+
+    args = cli._build_parser().parse_args(["bench", "verify", "--model", "stub-model", *extra_args])
+    code = await cli._cmd_bench_verify(args)
+    stdout = capsys.readouterr().out
+    md = next(iter((run_dir / "benchmarks" / "verification").glob("*-review.md"))).read_bytes()
+    payload = _json.loads(
+        next(iter((run_dir / "benchmarks" / "verification").glob("*-review.json"))).read_text()
+    )
+    payload.pop("generated")  # wall-clock stamp — compared modulo it
+    assert isinstance(payload, dict)
+    return code, stdout, md, payload
+
+
+@pytest.mark.asyncio
+async def test_bench_verify_output_identical_serial_vs_concurrent(
+    tmp_path: Path, monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Golden: default (answers=1/judges=4) and wide (--concurrency 4) runs both
+    print exactly what the old fully-serial implementation would print, write
+    byte-identical review md, and agree on every judged field."""
+    expected_stdout = _serial_reference_stdout(_verify_qs())
+
+    serial = await _run_verify_once(tmp_path, monkeypatch, capsys, ["--concurrency", "1"])
+    wide = await _run_verify_once(tmp_path, monkeypatch, capsys, ["--concurrency", "4"])
+    defaults = await _run_verify_once(tmp_path, monkeypatch, capsys, [])
+
+    for code, stdout, _md, _payload in (serial, wide, defaults):
+        assert code == 0
+        assert stdout == expected_stdout  # golden vs the old serial algorithm
+    assert serial[2] == wide[2] == defaults[2], "review md must be byte-identical"
+    assert serial[3] == wide[3] == defaults[3], "review json must agree (modulo stamp)"
+
+    # The fixture itself must exercise a MIXED outcome matrix, else the golden
+    # comparison is vacuous.
+    payload = serial[3]
+    questions = cast("dict[str, dict[str, Any]]", payload["questions"])
+    assert [questions[q]["support"] for q in ("q0", "q1", "q2", "q3")] == [
+        True,
+        False,
+        False,
+        False,
+    ]
+    assert [questions[q]["closed_book"]["verdict"] for q in ("q0", "q1", "q2", "q3")] == [
+        "correct",
+        "incorrect",
+        "correct",
+        "incorrect",
+    ]
+    assert all(questions[q]["oracle"]["verdict"] == "correct" for q in questions)
+
+
+def test_bench_verify_flags_parsing() -> None:
+    """`verify` honors --concurrency/--judge-concurrency; both default to None."""
+    parser = cli._build_parser()
+    explicit = parser.parse_args(
+        ["bench", "verify", "--concurrency", "4", "--judge-concurrency", "2"]
+    )
+    assert explicit.concurrency == 4
+    assert explicit.judge_concurrency == 2
+    bare = parser.parse_args(["bench", "verify"])
+    assert bare.concurrency is None
+    assert bare.judge_concurrency is None
+
+
+@pytest.mark.asyncio
+async def test_verify_pass_preserves_order_under_variable_delays(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Stubbed SUT with reversed per-question delays still returns answers keyed
+    in input order (gather preserves argument order), while proving overlap."""
+    delays = {"q0": 0.30, "q1": 0.05, "q2": 0.01}
+    done: list[str] = []
+
+    class DelayedSUT:
+        async def run_one(self, q: BenchQuestion) -> QuestionOutput:
+            await asyncio.sleep(delays[q.id])
+            done.append(q.id)
+            return _out(f"ans-{q.id}")
+
+    monkeypatch.setattr("vesta.api.bench.make_system", lambda *_a, **_k: DelayedSUT())
+    qs = [_q(f"q{i}") for i in range(3)]
+    out = await cli._verify_pass(object(), qs, "closed_book", "m", max_concurrent=3)
+    assert list(out) == ["q0", "q1", "q2"]
+    assert out == {"q0": "ans-q0", "q1": "ans-q1", "q2": "ans-q2"}
+    assert done != ["q0", "q1", "q2"], "delays should interleave under concurrency"
+    assert done[-1] == "q0"
+
+
+@pytest.mark.asyncio
+async def test_verify_pass_respects_concurrency_bound(monkeypatch: MonkeyPatch) -> None:
+    """Max in-flight SUT calls never exceeds the bound (and exceeds 1)."""
+    inflight = 0
+    peak = 0
+
+    class CountingSUT:
+        async def run_one(self, q: BenchQuestion) -> QuestionOutput:
+            nonlocal inflight, peak
+            inflight += 1
+            peak = max(peak, inflight)
+            try:
+                await asyncio.sleep(0.05)
+                return _out("x")
+            finally:
+                inflight -= 1
+
+    monkeypatch.setattr("vesta.api.bench.make_system", lambda *_a, **_k: CountingSUT())
+    out = await cli._verify_pass(
+        object(), [_q(f"q{i}") for i in range(6)], "oracle", "m", max_concurrent=2
+    )
+    assert list(out) == [f"q{i}" for i in range(6)]
+    assert peak <= 2, f"SUT ran {peak} wide, bound is 2"
+    assert peak > 1, "bound=2 should actually overlap"
+
+
+@pytest.mark.asyncio
+async def test_verify_judge_respects_bound_and_order(monkeypatch: MonkeyPatch) -> None:
+    """Judgments stay input-ordered and bounded under a slow fake judge."""
+    from vesta.eval.bench_scoring import Verdict
+
+    inflight = 0
+    peak = 0
+    graded: list[str] = []
+
+    async def _slow_judge(**kwargs: Any) -> Any:
+        nonlocal inflight, peak
+        inflight += 1
+        peak = max(peak, inflight)
+        try:
+            await asyncio.sleep(0.05)
+            graded.append(kwargs["question"].id)
+            return SimpleNamespace(verdict=Verdict.CORRECT, reason="r")
+        finally:
+            inflight -= 1
+
+    monkeypatch.setattr("vesta.eval.bench_scoring.judge_verdict", _slow_judge)
+    qs = [_q(f"q{i}") for i in range(5)]
+    judged = await cli._verify_judge(None, "", qs, {}, {}, max_concurrent=2)
+    assert list(judged) == [f"q{i}" for i in range(5)]
+    assert all(o.verdict == Verdict.CORRECT for o in judged.values())
+    assert peak <= 2, f"judge ran {peak} wide, bound is 2"
+    assert peak > 1
+    assert sorted(graded) == [f"q{i}" for i in range(5)]
+
+
+@pytest.mark.asyncio
+async def test_verify_support_respects_bound_and_short_circuit(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Extraction stays within the given bound, keeps the serial short-circuit
+    (mismatched first source ⇒ later sources of that question never extracted),
+    and extracts exactly the same articles the serial pass did."""
+    inflight = 0
+    peak = 0
+    extracted: list[tuple[str, str]] = []
+
+    async def _counting_extract(state: object, q: Any, src: Any) -> str:
+        nonlocal inflight, peak
+        inflight += 1
+        peak = max(peak, inflight)
+        try:
+            await asyncio.sleep(0.02)
+            extracted.append((q.id, src.article_path))
+            return _VERIFY_EXTRACTS[(q.id, src.article_path)]
+        finally:
+            inflight -= 1
+
+    monkeypatch.setattr(cli, "_extract_article", _counting_extract)
+    qs = list(_verify_qs())
+    support = await cli._verify_support(object(), qs, max_concurrent=2)
+    assert support == {"q0": True, "q1": False, "q2": False, "q3": False}
+    assert peak <= 2, f"extraction ran {peak} wide, bound is 2"
+    assert peak > 1
+    # Same extraction set+count as the serial implementation: second sources of
+    # q2/q3 skipped by the short-circuit.
+    assert sorted(extracted) == [("q0", "a"), ("q1", "b"), ("q2", "c1"), ("q3", "d1")]
