@@ -164,12 +164,17 @@
 	const TEST_QUESTION = 'In one short sentence, what is Wikipedia?';
 	const testStream = new AnswerStream();
 	let testRunning = $state(false);
+	// Aborted on teardown so navigating away mid-demo cancels the underlying
+	// fetch instead of streaming tokens into a dead component.
+	let testController: AbortController | null = null;
 
 	async function askTestQuestion() {
 		if (testRunning) return;
 		testRunning = true;
+		testController?.abort();
+		testController = new AbortController();
 		try {
-			await testStream.consume(streamChat({ query: TEST_QUESTION }).events);
+			await testStream.consume(streamChat({ query: TEST_QUESTION }, testController.signal).events);
 		} finally {
 			testRunning = false;
 		}
@@ -316,9 +321,16 @@
 		if (landed) beginReadiness();
 	});
 
-	// Stop the readiness poll when the wizard goes away.
+	// Stop the readiness poll when the wizard goes away, and abort the demo
+	// answer stream with it: abort() cancels the fetch; stop() makes consume()
+	// drop any event it had already pulled, so nothing writes state after
+	// unmount. (Same teardown idiom as AnswerSession's $effect.root cleanup.)
 	$effect(() => {
-		return () => stopReadinessPolling();
+		return () => {
+			stopReadinessPolling();
+			testController?.abort();
+			testStream.stop();
+		};
 	});
 
 	// The in-flight model download. Derived from the global job stream so it
