@@ -25,7 +25,12 @@ from typing import Any
 import httpx
 
 from vesta import config
-from vesta.jobs.types import RESUME_CHECKPOINT_KEY, JobHandle, register_job_type
+from vesta.jobs.types import (
+    RESUME_CHECKPOINT_KEY,
+    JobHandle,
+    maybe_throttle,
+    register_job_type,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -204,7 +209,7 @@ async def _download_with_resume(
                 f.write(chunk)
                 written += len(chunk)
                 await _checkpoint(job, written, total, url)
-                await _maybe_throttle(written, bytes_done, limit_kbps, t0)
+                await maybe_throttle(written, bytes_done, limit_kbps, t0)
             f.flush()
 
     return written
@@ -220,18 +225,6 @@ def _msg(written: int, total: int, action: str) -> str:
         pct = written * 100 // total
         return f"{action}: {pct}% ({written // (1024 * 1024)} MB / {total // (1024 * 1024)} MB)"
     return f"{action}: {written // (1024 * 1024)} MB"
-
-
-async def _maybe_throttle(written: int, start: int, limit_kbps: int, t0: float) -> None:
-    """Best-effort per-download throttle (mirrors catalog/download.py)."""
-    if limit_kbps <= 0:
-        return
-    elapsed = asyncio.get_event_loop().time() - t0
-    served = written - start
-    allowed = limit_kbps * 1024 * elapsed
-    if served > allowed:
-        ahead = (served - allowed) / (limit_kbps * 1024)
-        await asyncio.sleep(min(ahead, 0.5))
 
 
 # Register at import.

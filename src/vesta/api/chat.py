@@ -39,7 +39,7 @@ from vesta.answer.contracts import (
 )
 from vesta.answer.conversation import build_history, derive_title
 from vesta.api.agent_chat import iter_agent_turn_events
-from vesta.api.answer import _serialize_event, iter_answer_events
+from vesta.api.answer import _card_to_dict, _serialize_event, iter_answer_events
 from vesta.api.conversation_store import SqliteConversationStore, StoredConversation, StoredMessage
 from vesta.api.state import AppState, app_state
 from vesta.config.capabilities import Capability, compute_capabilities
@@ -222,7 +222,7 @@ async def _run_chat_turn(
             if event.answer_text is not None:
                 final_answer = event.answer_text
         elif isinstance(event, SourcesEvent):
-            sources_json = _dumps([_card_public_dict(c) for c in event.cards])
+            sources_json = _dumps([_card_to_dict(c) for c in event.cards])
         elif isinstance(event, TraceEvent):
             trace_dict = event.trace
 
@@ -315,19 +315,6 @@ def _history_strategy() -> str:
         return str(app_config.get(CHAT_HISTORY_STRATEGY))
     except Exception:
         return str(CHAT_HISTORY_STRATEGY.default)
-
-
-def _card_public_dict(card: Any) -> dict[str, Any]:
-    """Project a SourceCard to the public card shape (matches the SSE card DTO)."""
-    return {
-        "zim_id": card.zim_id,
-        "path": card.path,
-        "title": card.title,
-        "snippet": card.snippet,
-        "breadcrumb": card.breadcrumb,
-        "score": card.score,
-        "source": card.source,
-    }
 
 
 def _to_summary(c: StoredConversation) -> ConversationSummary:

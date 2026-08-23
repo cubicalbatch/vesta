@@ -243,7 +243,9 @@ def git_sha() -> str:
         return "unknown"
 
 
-def _now_iso() -> str:
+def now_iso() -> str:
+    """Second-resolution UTC timestamp — the one stamp format every persisted
+    run row uses (shared with bench_runner and api/bench)."""
     return _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat()
 
 
@@ -327,7 +329,7 @@ async def persist_run(
     """Insert a fully-pinned run record and return its id."""
     record = RunRecord(
         id=0,
-        started_at=_now_iso(),
+        started_at=now_iso(),
         profile_name=profile.name,
         profile_hash=profile.hash,
         profile_yaml=profile_to_yaml(profile),
@@ -631,6 +633,7 @@ __all__ = [
     "evaluate_profile",
     "git_sha",
     "machine_id",
+    "now_iso",
     "parse_sweep",
     "persist_run",
     "record_from_row",

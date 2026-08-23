@@ -76,6 +76,7 @@ from vesta.eval.golden import (
     EVAL_JUDGE_ENDPOINT_URL,
     EVAL_JUDGE_MODEL,
 )
+from vesta.eval.runner import now_iso
 from vesta.inference import (
     INFERENCE_LLM_API_KEY,
     INFERENCE_LLM_ENDPOINT_URL,
@@ -84,8 +85,27 @@ from vesta.inference import (
 from vesta.retrieval.profiles import load_profile, resolve_profile
 
 
-def _now_iso() -> str:
-    return _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat()
+async def _find_archive_by_name(state: AppState, zim: str) -> Any:
+    """Find an open archive by ZIM filename or name.
+
+    The single copy of the lookup both bench system classes share (the
+    end-to-end oracle and the answer-only replay) — byte-identical twins here
+    would silently diverge on which archive a bench question resolves to.
+    """
+    db = state.db
+    async with db.read() as conn:
+        cur = await conn.execute(
+            "SELECT id FROM zims WHERE filename=? OR name=? LIMIT 1", (zim, zim)
+        )
+        row = await cur.fetchone()
+    if row is None:
+        return None
+    registry = state.registry
+    if registry is None:
+        return None
+    with suppress(KeyError):
+        return registry.get(int(row[0]))
+    return None
 
 
 # ── GatewayJudgeLLM (moved from api/benchmark.py, extended) ─────────────────
@@ -623,20 +643,7 @@ class OracleSystem(_BaseSystem):
 
     async def _find_archive(self, zim: str) -> Any:
         """Find an open archive by ZIM filename or name."""
-        db = self._state.db
-        async with db.read() as conn:
-            cur = await conn.execute(
-                "SELECT id FROM zims WHERE filename=? OR name=? LIMIT 1", (zim, zim)
-            )
-            row = await cur.fetchone()
-        if row is None:
-            return None
-        registry = self._state.registry
-        if registry is None:
-            return None
-        with suppress(KeyError):
-            return registry.get(int(row[0]))
-        return None
+        return await _find_archive_by_name(self._state, zim)
 
     async def _oracle_context(self, q: BenchQuestion) -> tuple[str, tuple[str, ...]]:
         """Budgeted gold-article context + the gold paths it was built from."""
@@ -825,21 +832,8 @@ class AnswerOnlySystem(_BaseSystem):
             self._snapshot = load_context_snapshot(context_path)
 
     async def _find_archive(self, zim: str) -> Any:
-        """Find an open archive by ZIM filename or name (oracle mode)."""
-        db = self._state.db
-        async with db.read() as conn:
-            cur = await conn.execute(
-                "SELECT id FROM zims WHERE filename=? OR name=? LIMIT 1", (zim, zim)
-            )
-            row = await cur.fetchone()
-        if row is None:
-            return None
-        registry = self._state.registry
-        if registry is None:
-            return None
-        with suppress(KeyError):
-            return registry.get(int(row[0]))
-        return None
+        """Find an open archive by ZIM filename or name."""
+        return await _find_archive_by_name(self._state, zim)
 
     def _snapshot_entry(self, qid: str) -> Mapping[str, object]:
         qs = self._snapshot.get("questions")
@@ -1075,7 +1069,7 @@ class SqliteBenchStore:
 
     async def mark_aborted(self, run_id: int, reason: str) -> bool:
         """Mark a ``running`` run ``aborted`` (only touches still-running rows)."""
-        now = _now_iso()
+        now = now_iso()
         async with self._db.write() as conn:
             cur = await conn.execute(
                 "UPDATE bench_runs SET status='aborted', finished_at=? "
@@ -1193,7 +1187,7 @@ class SqliteBenchStore:
 
     async def judge_cache_put(self, key: str, outcome: JudgeOutcome) -> None:
         payload = _outcome_to_payload(outcome)
-        now = _now_iso()
+        now = now_iso()
         async with self._db.write() as conn:
             await conn.execute(
                 "INSERT OR REPLACE INTO bench_judge_cache(key, verdict, reason, "
@@ -2005,7 +1999,7 @@ async def run_bench_endpoint(request: Request, body: BenchRunRequest) -> BenchRu
             placeholder = _placeholder_record(
                 run_group=run_group,
                 label=label,
-                started_at=_now_iso(),
+                started_at=now_iso(),
                 dataset=dataset,
                 subset_hash_val=subset_val,
                 sys_name=sut.name,

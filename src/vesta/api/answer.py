@@ -286,7 +286,12 @@ def _sse(event: str, data: dict[str, Any]) -> str:
 
 
 def _card_to_dict(c: Any) -> dict[str, Any]:
-    """Map a retrieval SourceCard to the SSE card DTO."""
+    """Map a retrieval SourceCard to the public card DTO.
+
+    The single serializer for that shape — the SSE ``sources`` payload here and
+    the persisted ``messages.sources_json`` in ``api/chat.py`` must never drift
+    apart.
+    """
     return {
         "zim_id": c.zim_id,
         "path": c.path,

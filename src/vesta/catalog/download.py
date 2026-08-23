@@ -52,7 +52,12 @@ from vesta.catalog import (
     get_zims_dir,
 )
 from vesta.catalog.opds import _local_name
-from vesta.jobs.types import RESUME_CHECKPOINT_KEY, JobHandle, register_job_type
+from vesta.jobs.types import (
+    RESUME_CHECKPOINT_KEY,
+    JobHandle,
+    maybe_throttle,
+    register_job_type,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -477,7 +482,7 @@ async def _download_one(
                     if written - last_disk_check >= _DISK_CHECK_EVERY:
                         _check_free_space(part_path.parent, total, part_path)
                         last_disk_check = written
-                    await _maybe_throttle(written, start, limit_kbps, t0)
+                    await maybe_throttle(written, start, limit_kbps, t0)
                     await _checkpoint(job, written, total, url, sha256)
                 # fsync while the file is still open so the resumed size survives a
                 # crash before the next checkpoint lands.
@@ -537,21 +542,6 @@ async def _sha256_of(path: Path) -> str:
 
     await asyncio.to_thread(_compute)
     return digest.hexdigest()
-
-
-async def _maybe_throttle(written: int, start: int, limit_kbps: int, t0: float) -> None:
-    """Best-effort per-download throttle. Compares bytes-served-this-run against
-    elapsed time and sleeps to keep under ``limit_kbps`` KiB/s (0 = unlimited)."""
-    if limit_kbps <= 0:
-        return
-    served = written - start
-    if served <= 0:
-        return
-    elapsed = asyncio.get_event_loop().time() - t0
-    target_seconds = served / (limit_kbps * 1024)
-    ahead = target_seconds - elapsed
-    if ahead > 0:
-        await asyncio.sleep(min(ahead, 0.5))
 
 
 async def _checkpoint(

@@ -158,5 +158,23 @@ async def _sleep_interruptible(job: JobHandle, seconds: float) -> None:
         await asyncio.sleep(min(remaining, 0.02))
 
 
+async def maybe_throttle(written: int, start: int, limit_kbps: int, t0: float) -> None:
+    """Best-effort per-download bandwidth throttle, shared by both download job
+    types (ZIM + model): compares bytes served this run against elapsed time
+    and sleeps to keep under ``limit_kbps`` KiB/s (0 = unlimited). The sleep is
+    capped at 0.5 s so cancellation stays responsive.
+    """
+    if limit_kbps <= 0:
+        return
+    served = written - start
+    if served <= 0:
+        return
+    elapsed = asyncio.get_event_loop().time() - t0
+    target_seconds = served / (limit_kbps * 1024)
+    ahead = target_seconds - elapsed
+    if ahead > 0:
+        await asyncio.sleep(min(ahead, 0.5))
+
+
 # Register the built-in noop job type at import.
 register_job_type(NoopJob())

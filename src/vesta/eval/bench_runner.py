@@ -66,7 +66,7 @@ from vesta.eval.bench_scoring import (
     source_hit_rank,
     stage_latency_breakdown,
 )
-from vesta.eval.runner import git_sha, machine_id
+from vesta.eval.runner import git_sha, machine_id, now_iso
 
 # ── Settings ────────────────────────────────────────────────────────────────
 
@@ -475,12 +475,6 @@ class ProgressUpdate:
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 
-def _now_iso() -> str:
-    import datetime as _dt
-
-    return _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat()
-
-
 def _system_pin(system: Any, attr: str, default: str = "") -> str:
     """Read a metadata attribute from a SystemUnderTest (duck-typed)."""
     val = getattr(system, attr, default)
@@ -652,7 +646,7 @@ async def _run_cell(  # noqa: PLR0912, PLR0915
     profile_hash = _system_pin(system, "profile_hash")
     sys_name = system.name
     full_label = f"{label}{' r' + str(repeat_index) if repeat_index else ''}".strip()
-    started = _now_iso()
+    started = now_iso()
     config: dict[str, object] = {
         "git_sha": git_sha(),
         "machine_id": machine_id(),
@@ -839,7 +833,7 @@ async def _run_cell(  # noqa: PLR0912, PLR0915
             traces=all_traces,
             with_answers=generates_answers,
         )
-        ended = _now_iso()
+        ended = now_iso()
         final_record = replace(
             record,
             finished_at=ended,
@@ -856,7 +850,7 @@ async def _run_cell(  # noqa: PLR0912, PLR0915
         return final_record
 
     except Exception as exc:
-        ended = _now_iso()
+        ended = now_iso()
         error_record = replace(
             record,
             finished_at=ended,
