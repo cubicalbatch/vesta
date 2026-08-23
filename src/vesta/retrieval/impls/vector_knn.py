@@ -104,20 +104,25 @@ class VectorKnn:
 
         # Dedup by (zim_id, path): a depth-2/3 index can return several chunks of
         # the same article; Stage A nominates articles, not passages, so
-        # keep the strongest hit per article.
+        # keep the strongest hit per article. Hits arrive score-interleaved
+        # across archives, so ranks count per zim_id — the Candidate contract
+        # scopes ``rank`` to its (zim_id, source) group only.
         seen: set[tuple[int, str]] = set()
+        next_rank: dict[int, int] = {}
         out: list[Candidate] = []
         for hit in hits:
             key = (hit.zim_id, hit.path)
             if key in seen:
                 continue
             seen.add(key)
+            rank = next_rank.get(hit.zim_id, 0)
+            next_rank[hit.zim_id] = rank + 1
             out.append(
                 Candidate(
                     zim_id=hit.zim_id,
                     path=hit.path,
                     source="vector_knn",
-                    rank=len(out),
+                    rank=rank,
                     score=float(hit.score),
                 )
             )

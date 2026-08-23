@@ -116,14 +116,21 @@ class XapianFTS:
                 if out:
                     break
 
-        # Re-rank within archive+source.
-        for i in range(len(out)):
+        # Normalize ranks within each ``(zim_id, source)`` group: the
+        # Candidate contract scopes ``rank`` to its own group only, so a
+        # global counter over the concatenated list would offset every archive
+        # after the first and shrink its RRF mass.
+        counts: dict[tuple[int, str], int] = {}
+        for i, c in enumerate(out):
+            key = (c.zim_id, c.source)
+            rank = counts.get(key, 0)
+            counts[key] = rank + 1
             out[i] = Candidate(
-                zim_id=out[i].zim_id,
-                path=out[i].path,
-                source=out[i].source,
-                rank=i,
-                score=out[i].score,
+                zim_id=c.zim_id,
+                path=c.path,
+                source=c.source,
+                rank=rank,
+                score=c.score,
             )
 
         return out

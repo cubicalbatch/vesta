@@ -126,7 +126,12 @@ class AliasTitleResolve:
 
 
 def _dedupe_and_rerank(candidates: list[Candidate]) -> list[Candidate]:
-    """Dedupe by ``(zim_id, path)`` keeping the first occurrence, then re-rank."""
+    """Dedupe by ``(zim_id, path)`` keeping the first occurrence, then re-rank
+    within each ``(zim_id, source)`` group.
+
+    ``rank`` is group-local per the Candidate contract — a global counter here
+    would offset every archive after the first and shrink its RRF mass.
+    """
     seen: set[tuple[int, str]] = set()
     deduped: list[Candidate] = []
     for c in candidates:
@@ -135,7 +140,13 @@ def _dedupe_and_rerank(candidates: list[Candidate]) -> list[Candidate]:
             continue
         seen.add(key)
         deduped.append(c)
-    return [
-        Candidate(zim_id=c.zim_id, path=c.path, source=c.source, rank=i, score=c.score)
-        for i, c in enumerate(deduped)
-    ]
+    counts: dict[tuple[int, str], int] = {}
+    out: list[Candidate] = []
+    for c in deduped:
+        gkey = (c.zim_id, c.source)
+        rank = counts.get(gkey, 0)
+        counts[gkey] = rank + 1
+        out.append(
+            Candidate(zim_id=c.zim_id, path=c.path, source=c.source, rank=rank, score=c.score)
+        )
+    return out

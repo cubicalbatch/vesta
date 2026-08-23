@@ -95,20 +95,13 @@ class TitleSuggest:
 
         results = await asyncio.gather(*(_suggest_one(a) for a in archives), return_exceptions=True)
 
+        # ``_suggest_one`` enumerates each archive's hits from 0, so ranks are
+        # already within their (zim_id, source) group — concatenating the
+        # per-archive blocks preserves that. A running counter across archives
+        # would offset every archive after the first and shrink its RRF mass.
         out: list[Candidate] = []
-        rank = 0
         for r in results:
             if isinstance(r, list):
-                for c in r:
-                    out.append(
-                        Candidate(
-                            zim_id=c.zim_id,
-                            path=c.path,
-                            source=c.source,
-                            rank=rank,
-                            score=c.score,
-                        )
-                    )
-                    rank += 1
+                out.extend(r)
 
         return out
