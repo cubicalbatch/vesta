@@ -795,6 +795,45 @@ def test_token_usage_even_count_p50() -> None:
     assert usage.p50 == 200
 
 
+def test_token_usage_p50_uses_per_question_totals_when_rankings_disagree() -> None:
+    """p50 is the median of per-question input+output totals.
+
+    When input and output rankings disagree, summing two independently
+    sorted lists yields per-rank sums, not per-question totals
+    (AUDIT_0822 M10): q1=(100,0), q2=(1,100), q3=(1,0) has true totals
+    [100, 101, 1] → median 100; rank-wise sums would give [1, 1, 200]
+    → median 1.
+    """
+    results = [
+        _sq_with_tokens("q1", 100, 0),  # total 100
+        _sq_with_tokens("q2", 1, 100),  # total 101
+        _sq_with_tokens("q3", 1, 0),  # total 1
+    ]
+    usage = aggregate_token_usage(
+        results, input_attr="answer_input_tokens", output_attr="answer_output_tokens"
+    )
+    assert usage.p50 == 100
+    assert usage.p50_input == 1
+    assert usage.p50_output == 0
+    assert usage.total_input == 102
+    assert usage.total_output == 100
+    assert usage.total == 202
+
+
+def test_token_usage_p50_unchanged_when_rankings_agree() -> None:
+    """When both directions sort in the same order, per-question totals and
+    rank-wise sums coincide — p50 stays the median question total."""
+    results = [
+        _sq_with_tokens("q1", 10, 1),  # total 11
+        _sq_with_tokens("q2", 20, 2),  # total 22
+        _sq_with_tokens("q3", 30, 3),  # total 33
+    ]
+    usage = aggregate_token_usage(
+        results, input_attr="answer_input_tokens", output_attr="answer_output_tokens"
+    )
+    assert usage.p50 == 22
+
+
 def test_token_usage_empty_returns_zeros() -> None:
     usage = aggregate_token_usage(
         [], input_attr="answer_input_tokens", output_attr="answer_output_tokens"

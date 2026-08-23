@@ -990,9 +990,10 @@ def aggregate_token_usage(
     """
     if not results:
         return _empty_token_usage()
-    ins = sorted(int(getattr(r, input_attr, 0)) for r in results)
-    outs = sorted(int(getattr(r, output_attr, 0)) for r in results)
-    totals = sorted(a + b for a, b in zip(ins, outs, strict=True))
+    pairs = [(int(getattr(r, input_attr, 0)), int(getattr(r, output_attr, 0))) for r in results]
+    ins = sorted(a for a, _ in pairs)
+    outs = sorted(b for _, b in pairs)
+    totals = sorted(a + b for a, b in pairs)
     return TokenUsage(
         n=len(results),
         total_input=sum(ins),
