@@ -186,9 +186,8 @@ def build_manager_from_settings(
     resolved :class:`~vesta.config.SettingsSnapshot`.
 
     ``model_dir`` should normally be passed explicitly by the composition root
-    as ``<data.dir>/models`` — the same "derive from ``data.dir``, don't trust
-    the standalone default" pattern ``main.py``/``cli.py`` already use for
-    ``zims_dir`` (``zim.dir``'s default is similarly vestigial). Falls back to
+    as ``<data.dir>/models`` — the same "derive from ``data.dir``" pattern
+    ``main.py``/``cli.py`` already use for ``zims_dir``. Falls back to
     resolving ``encoders.model_dir`` from the snapshot when no override is
     given, so the function stays usable standalone (e.g. in a unit test).
 

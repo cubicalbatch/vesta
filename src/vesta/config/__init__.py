@@ -109,14 +109,6 @@ LOGGING_LEVEL = setting(
 # Each knob carries its own UI metadata; the schema endpoint needs no per-knob
 # wiring. Bounds where a number would be nonsensical.
 
-ZIM_DIR = setting(
-    "zim.dir",
-    str,
-    "./data/zims",
-    group="ZIM / Storage",
-    help="Directory scanned for *.zim archives at startup and on POST /api/zims/scan.",
-    hot=False,
-)
 ZIM_CLUSTER_CACHE_MB = setting(
     "zim.cluster_cache_mb",
     int,
@@ -224,7 +216,6 @@ __all__ = [
     "SERVER_HOST",
     "SERVER_PORT",
     "ZIM_CLUSTER_CACHE_MB",
-    "ZIM_DIR",
     "ZIM_EXTRACT_PROCESSES",
     "ZIM_READ_POOL_SIZE",
     "Capability",
