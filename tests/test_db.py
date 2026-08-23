@@ -34,6 +34,7 @@ EXPECTED_TABLES = {
     "bench_judge_cache",  # migration 0009
     "article_media",  # media-ZIM asset manifest (migration 0008)
     "article_documents",  # nautiluszim document-library catalog (migration 0013)
+    "index_leases",  # cross-process build exclusion, one row per building archive (migration 0014)
     # catalog_fts is a virtual table (FTS5); it appears in sqlite_master too,
     # but FTS5 virtual tables + their shadow tables are excluded here to keep the
     # set to the logical base tables (asserted separately in test_catalog_fts).
@@ -86,9 +87,10 @@ async def test_fresh_db_reaches_full_schema(tmp_db_path: Path) -> None:
                 11,
                 12,
                 13,
+                14,
             ]
-        )  # ...+bench_runs +token usage +retire_agentic_settings +retire_single_shot +article_documents
-        assert await current_version(conn) == 13
+        )  # ...+bench_runs +token usage +retire_agentic_settings +retire_single_shot +article_documents +index_leases
+        assert await current_version(conn) == 14
     tables = await _table_names(db)
     await db.stop()
     assert tables >= EXPECTED_TABLES
@@ -143,14 +145,14 @@ async def test_failed_migration_rolls_back_atomically(
     await db.start()
     async with db.write() as conn:
         applied = await run_migrations(conn)
-        assert len(applied) == 13
-        assert await current_version(conn) == 13
+        assert len(applied) == 14
+        assert await current_version(conn) == 14
 
-        probe_sql = tmp_path / "0014_atomicity_probe.sql"
+        probe_sql = tmp_path / "0015_atomicity_probe.sql"
         monkeypatch.setattr(
             db_migrations,
             "available_migrations",
-            lambda: [(14, "atomicity_probe", probe_sql)],
+            lambda: [(15, "atomicity_probe", probe_sql)],
         )
 
         # First half succeeds (CREATE TABLE), second half errors mid-script.
@@ -162,7 +164,7 @@ async def test_failed_migration_rolls_back_atomically(
         with pytest.raises(MigrationError):
             await run_migrations(conn)
 
-        assert await current_version(conn) == 13  # bump rolled back
+        assert await current_version(conn) == 14  # bump rolled back
         async with conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='m6_atomicity_probe'"
         ) as cur:
@@ -174,8 +176,8 @@ async def test_failed_migration_rolls_back_atomically(
             "INSERT INTO m6_atomicity_probe VALUES (1);\n",
             encoding="utf-8",
         )
-        assert await run_migrations(conn) == [14]
-        assert await current_version(conn) == 14
+        assert await run_migrations(conn) == [15]
+        assert await current_version(conn) == 15
         async with conn.execute("SELECT COUNT(*) FROM m6_atomicity_probe") as cur:
             row = await cur.fetchone()
         assert row is not None and row[0] == 1
@@ -212,8 +214,9 @@ async def test_previous_version_reaches_same_state(tmp_db_path: Path) -> None:
         v2 = await current_version(conn)
     second_tables = await _table_names(db)
     await db.stop()
-    assert v1 == v2 == 13  # 0001-0013: init+aliases+eval pins+vectors+answer_runs+catalog_fts+
-    #                   zim_kind+article_media+bench_runs+token_usage+retire_agentic_settings+retire_single_shot+article_documents
+    assert v1 == v2 == 14  # 0001-0014: init+aliases+eval pins+vectors+answer_runs+catalog_fts+
+    #                   zim_kind+article_media+bench_runs+token_usage+retire_agentic_settings+retire_single_shot
+    #                   +article_documents+index_leases
     assert first_tables == second_tables
 
 

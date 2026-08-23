@@ -50,6 +50,7 @@ from vesta.index import (
 )
 from vesta.index.depth import chunks_for_article
 from vesta.index.estimate import ThroughputTracker
+from vesta.index.leases import acquire_index_lease, release_index_lease
 from vesta.index.preempt import apply_ionice_idle, apply_nice
 from vesta.jobs.types import RESUME_CHECKPOINT_KEY, JobHandle, register_job_type
 from vesta.vectors import get_store
@@ -158,6 +159,14 @@ class IndexZimJob:
             raise RuntimeError(
                 "index_zim: db/registry/store not bound (run inside the app lifespan)"
             )
+        # Cross-process mutual exclusion (AUDIT_0822 M7): claim BEFORE anything
+        # is wiped or stamped, so a refused build leaves the archive row and
+        # the store untouched — the claim sits outside the try below (whose
+        # except arm stamps index_status='error' for real build failures).
+        # Both entry points run through here (the detached CLI and the server's
+        # JobRunner), so one gate covers every build path.
+        owner_id = str(params.get("owner") or "index_zim")
+        await acquire_index_lease(db, zim_id, owner_id=owner_id)
         try:
             await _run_build(
                 job, params, zim_id=zim_id, depth=depth, db=db, registry=registry, store=store
@@ -168,6 +177,8 @@ class IndexZimJob:
             # resume position, so retrying the job resumes where it stopped).
             await _set_index_status(db, zim_id, "error", depth=depth)
             raise
+        finally:
+            await release_index_lease(db, zim_id, owner_id=owner_id)
 
 
 async def _run_build(  # noqa: PLR0912, PLR0915 — the resume/fresh/cancel/preempt ladder

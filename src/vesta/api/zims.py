@@ -574,8 +574,24 @@ async def trigger_index(
                 "job_id": existing.id,
             }
 
+        # Cross-process guard (AUDIT_0822 M7): a detached `vesta index` build
+        # creates no job row at all, so the check above cannot see it. Refuse
+        # with a 409 naming the holder instead of enqueueing a build destined
+        # to fail its own lease claim. Dead/stale leases don't block — the job
+        # takes them over when it runs.
+        from vesta.index.leases import active_holder
+
+        holder = await active_holder(state.db, zim_id)
+        if holder is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"an index build is already running for this archive ({holder})",
+            )
+
         job_id = await state.runner.submit(
-            "index_zim", target=str(zim_id), params={"zim_id": zim_id, "depth": depth}
+            "index_zim",
+            target=str(zim_id),
+            params={"zim_id": zim_id, "depth": depth, "owner": "server"},
         )
     return {"zim_id": zim_id, "depth": depth, "job_id": job_id}
 

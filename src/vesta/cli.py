@@ -2498,8 +2498,9 @@ async def _resolve_zims(db: Database, specs: list[str]) -> list[int]:
     return resolved
 
 
-async def _run_index(state: AppState, args: argparse.Namespace) -> int:  # noqa: PLR0915 — one coherent flow: resolve → supersede → resume → run → report
+async def _run_index(state: AppState, args: argparse.Namespace) -> int:  # noqa: PLR0915, PLR0912 — one coherent flow: resolve → refuse-if-held → supersede → resume → run → report
     from vesta.index.job import IndexZimJob
+    from vesta.index.leases import IndexLeaseHeld, active_holder
     from vesta.jobs.types import RESUME_CHECKPOINT_KEY
 
     db = state.db
@@ -2509,6 +2510,18 @@ async def _run_index(state: AppState, args: argparse.Namespace) -> int:  # noqa:
         return 2
 
     zim_id = await _resolve_zim(db, args.zim)
+
+    # Cross-process exclusion (AUDIT_0822 M7): a live server-side build holds
+    # an index lease even though we're about to cancel its job row below.
+    # Refuse BEFORE touching anything — no stranded-row cancellation, no
+    # sidecar deletion — so we never strand the build that's beating us. The
+    # hard gate is the job's own claim inside IndexZimJob.run; this just fails
+    # faster and keeps the cleanup below honest about what it may cancel.
+    holder = await active_holder(db, zim_id)
+    if holder is not None:
+        print(f"another index build is already running for this archive ({holder}).")
+        print("wait for it to finish (or stop it), then retry.")
+        return 1
 
     # Supersede any half-finished server-side index job for this archive so the
     # web server's JobRunner.start() can't (re)launch it concurrently on reload.
@@ -2526,7 +2539,7 @@ async def _run_index(state: AppState, args: argparse.Namespace) -> int:  # noqa:
         # index (AUDIT_0822 M8).
         with contextlib.suppress(OSError):
             cp_path.unlink()
-    params: dict[str, Any] = {"zim_id": zim_id, "depth": depth}
+    params: dict[str, Any] = {"zim_id": zim_id, "depth": depth, "owner": "cli"}
     if not args.fresh and cp_path.exists():
         try:
             blob = json.loads(cp_path.read_text())
@@ -2566,6 +2579,11 @@ async def _run_index(state: AppState, args: argparse.Namespace) -> int:  # noqa:
     except KeyboardInterrupt:
         print("\nforced quit. Index state left as-is; re-run to resume.")
         code = 130
+    except IndexLeaseHeld as exc:
+        # Lost the race: a build claimed the archive between our pre-check and
+        # the job's own lease claim. Same refusal as above, minus the framing.
+        print(f"\n{exc}")
+        code = 1
     except Exception as exc:
         print(f"\nindex failed: {exc!r}")
         code = 1
