@@ -299,6 +299,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #     aborted at startup.
     await _reconcile_bench_runs(db, log)
 
+    # 6d. Prune per-question benchmark traces past retention, once at startup
+    #     (mirrors 6b): verdicts + retrieval + answer text stay forever; only
+    #     the bulky trace_json is bounded by bench.trace_retention_days.
+    await _prune_bench_traces(db, log)
+
     app.state.vesta = AppState(
         db=db,
         runner=runner,
@@ -391,6 +396,25 @@ async def _reconcile_bench_runs(db: Database, log: Any) -> None:
             log.info("bench.runs_reconciled", aborted=bench_aborted)
     except Exception as exc:
         log.warning("bench.reconcile_failed", error=repr(exc))
+
+
+async def _prune_bench_traces(db: Database, log: Any) -> None:
+    """Null ``trace_json`` on benchmark questions past retention.
+
+    A single startup pass bounds DB growth from accumulated per-question traces
+    (mirrors :func:`_prune_conversation_traces`). Failures are logged and
+    swallowed — pruning is housekeeping, never startup-blocking.
+    """
+    try:
+        from vesta.api.bench import prune_stale_bench_traces
+        from vesta.eval.bench_runner import BENCH_TRACE_RETENTION_DAYS
+
+        retention = int(config.get(BENCH_TRACE_RETENTION_DAYS))
+        pruned = await prune_stale_bench_traces(db, retention)
+        if pruned:
+            log.info("bench.traces_pruned", count=pruned, retention_days=retention)
+    except Exception as exc:
+        log.warning("bench.trace_prune_failed", error=repr(exc))
 
 
 async def _model_ready(path: Path) -> None:

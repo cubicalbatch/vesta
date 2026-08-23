@@ -1352,6 +1352,19 @@ async def reconcile_stale_bench_runs(db: Any) -> int:
     return await store.reconcile_stale()
 
 
+async def prune_stale_bench_traces(db: Any, older_than_days: int) -> int:
+    """Drop per-question trace JSON from runs past retention (called from the
+    ``main.py`` lifespan, alongside :func:`reconcile_stale_bench_runs`).
+
+    Traces are a separate prunable column: verdicts + retrieval + answer text
+    stay forever, so old runs remain comparable — only the bulky raw evidence
+    is bounded by ``bench.trace_retention_days`` (resolved by the caller).
+    Returns how many rows were pruned.
+    """
+    store = SqliteBenchStore(db)
+    return await store.prune_traces(older_than_days)
+
+
 # ── answer_runs import (one-shot) ───────────────────────────────────────────
 
 

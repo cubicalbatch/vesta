@@ -651,3 +651,65 @@ async def test_judge_concurrency_clamp() -> None:
         4, answer_endpoint="http://x:1234/v1", judge_endpoint="http://y:1234/v1"
     )
     assert c2 == 4 and not shares2
+
+
+# ── Startup trace pruning (main.py lifespan → prune_stale_bench_traces) ─────
+
+
+def _trace_qrow(run_id: int, trace: dict[str, object] | None) -> BenchQuestionResult:
+    return BenchQuestionResult(
+        run_id=run_id,
+        question_id="q1",
+        capability="lookup",
+        difficulty="easy",
+        question_text="Q",
+        expected_answer="A",
+        answer_text="A",
+        abstained=False,
+        verdict=Verdict.CORRECT.value,
+        trace=trace,
+    )
+
+
+@pytest.mark.asyncio
+async def test_old_run_trace_is_pruned(db, store) -> None:
+    from vesta.api.bench import prune_stale_bench_traces
+
+    run_id = await store.insert_run(_make_run_record())
+    await store.insert_question_result(run_id, _trace_qrow(run_id, {"version": 1}))
+
+    pruned = await prune_stale_bench_traces(db, 30)
+    assert pruned == 1
+    rows = await store.list_question_results(run_id)
+    assert rows[0].trace is None
+    # Verdict + answer text survive the prune — only the raw evidence goes.
+    assert rows[0].answer_text == "A"
+    assert rows[0].verdict == Verdict.CORRECT.value
+
+
+@pytest.mark.asyncio
+async def test_recent_run_trace_is_kept(db, store) -> None:
+    import datetime as _dt
+    from dataclasses import replace
+
+    from vesta.api.bench import prune_stale_bench_traces
+
+    rec = replace(_make_run_record(), started_at=_dt.datetime.now(_dt.UTC).isoformat())
+    run_id = await store.insert_run(rec)
+    await store.insert_question_result(run_id, _trace_qrow(run_id, {"version": 1}))
+
+    assert await prune_stale_bench_traces(db, 30) == 0
+    rows = await store.list_question_results(run_id)
+    assert rows[0].trace == {"version": 1}
+
+
+@pytest.mark.asyncio
+async def test_retention_zero_is_noop(db, store) -> None:
+    from vesta.api.bench import prune_stale_bench_traces
+
+    run_id = await store.insert_run(_make_run_record())
+    await store.insert_question_result(run_id, _trace_qrow(run_id, {"version": 1}))
+
+    assert await prune_stale_bench_traces(db, 0) == 0
+    rows = await store.list_question_results(run_id)
+    assert rows[0].trace == {"version": 1}
