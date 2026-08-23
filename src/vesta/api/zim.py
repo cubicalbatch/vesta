@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 
 from vesta.api.state import AppState, app_state
+from vesta.api.zims import _archive_or_404
 from vesta.zim.reader import EntryNotFound
 from vesta.zim.types import EntryPath
 
@@ -78,12 +79,7 @@ async def serve_zim_entry(
     request: Request,
     state: AppState = Depends(app_state),
 ) -> Response:
-    if state.registry is None:
-        raise HTTPException(status_code=503, detail="archive registry not ready")
-    try:
-        archive = state.registry.get(zim_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="archive not found") from exc
+    archive = _archive_or_404(state, zim_id)
 
     # Bare route (``/api/zim/{id}/``) → the main page, served at a slash-
     # terminated URL so ZIM-relative assets resolve. We resolve the main

@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from vesta.api.state import AppState, app_state
+from vesta.db.connection import Database
 from vesta.jobs.types import JobRecord
 from vesta.zim.reader import EntryNotFound
 from vesta.zim.types import EntryPath, ExtractedArticle
@@ -48,6 +49,30 @@ def _index_trigger_lock(zim_id: int) -> asyncio.Lock:
         lock = asyncio.Lock()
         _index_trigger_locks[zim_id] = lock
     return lock
+
+
+def _archive_or_404(state: AppState, zim_id: int) -> Any:
+    """Resolve one registered archive by id — the single copy of the guard
+    every per-archive endpoint shares. A missing registry is the standard
+    not-ready 503; an unknown id is the standard 404."""
+    if state.registry is None:
+        raise HTTPException(status_code=503, detail="archive registry not ready")
+    try:
+        return state.registry.get(zim_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="archive not found") from exc
+
+
+async def _zim_exists_or_404(db: Database, zim_id: int) -> None:
+    """The DB twin of :func:`_archive_or_404` for endpoints that touch index
+    state before (or without) opening the archive itself: raise the standard
+    404 when no ``zims`` row carries this id."""
+    async with (
+        db.read() as conn,
+        conn.execute("SELECT 1 FROM zims WHERE id=?", (zim_id,)) as cur,
+    ):
+        if await cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="archive not found")
 
 
 class ArchiveOut(BaseModel):
@@ -310,12 +335,7 @@ async def get_article(
     zim_id: int, path: str, state: AppState = Depends(app_state)
 ) -> dict[str, object]:
     """Extracted text + section structure for one article."""
-    if state.registry is None:
-        raise HTTPException(status_code=503, detail="archive registry not ready")
-    try:
-        archive = state.registry.get(zim_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="archive not found") from exc
+    archive = _archive_or_404(state, zim_id)
     decoded = urllib.parse.unquote(path)
     try:
         article = await archive.extract(decoded)
@@ -336,12 +356,7 @@ async def get_random_article(
     it works at any ``index_depth`` (including 0) — independent of the
     depth-based vector index.
     """
-    if state.registry is None:
-        raise HTTPException(status_code=503, detail="archive registry not ready")
-    try:
-        archive = state.registry.get(zim_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="archive not found") from exc
+    archive = _archive_or_404(state, zim_id)
     path = await archive.random()
     try:
         article = await archive.extract(path)
@@ -402,12 +417,7 @@ async def get_random_samples(
     forever; empty-text entries (redirects that slipped through, soft
     redirects) are skipped so every card has a snippet to show.
     """
-    if state.registry is None:
-        raise HTTPException(status_code=503, detail="archive registry not ready")
-    try:
-        archive = state.registry.get(zim_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="archive not found") from exc
+    archive = _archive_or_404(state, zim_id)
     seen: set[EntryPath] = set()
     cards: list[tuple[EntryPath, ExtractedArticle, object | None]] = []
     attempts = 0
@@ -461,12 +471,7 @@ async def list_documents(zim_id: int, state: AppState = Depends(app_state)) -> d
     renders ``application/pdf`` natively. Non-documents archives have no
     manifest rows, so they return an empty list; an unknown archive is a 404.
     """
-    if state.registry is None:
-        raise HTTPException(status_code=503, detail="archive registry not ready")
-    try:
-        state.registry.get(zim_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="archive not found") from exc
+    _archive_or_404(state, zim_id)
     from vesta.zim.documents import fetch_document_refs
 
     try:
@@ -552,10 +557,7 @@ async def trigger_index(
     """
     if state.registry is None or state.runner is None:
         raise HTTPException(status_code=503, detail="registry/runner not ready")
-    try:
-        state.registry.get(zim_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="archive not found") from exc
+    _archive_or_404(state, zim_id)
     depth = body.depth
     if depth < 1 or depth > 3:
         raise HTTPException(status_code=400, detail="depth must be 1..3")
@@ -609,12 +611,7 @@ async def delete_index(zim_id: int, state: AppState = Depends(app_state)) -> dic
     from vesta.index import reseed_indexed_state
     from vesta.vectors import get_store
 
-    async with (
-        state.db.read() as conn,
-        conn.execute("SELECT 1 FROM zims WHERE id=?", (zim_id,)) as cur,
-    ):
-        if await cur.fetchone() is None:
-            raise HTTPException(status_code=404, detail="archive not found")
+    await _zim_exists_or_404(state.db, zim_id)
     store = get_store()
     if store is not None:
         await store.delete_by_zim(zim_id)
