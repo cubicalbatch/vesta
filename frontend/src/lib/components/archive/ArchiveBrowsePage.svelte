@@ -12,6 +12,7 @@
 	import { zimsStore } from '$lib/stores/zims.svelte';
 	import { readerStore } from '$lib/stores/reader.svelte';
 	import { depthLabel } from '$lib/index-depth';
+	import { formatMediaDuration } from '$lib/format';
 	import type { ArticleOut, DocumentOut } from '$lib/types';
 	import { documentDisplayTitle } from '$lib/document-title';
 	import SourceCard from '$lib/components/SourceCard.svelte';
@@ -130,16 +131,6 @@
 	function snippet(text: string, max = 160): string {
 		const flat = text.replace(/\s+/g, ' ').trim();
 		return flat.length > max ? `${flat.slice(0, max).trimEnd()}…` : flat;
-	}
-
-	function formatDuration(totalSeconds: number): string {
-		const s = Math.max(0, Math.round(totalSeconds));
-		const h = Math.floor(s / 3600);
-		const m = Math.floor((s % 3600) / 60);
-		const sec = s % 60;
-		const mm = String(m).padStart(2, '0');
-		const ss = String(sec).padStart(2, '0');
-		return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
 	}
 
 	function openSample(article: ArticleOut) {
@@ -306,7 +297,7 @@
 									<span class="flex flex-1 flex-col gap-1 p-4">
 										<span class="line-clamp-2 font-semibold tracking-tight text-ink">{article.title}</span>
 										{#if article.media?.video_path}
-											<span class="text-xs text-faint">{article.media.duration ? formatDuration(article.media.duration) : 'video'}</span>
+											<span class="text-xs text-faint">{article.media.duration ? formatMediaDuration(article.media.duration) : 'video'}</span>
 										{/if}
 										{#if article.text}
 											<span class="mt-1 line-clamp-3 text-sm leading-snug text-muted">{snippet(article.text)}</span>

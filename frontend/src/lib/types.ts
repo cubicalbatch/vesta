@@ -203,8 +203,14 @@ export interface ConversationDetail {
 	messages: MessageDetail[];
 }
 
-// Mirrors CatalogEntryOut / CatalogListOut / CuratedEntryOut / CatalogStateOut
-// in src/vesta/api/library.py.
+// Mirrors CatalogEntryOut / InstallEstimateOut / CatalogListOut /
+// CuratedEntryOut / CatalogStateOut in src/vesta/api/library.py.
+export interface InstallEstimate {
+	seconds_low: number;
+	seconds_high: number;
+	vector_bytes: number;
+}
+
 export interface CatalogEntry {
 	id: string;
 	name: string;
@@ -221,6 +227,7 @@ export interface CatalogEntry {
 	curated_rank: number | null;
 	curated_warning: string | null;
 	fetched_at: string | null;
+	install_estimates: Record<string, InstallEstimate>;
 }
 
 export interface CatalogList {

@@ -18,6 +18,19 @@ export function formatDuration(seconds: number): string {
 	return `${hours.toFixed(1)} h`;
 }
 
+/** Clock-style media duration ("m:ss" / "h:mm:ss") — what a video/audio
+ * player shows. Distinct from `formatDuration`'s ETA prose ("5 min"): media
+ * rows and ETA spans intentionally render differently. */
+export function formatMediaDuration(totalSeconds: number): string {
+	const s = Math.max(0, Math.round(totalSeconds));
+	const h = Math.floor(s / 3600);
+	const m = Math.floor((s % 3600) / 60);
+	const sec = s % 60;
+	const mm = String(m).padStart(2, '0');
+	const ss = String(sec).padStart(2, '0');
+	return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+}
+
 /** Renders an ISO datetime, or `—` for null/empty/unparseable input — never
  * the literal "Invalid Date" a bare `new Date(x).toLocaleString()` produces.
  * Needed because at least one backend row (eval run started_at — a bug in

@@ -42,6 +42,19 @@ from vesta.catalog.opds import (
 router = APIRouter(tags=["catalog"])
 
 
+class InstallEstimateOut(BaseModel):
+    """Pre-download install-cost estimate for one archive at one index depth.
+
+    Computed by :mod:`vesta.index.estimate` — the single source of truth. The
+    client renders these on catalog cards before download; the constants it
+    used to copy had drifted ~3x from the calibrated backend table.
+    """
+
+    seconds_low: float
+    seconds_high: float
+    vector_bytes: int
+
+
 class CatalogEntryOut(BaseModel):
     id: str
     name: str
@@ -58,6 +71,8 @@ class CatalogEntryOut(BaseModel):
     curated_rank: int | None = None
     curated_warning: str | None = None
     fetched_at: str | None = None
+    #: Keyed by depth ("1"/"2"/"3").
+    install_estimates: dict[str, InstallEstimateOut] = {}
 
 
 class CatalogListOut(BaseModel):
@@ -109,6 +124,21 @@ class RefreshResponse(BaseModel):
 def _entry_out(row: dict[str, Any]) -> CatalogEntryOut:
     name = str(row.get("name") or "")
     flavour = str(row.get("flavour") or "")
+    article_count = int(row.get("article_count") or 0)
+    # Server-computed install-cost estimates (one per depth): the honest
+    # pre-commit prior band for time, the calibrated vectors-per-article
+    # band's expectation for disk. The frontend renders these as-is instead
+    # of keeping its own copy of the estimator constants.
+    from vesta.index.estimate import initial_estimate
+
+    estimates: dict[str, InstallEstimateOut] = {}
+    for depth in (1, 2, 3):
+        est = initial_estimate(article_count, depth)
+        estimates[str(depth)] = InstallEstimateOut(
+            seconds_low=est.seconds_low,
+            seconds_high=est.seconds_high,
+            vector_bytes=est.disk_bytes_expected,
+        )
     return CatalogEntryOut(
         id=str(row["id"]),
         name=name,
@@ -118,13 +148,14 @@ def _entry_out(row: dict[str, Any]) -> CatalogEntryOut:
         flavour=flavour,
         tags=str(row.get("tags") or ""),
         size_bytes=int(row.get("size_bytes") or 0),
-        article_count=int(row.get("article_count") or 0),
+        article_count=article_count,
         url=str(row.get("url") or ""),
         illustration_url=row.get("illustration_url"),
         zim_date=row.get("zim_date"),
         curated_rank=row.get("curated_rank"),
         curated_warning=curated_warning_for(name, flavour),
         fetched_at=row.get("fetched_at"),
+        install_estimates=estimates,
     )
 
 

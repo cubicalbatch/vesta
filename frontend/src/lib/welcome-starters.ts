@@ -8,7 +8,7 @@
 //
 // CuratedEntry.size_note ("~2.24 GB") is available for every curated entry
 // regardless of whether it currently matches a live catalog row. Display always
-// uses the matched CatalogEntry.size_bytes (via CatalogCard/install-cost.ts)
+// uses the matched CatalogEntry.size_bytes (via CatalogCard)
 // once one exists; this module never feeds a number to the UI directly.
 import type { CuratedEntry } from './types';
 

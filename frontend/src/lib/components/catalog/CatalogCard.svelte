@@ -5,7 +5,6 @@
 	import type { CatalogEntry } from '$lib/types';
 	import { formatBytes, formatDuration, formatZimDate } from '$lib/format';
 	import { formatLanguageNames } from '$lib/languages';
-	import { diskBytesForDepth, preDownloadIndexTimeRange } from '$lib/install-cost';
 	import { medianDownloadRate } from '$lib/download-rate';
 	import { settingsValuesStore } from '$lib/stores/settings.svelte';
 	import { acquisitionManager } from '$lib/stores/acquisition.svelte';
@@ -16,8 +15,13 @@
 	const depth = $derived(Math.max(1, Math.min(3, Number(settingsValuesStore.values['index.default_depth'] ?? 3))));
 	const downloadRate = $derived(medianDownloadRate());
 	const downloadSeconds = $derived(downloadRate ? entry.size_bytes / downloadRate : null);
-	const indexRange = $derived(preDownloadIndexTimeRange(entry.article_count, depth));
-	const diskNeeded = $derived(diskBytesForDepth(entry.size_bytes, entry.article_count, depth));
+	// Server-computed estimates (src/vesta/index/estimate.py) — the client no
+	// longer keeps its own copy of the estimator constants.
+	const estimate = $derived(entry.install_estimates[String(depth)]);
+	const indexRange = $derived(
+		estimate ? { low: estimate.seconds_low, high: estimate.seconds_high } : null
+	);
+	const diskNeeded = $derived(estimate ? entry.size_bytes + estimate.vector_bytes : 0);
 	const expensive = $derived(entry.size_bytes > 20 * 1024 * 1024 * 1024); // 20 GB — amber past this
 
 	let starting = $state(false);
@@ -61,7 +65,7 @@
 	<div class="rounded-md p-2 text-xs {expensive ? 'bg-warning-soft text-warning' : 'bg-surface-muted text-muted'}">
 		<div class="flex flex-wrap gap-x-4 gap-y-1">
 			<span>download {formatBytes(entry.size_bytes)}{downloadSeconds ? ` · ~${formatDuration(downloadSeconds)}` : ''}</span>
-			<span>index ~{formatDuration(indexRange.low)}–{formatDuration(indexRange.high)}</span>
+			<span>index {indexRange ? `~${formatDuration(indexRange.low)}–${formatDuration(indexRange.high)}` : '—'}</span>
 			<span>disk ~{formatBytes(diskNeeded)}</span>
 		</div>
 	</div>

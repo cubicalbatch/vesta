@@ -8,6 +8,7 @@
 	import { readerStore } from '$lib/stores/reader.svelte';
 	import { zimsStore } from '$lib/stores/zims.svelte';
 	import { depthLabel } from '$lib/index-depth';
+	import { formatMediaDuration } from '$lib/format';
 	import { api } from '$lib/api/client';
 	import { lockBodyScroll } from '$lib/scroll-lock';
 	import { goto } from '$app/navigation';
@@ -210,18 +211,7 @@
 		// Reader navigation.
 		goto(`/?q=${q}&scope=${target.zimId}&ai=1`);
 	}
-
-	function formatDuration(totalSeconds: number): string {
-		const s = Math.max(0, Math.round(totalSeconds));
-		const h = Math.floor(s / 3600);
-		const m = Math.floor((s % 3600) / 60);
-		const sec = s % 60;
-		const mm = String(m).padStart(2, '0');
-		const ss = String(sec).padStart(2, '0');
-		return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
-	}
 </script>
-
 {#if target}
 	<div class="fixed inset-0 z-[90] bg-black/40" role="presentation" onclick={() => readerStore.close()}></div>
 	<div
@@ -301,7 +291,7 @@
 					</div>
 					<div class="px-4 py-3 text-sm text-white/70">
 						<p class="font-medium text-white">{displayTitle}</p>
-						{#if target?.media?.duration}<p class="text-xs">{formatDuration(target.media.duration)}</p>{/if}
+						{#if target?.media?.duration}<p class="text-xs">{formatMediaDuration(target.media.duration)}</p>{/if}
 						<p class="mt-2 text-xs text-white/50">Native offline playback — this archive's entries are videos.</p>
 					</div>
 				</div>

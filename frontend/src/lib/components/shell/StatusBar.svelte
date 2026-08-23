@@ -12,6 +12,7 @@
 	import { zimsStore } from '$lib/stores/zims.svelte';
 	import { settingsValuesStore } from '$lib/stores/settings.svelte';
 	import { modelStore } from '$lib/stores/model.svelte';
+	import { formatCount } from '$lib/format';
 
 	const ok = $derived(healthStore.data?.status === 'ok');
 	const archiveCount = $derived(zimsStore.enabled.length);
@@ -20,12 +21,6 @@
 		modelStore.status?.display_name || modelStore.status?.model_file || null
 	);
 	const profile = $derived(settingsValuesStore.values['retrieval.active_profile'] || null);
-
-	function formatCount(n: number): string {
-		if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-		if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-		return String(n);
-	}
 </script>
 
 <div
