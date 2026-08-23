@@ -6,18 +6,27 @@ is queued. The queue runs each archive's build sequentially and stops at the
 first failure; specs that don't resolve to exactly one archive are skipped
 (``_resolve_zim`` prints the problem and raises ``SystemExit``) instead of
 aborting the whole queue.
+
+Also covers the resume-sidecar lifecycle around ``_run_index`` (AUDIT_0822 M8):
+``--fresh`` unlinks a stale sidecar before the job starts; a plain run resumes
+from it; a paused run keeps it.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import argparse
+import json
+from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from vesta.cli import _resolve_zims, _run_index_many
+from vesta import config
+from vesta.cli import _resolve_zims, _run_index, _run_index_many
 from vesta.db.connection import Database
 from vesta.db.migrations import run_migrations
+from vesta.jobs.types import RESUME_CHECKPOINT_KEY
 
 pytestmark = pytest.mark.asyncio
 
@@ -146,3 +155,95 @@ async def test_resolve_zims_skips_systemexit_specs(db: Database) -> None:
     resolved = await _resolve_zims(db, ["wikipedia", "nope", "2"])
 
     assert resolved == [1, 2]
+
+
+# ── resume-sidecar lifecycle around _run_index (AUDIT_0822 M8) ────────────────
+
+
+class _FakeIndexJob:
+    """Stands in for ``IndexZimJob``: records what ``_run_index`` handed it and
+    whether the sidecar still existed when the job started."""
+
+    def __init__(self) -> None:
+        self.params: dict[str, Any] | None = None
+        self.sidecar_exists_at_start: bool | None = None
+        instances.append(self)
+
+    async def run(self, handle: Any, params: Mapping[str, Any]) -> None:
+        self.params = dict(params)
+        cp_path = getattr(handle, "_cp", None)
+        self.sidecar_exists_at_start = bool(cp_path.exists()) if cp_path is not None else None
+
+
+instances: list[_FakeIndexJob] = []
+
+
+def _seed_sidecar(data_dir: Path, zim_id: int = 1, *, depth: int = 1, done: int = 40) -> Path:
+    cp = data_dir / f".index_progress_{zim_id}.json"
+    cp.write_text(json.dumps({"done_count": done, "depth": depth}))
+    return cp
+
+
+def _index_args(zim: str, data_dir: Path, *, fresh: bool) -> argparse.Namespace:
+    return argparse.Namespace(depth=1, zim=zim, fresh=fresh, data_dir=str(data_dir))
+
+
+async def test_fresh_deletes_stale_sidecar_before_the_job_starts(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config.configure(env={})
+    sidecar = _seed_sidecar(tmp_path)
+    monkeypatch.setattr("vesta.index.job.IndexZimJob", _FakeIndexJob)
+
+    code = await _run_index(
+        type("State", (), {"db": db})(),  # type: ignore[arg-type]
+        _index_args("wikipedia", tmp_path, fresh=True),
+    )
+
+    assert code == 0
+    fake = instances[-1]
+    # Gone BEFORE the job started — nothing stale survives into the rebuild…
+    assert fake.sidecar_exists_at_start is False
+    assert not sidecar.exists()
+    # …and no resume cursor is offered to a --fresh run.
+    assert fake.params is not None and RESUME_CHECKPOINT_KEY not in fake.params
+
+
+async def test_plain_resume_still_honors_an_existing_sidecar(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config.configure(env={})
+    sidecar = _seed_sidecar(tmp_path)
+    monkeypatch.setattr("vesta.index.job.IndexZimJob", _FakeIndexJob)
+
+    code = await _run_index(
+        type("State", (), {"db": db})(),  # type: ignore[arg-type]
+        _index_args("wikipedia", tmp_path, fresh=False),
+    )
+
+    assert code == 0
+    fake = instances[-1]
+    assert fake.params is not None
+    blob = fake.params.get(RESUME_CHECKPOINT_KEY)
+    assert isinstance(blob, dict)
+    assert blob["done_count"] == 40 and blob["depth"] == 1
+    # A successful plain run still cleans the sidecar at the end (unchanged).
+    assert not sidecar.exists()
+
+
+async def test_paused_run_keeps_the_sidecar(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config.configure(env={})
+    sidecar = _seed_sidecar(tmp_path)
+    async with db.write() as conn:
+        await conn.execute("UPDATE zims SET index_status='paused' WHERE id=1")
+    monkeypatch.setattr("vesta.index.job.IndexZimJob", _FakeIndexJob)
+
+    code = await _run_index(
+        type("State", (), {"db": db})(),  # type: ignore[arg-type]
+        _index_args("wikipedia", tmp_path, fresh=False),
+    )
+
+    assert code == 0
+    assert sidecar.exists(), "a paused run keeps its resume sidecar"

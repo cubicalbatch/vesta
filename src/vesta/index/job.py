@@ -208,6 +208,12 @@ async def _run_build(  # noqa: PLR0912, PLR0915 — the resume/fresh/cancel/pree
         await store.delete_by_zim(zim_id)
         await _reset_articles(db, zim_id)
         start_at = 0
+        # Zero the cursor NOW, before any batch work: this run's next
+        # checkpoint only lands once the first batch has materialized. Dying
+        # in that window (double Ctrl+C, OOM, power loss) must not leave a
+        # stale ``done_count=N`` behind for a later plain resume to replay
+        # into this freshly wiped store (AUDIT_0822 M8).
+        await job.checkpoint({"done_count": 0, "depth": depth, "fmt": _INDEX_FMT_VERSION})
 
     await _set_index_status(db, zim_id, "running", depth=depth, total=total)
     set_indexed_state(True)

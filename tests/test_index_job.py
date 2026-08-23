@@ -372,6 +372,60 @@ async def test_depth_change_is_a_fresh_build(rig: _Rig) -> None:
 
 
 @pytest.mark.asyncio
+async def test_rebuild_zeroes_the_checkpoint_before_any_batch_work(
+    rig: _Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # AUDIT_0822 M8: the rebuild branch wipes vectors/articles, but its next
+    # checkpoint only lands after the first batch materializes. Dying in that
+    # window used to leave a stale done_count=N behind, and a later plain
+    # resume would replay at N into the wiped store — articles 0..N silently
+    # missing from a "complete" index. So the wipe point immediately writes a
+    # {done_count: 0} checkpoint.
+    async with rig.db.write() as conn:
+        await conn.execute("UPDATE zims SET index_depth=2 WHERE id=1")
+
+    import vesta.index.job as _job_mod
+
+    real_materialize = _job_mod._materialize_batch
+    die_calls: list[int] = []
+
+    async def _die_before_first_batch(**kwargs: Any) -> None:
+        # Die exactly once — between the wipe and the first committed batch —
+        # then let the real materializer through so the follow-up resume runs.
+        if not die_calls:
+            die_calls.append(1)
+            raise RuntimeError("died between the wipe and the first batch")
+        await real_materialize(**kwargs)
+
+    monkeypatch.setattr(_job_mod, "_materialize_batch", _die_before_first_batch)
+    with pytest.raises(RuntimeError, match="died between"):
+        await IndexZimJob().run(
+            rig.handle,
+            {
+                "zim_id": 1,
+                "depth": 1,
+                RESUME_CHECKPOINT_KEY: {"done_count": 5, "depth": 2, "fmt": _INDEX_FMT_VERSION},
+            },
+        )
+
+    # The wipe happened, and the ONLY checkpoint this crashed run wrote says 0
+    # — nothing can mistake it for resumable progress at N.
+    assert rig.store.deleted_zims == [1]
+    assert rig.handle.checkpoints == [{"done_count": 0, "depth": 1, "fmt": _INDEX_FMT_VERSION}]
+
+    # A later plain resume picks up that zeroed cursor and starts from 0, not N.
+    handle2 = _FakeJobHandle()
+    await IndexZimJob().run(
+        handle2,
+        {"zim_id": 1, "depth": 1, RESUME_CHECKPOINT_KEY: rig.handle.checkpoints[-1]},
+    )
+    pool2 = _FakePool.instances[-1]
+    requested = {p for batch in pool2.requested for p in batch}
+    assert requested == set(rig.paths), "the zeroed cursor resumes from scratch"
+    assert handle2.checkpoints[-1] == {"done_count": 5, "depth": 1, "fmt": _INDEX_FMT_VERSION}
+
+
+@pytest.mark.asyncio
 async def test_cancel_marks_paused_and_keeps_checkpoint(rig: _Rig) -> None:
     rig.handle._cancelled = True
     await IndexZimJob().run(rig.handle, {"zim_id": 1, "depth": 1})

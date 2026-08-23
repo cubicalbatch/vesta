@@ -2518,6 +2518,14 @@ async def _run_index(state: AppState, args: argparse.Namespace) -> int:  # noqa:
 
     ddir = Path(args.data_dir or str(config.get(config.DATA_DIR)))
     cp_path = ddir / f".index_progress_{zim_id}.json"
+    if args.fresh and cp_path.exists():
+        # A stale resume sidecar must die BEFORE the job starts: --fresh reads
+        # none of it, and the run's first checkpoint only lands after its first
+        # batch materializes — dying in that window would leave done_count=N on
+        # disk and the next plain `vesta index` would "resume" into the wiped
+        # index (AUDIT_0822 M8).
+        with contextlib.suppress(OSError):
+            cp_path.unlink()
     params: dict[str, Any] = {"zim_id": zim_id, "depth": depth}
     if not args.fresh and cp_path.exists():
         try:
