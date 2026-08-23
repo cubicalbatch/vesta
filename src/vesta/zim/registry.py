@@ -12,6 +12,15 @@ between ZIM files and ``zims`` table rows. Four design constraints drive its sha
 * **Thread safety.** libzim reads go through a bounded pool; each search call
   creates its own ``Searcher`` (searching is not thread-safe upstream),
   and per-archive search coroutines serialize on an asyncio lock.
+* **Interactive vs registration pools.** The bounded pool exists for
+  interactive query-time work (reads/search/suggest/random/extract) and must
+  never be occupied by registration-time batch mining: ``mine_aliases`` walks
+  every entry (~29 s on Simple Wikipedia) and would pin a worker, measurably
+  stalling article/media serving and search while a large ZIM registers.
+  Heavy registration passes therefore run on their own small one-shot
+  executor (:meth:`ArchiveRegistry._dispatch_registration`); the media and
+  documents manifest builders isolate themselves via ``asyncio.to_thread``
+  inside their modules.
 
 ``zim/`` depends on ``db`` and ``config`` only. Discovery scans ``./data/zims/``
 at startup and on demand; a missing file marks its row ``missing`` rather than
@@ -51,6 +60,20 @@ from vesta.zim.types import (
 )
 
 _log = logging.getLogger(__name__)
+
+#: Worker cap for registration-time batch mining. ``mine_aliases`` walks every
+#: entry (~14 k entries/s — ~29 s for Simple Wikipedia's 400 k), so it must
+#: never run on the interactive read/search pool: one large registration would
+#: pin a worker there and measurably stall article/media serving and search
+#: (the pool's real purpose is interactive query work — the bulk indexer
+#: already isolates itself in its own niced spawn pool). Instead each batch
+#: call gets its own small one-shot executor (:meth:`ArchiveRegistry.
+#: _dispatch_registration`), created per call and shut down after — the same
+#: single-shot shape as ``media.build_media_manifest``'s ``to_thread``, but
+#: hard-capped at 2 so concurrent registrations cannot multiply libzim reader
+#: threads. Two workers never exceed what the 4-worker interactive pool
+#: already assumes about concurrent libzim entry reads.
+_REGISTRATION_POOL_SIZE = 2
 
 
 def raise_cluster_cache(mb: int) -> None:
@@ -503,6 +526,26 @@ class ArchiveRegistry:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._pool, _partial(fn, *args, **kwargs))
 
+    async def _dispatch_registration(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
+        """Dispatch one heavy registration-time batch call OFF the interactive
+        pool (see ``_REGISTRATION_POOL_SIZE`` for why it must never go there).
+
+        A fresh bounded executor per call, shut down without waiting once the
+        await settles. ``wait=False`` keeps today's cancellation semantics: a
+        cancelled registration abandons its running mining future exactly like
+        a cancelled ``_dispatch`` does on the shared pool — the thread finishes
+        unobserved instead of blocking cancellation on a ~29 s shutdown join.
+        """
+        loop = asyncio.get_running_loop()
+        pool = ThreadPoolExecutor(
+            max_workers=_REGISTRATION_POOL_SIZE,
+            thread_name_prefix="vesta-zim-register",
+        )
+        try:
+            return await loop.run_in_executor(pool, _partial(fn, *args, **kwargs))
+        finally:
+            pool.shutdown(wait=False)
+
     # ── reads ──────────────────────────────────────────────────────────────
 
     def get(self, zim_id: int) -> Archive:
@@ -749,8 +792,9 @@ class ArchiveRegistry:
             )
             zim_id = int(cur.lastrowid) if cur.lastrowid is not None else 0
         # Alias mining is the expensive step (~14 k entries/s) — only for
-        # newly registered archives, on the read pool so it never blocks the loop.
-        pairs = await self._dispatch(aliases_mod.mine_aliases, archive)
+        # newly registered archives, and off the interactive read pool so a
+        # large registration never starves serving (see _REGISTRATION_POOL_SIZE).
+        pairs = await self._dispatch_registration(aliases_mod.mine_aliases, archive)
         await self._store_aliases(zim_id, pairs)
         # Media manifest: for media-kind archives, resolve each browsable
         # stub to its video/poster/duration from the per-video JSON sidecars so
