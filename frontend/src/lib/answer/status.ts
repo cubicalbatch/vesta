@@ -3,12 +3,10 @@ import type { AnswerState } from './reducer';
 /**
  * Derives user-facing status text for an answer turn, accurately reflecting
  * what the system is doing at each phase of the retrieval + answer pipeline.
+ * Errors never reach here: the reducer sets `done` on `error`, and the turn
+ * component renders errors through its dedicated error block instead.
  */
 export function formatTurnStatus(state: AnswerState): string {
-	if (state.error && !state.done) {
-		return 'Error';
-	}
-
 	if (state.done) {
 		const archives = new Set(state.sources.map((c) => c.zim_id)).size;
 		return `Answered · read ${state.sources.length} sources across ${archives} archive${archives === 1 ? '' : 's'}`;

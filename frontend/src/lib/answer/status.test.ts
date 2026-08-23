@@ -119,15 +119,6 @@ describe('formatTurnStatus', () => {
 		expect(formatTurnStatus(state)).toBe('Sources only');
 	});
 
-	it('returns "Error" when unrecoverable/in-flight error occurs', () => {
-		const state: AnswerState = {
-			...createAnswerState(),
-			error: { code: 'stream_error', message: 'Failed', recoverable: false },
-			done: false
-		};
-		expect(formatTurnStatus(state)).toBe('Error');
-	});
-
 	it('returns completed summary when done', () => {
 		const state: AnswerState = {
 			...createAnswerState(),
