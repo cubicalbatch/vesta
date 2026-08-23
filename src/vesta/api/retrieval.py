@@ -26,7 +26,6 @@ profile editor be built with NO hand-written UI per component.
 
 from __future__ import annotations
 
-import datetime as _dt
 import json
 from typing import Any
 
@@ -35,8 +34,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from vesta import config as app_config
+from vesta.api.settings import persist_settings_and_reload
 from vesta.api.state import AppState, app_state
-from vesta.db.settings_store import load_settings, upsert_setting
 from vesta.retrieval import RETRIEVAL_PROFILES
 from vesta.retrieval.profiles import (
     BUILTIN_PROFILES,
@@ -124,16 +123,12 @@ def _load_blob() -> dict[str, str]:
 async def _persist_blob(state: AppState, blob: dict[str, str]) -> None:
     """Write the blob to the ``settings`` table and refresh the resolver.
 
-    Mirrors ``PUT /api/settings``: write through, then reload the whole table so
-    the resolver reflects the authoritative state on the next request.
+    The shared write-through ritual (:func:`~vesta.api.settings.persist_settings_and_reload`):
+    write, then reload the whole table so the resolver reflects the
+    authoritative state on the next request.
     """
-    now = _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat()
     value = json.dumps(blob, ensure_ascii=False, sort_keys=True)
-    async with state.db.write() as conn:
-        await upsert_setting(conn, RETRIEVAL_PROFILES.key, value, now)
-    async with state.db.read() as conn:
-        fresh = await load_settings(conn)
-    app_config.set_db_values(fresh)
+    await persist_settings_and_reload(state.db, [(RETRIEVAL_PROFILES.key, value)])
 
 
 def _user_profiles() -> dict[str, RetrievalProfile]:

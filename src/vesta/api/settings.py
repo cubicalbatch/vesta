@@ -10,6 +10,7 @@ request without a restart — the table is authoritative over env.
 from __future__ import annotations
 
 import datetime as _dt
+from collections.abc import Sequence
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -17,9 +18,32 @@ from pydantic import BaseModel, Field
 from vesta import config
 from vesta.api.state import AppState, app_state
 from vesta.config.settings import SettingSchema
+from vesta.db.connection import Database
 from vesta.db.settings_store import load_settings, upsert_setting
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
+
+
+def utc_now_iso() -> str:
+    """The second-resolution UTC timestamp every settings row is stamped with."""
+    return _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat()
+
+
+async def persist_settings_and_reload(db: Database, pairs: Sequence[tuple[str, str]]) -> None:
+    """The settings write-through ritual, shared by every endpoint that writes
+    the ``settings`` table directly (PUT /api/settings, model download/activate/
+    delete, profile persistence): upsert the pairs under one timestamp, then
+    reload the WHOLE table and reseed the resolver so the next request sees
+    authoritative values — forgetting the reload is how a write silently
+    doesn't happen.
+    """
+    now = utc_now_iso()
+    async with db.write() as conn:
+        for key, value in pairs:
+            await upsert_setting(conn, key, value, now)
+    async with db.read() as conn:
+        fresh = await load_settings(conn)
+    config.set_db_values(fresh)
 
 
 class SettingSchemaOut(BaseModel):
@@ -80,7 +104,6 @@ async def put_settings(
     or unknown key is a 400 so the UI gets immediate feedback.
     """
     registry = config.all_settings()
-    now = _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat()
     coerced: dict[str, object] = {}
     for key, raw in patch.values.items():
         descriptor = registry.get(key)
@@ -91,13 +114,9 @@ async def put_settings(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         coerced[key] = value
-    async with state.db.write() as conn:
-        for key, value in coerced.items():
-            await upsert_setting(conn, key, _to_storage(value), now)
-    # Reload the whole table so the resolver reflects the authoritative state.
-    async with state.db.read() as conn:
-        fresh = await load_settings(conn)
-    config.set_db_values(fresh)
+    await persist_settings_and_reload(
+        state.db, [(key, _to_storage(value)) for key, value in coerced.items()]
+    )
     # An inference.* change rebuilds the LLM runtime in-process
     # (source/model/endpoint/idle changes apply on the next question, no
     # restart). Keys baked into the llama-server command line (context size,

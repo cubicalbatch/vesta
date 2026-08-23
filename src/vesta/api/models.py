@@ -10,7 +10,6 @@ are frozen (the shipped wizard depends on them).
 """
 
 import contextlib
-import datetime as _dt
 from dataclasses import asdict
 from pathlib import Path
 
@@ -18,8 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from vesta import config
+from vesta.api.settings import persist_settings_and_reload
 from vesta.api.state import AppState, app_state
-from vesta.db.settings_store import load_settings, upsert_setting
 from vesta.inference.models import (
     display_name_for,
     model_presets,
@@ -231,14 +230,10 @@ async def download_model(
 
     # Write inference settings immediately — the job just downloads the file.
     # Reload the config resolver so the new values are visible to GET /api/settings
-    # and the capability probe (mirrors PUT /api/settings's post-write reload).
-    now = _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat()
-    async with state.db.write() as conn:
-        await upsert_setting(conn, "inference.llm.source", "local", now)
-        await upsert_setting(conn, "inference.llm.model", filename, now)
-    async with state.db.read() as conn:
-        fresh = await load_settings(conn)
-    config.set_db_values(fresh)
+    # and the capability probe (the shared post-write reload).
+    await persist_settings_and_reload(
+        state.db, [("inference.llm.source", "local"), ("inference.llm.model", filename)]
+    )
     # The writes above changed inference.* keys — rebuild the LLM
     # runtime so the new model file is picked up (drops the cached router id;
     # restarts a running child). Non-fatal: the download proceeds regardless,
@@ -314,12 +309,7 @@ async def activate_model(
     if not (models_dir / filename).is_file():
         raise HTTPException(status_code=404, detail=f"model file not found: {filename}")
 
-    now = _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat()
-    async with state.db.write() as conn:
-        await upsert_setting(conn, "inference.llm.model", filename, now)
-    async with state.db.read() as conn:
-        fresh = await load_settings(conn)
-    config.set_db_values(fresh)
+    await persist_settings_and_reload(state.db, [("inference.llm.model", filename)])
     from vesta.inference import rebuild_runtime
 
     await rebuild_runtime()
@@ -388,12 +378,7 @@ async def delete_model(filename: str, state: AppState = Depends(app_state)) -> d
     path.unlink()
 
     if active:
-        now = _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat()
-        async with state.db.write() as conn:
-            await upsert_setting(conn, "inference.llm.model", "", now)
-        async with state.db.read() as conn:
-            fresh = await load_settings(conn)
-        config.set_db_values(fresh)
+        await persist_settings_and_reload(state.db, [("inference.llm.model", "")])
         await rebuild_runtime()
     return {"deleted": name}
 
