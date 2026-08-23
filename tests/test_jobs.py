@@ -15,7 +15,8 @@ import pytest
 from vesta import config
 from vesta.db.connection import Database
 from vesta.db.migrations import run_migrations
-from vesta.jobs.runner import JobRunner
+from vesta.jobs.handle import JobHandleImpl
+from vesta.jobs.runner import JobRunner, _RunState
 from vesta.jobs.types import RESUME_CHECKPOINT_KEY, JobHandle, register_job_type
 
 
@@ -296,3 +297,189 @@ async def test_resume_actually_continues_from_persisted_checkpoint(
         from vesta.jobs.types import JOB_TYPES
 
         JOB_TYPES.pop("resume_probe", None)
+
+
+# ── checkpoint throttling + progress-publish status cache (AUDIT_0822 P3) ─────
+
+
+async def _running_job(db: Database, r: JobRunner) -> tuple[int, Any]:
+    """Insert a 'running' job row and attach a live handle to its run state,
+    so tests can drive ``checkpoint``/``progress`` without a real job task."""
+    now = "2026-01-01T00:00:00+00:00"
+    async with db.write() as conn:
+        cur = await conn.execute(
+            "INSERT INTO jobs(type, target, params, status, progress, total, "
+            "created_at, updated_at) VALUES('noop', NULL, '{}', 'running', 0, 0, ?, ?)",
+            (now, now),
+        )
+        jid = int(cur.lastrowid) if cur.lastrowid is not None else 0
+    state = r._runs.setdefault(jid, _RunState())
+    handle = JobHandleImpl(r, jid)
+    state.handle = handle
+    state.status = "running"
+    return jid, handle
+
+
+@pytest.mark.asyncio
+async def test_rapid_checkpoints_write_once_but_final_call_flushes(
+    runner: tuple[Database, JobRunner],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """N checkpoint calls inside the throttle window cost one DB write; the
+    newest cursor is kept pending and an explicit final flush lands it."""
+    db, r = runner
+    jid, handle = await _running_job(db, r)
+    writes: list[dict[str, Any]] = []
+    original = r._write_checkpoint
+
+    async def spy(job_id: int, blob: Mapping[str, Any]) -> None:
+        writes.append(dict(blob))
+        await original(job_id, blob)
+
+    monkeypatch.setattr(r, "_write_checkpoint", spy)
+
+    for i in range(1, 6):
+        await handle.checkpoint({"i": i})
+    assert len(writes) == 1  # the whole burst cost exactly one write...
+    assert writes[0] == {"i": 1}  # ...the first call (window had elapsed)
+
+    # The FINAL call's cursor was never lost: an explicit final flush writes it.
+    await handle.flush_checkpoint()
+    assert len(writes) == 2
+    assert writes[-1] == {"i": 5}
+    rec = await r.get(jid)
+    assert rec is not None
+    assert json.loads(rec.checkpoint or "null") == {"i": 5}
+    await _stop(db, r)
+
+
+@pytest.mark.asyncio
+async def test_terminal_transition_flushes_latest_pending_checkpoint(
+    runner: tuple[Database, JobRunner],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A terminal transition must land the newest pending checkpoint — resume
+    correctness depends on never losing the last offset. ``_finish`` is the
+    funnel every cancelled/error/done path goes through."""
+    db, r = runner
+    jid, handle = await _running_job(db, r)
+    writes: list[dict[str, Any]] = []
+    original = r._write_checkpoint
+
+    async def spy(job_id: int, blob: Mapping[str, Any]) -> None:
+        writes.append(dict(blob))
+        await original(job_id, blob)
+
+    monkeypatch.setattr(r, "_write_checkpoint", spy)
+
+    for i in range(1, 4):
+        await handle.checkpoint({"i": i})
+    assert len(writes) == 1
+
+    await r._finish(jid, "cancelled")
+    rec = await r.get(jid)
+    assert rec is not None and rec.status == "cancelled"
+    assert json.loads(rec.checkpoint or "null") == {"i": 3}
+    await _stop(db, r)
+
+
+@dataclass
+class _CheckpointProbe:
+    """Writes a rapid burst of checkpoints (well inside the throttle window),
+    then blocks until released — so a test can pause it with the newest
+    cursor still pending."""
+
+    name: str = "cp_probe"
+    burst_done: asyncio.Event = field(default_factory=asyncio.Event)
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def run(self, job: JobHandle, params: Mapping[str, Any]) -> None:
+        for i in range(1, 6):
+            await job.checkpoint({"i": i})
+        self.burst_done.set()
+        await self.release.wait()
+
+
+@pytest.mark.asyncio
+async def test_pause_flushes_latest_pending_checkpoint_and_resumes(
+    runner: tuple[Database, JobRunner],
+) -> None:
+    """Pausing a running job flushes the newest pending checkpoint to the DB,
+    and a later resume completes from that offset."""
+    db, r = runner
+    probe = _CheckpointProbe()
+    register_job_type(probe)
+    try:
+        jid = await r.submit("cp_probe", None)
+        for _ in range(100):
+            await asyncio.sleep(0.005)
+            if probe.burst_done.is_set():
+                break
+        assert probe.burst_done.is_set()
+
+        assert await r.pause(jid) is True
+        rec = None
+        for _ in range(50):
+            await asyncio.sleep(0.005)
+            rec = await r.get(jid)
+            if rec and rec.status == "paused":
+                break
+        assert rec is not None and rec.status == "paused"
+        # The burst's LAST cursor ({"i": 5}) landed even though only its first
+        # write fell inside the throttle window.
+        assert json.loads(rec.checkpoint or "null") == {"i": 5}
+
+        probe.release.set()
+        assert await r.resume(jid) is True
+        for _ in range(50):
+            await asyncio.sleep(0.005)
+            rec = await r.get(jid)
+            if rec and rec.status == "done":
+                break
+        assert rec is not None and rec.status == "done"
+    finally:
+        from vesta.jobs.types import JOB_TYPES
+
+        JOB_TYPES.pop("cp_probe", None)
+    await _stop(db, r)
+
+
+@pytest.mark.asyncio
+async def test_progress_publish_does_not_select_per_event(
+    runner: tuple[Database, JobRunner],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SSE progress events read the cached status instead of re-SELECTing the
+    jobs row on every publish (the old per-event SELECT ran even when the DB
+    write itself was throttled away)."""
+    db, r = runner
+    jid, handle = await _running_job(db, r)
+    queue = r._subscribe(jid)
+    selects = 0
+    original_get = r.get
+
+    async def get_spy(job_id: int) -> object:
+        nonlocal selects
+        selects += 1
+        return await original_get(job_id)
+
+    monkeypatch.setattr(r, "get", get_spy)
+
+    for i in range(1, 8):
+        await handle.progress(i, 100, f"step {i}")
+    assert selects == 0  # zero row reads for seven publishes
+    events: list[dict[str, Any]] = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    # SSE still sees every update (only DB writes throttle); the persisted
+    # first tick re-publishes, hence 8 events for 7 calls.
+    assert [e["data"]["progress"] for e in events] == [1, 1, 2, 3, 4, 5, 6, 7]
+    assert events[-1]["event"] == "progress"
+    assert events[-1]["data"] == {
+        "id": jid,
+        "progress": 7,
+        "total": 100,
+        "message": "step 7",
+        "status": "running",
+    }
+    await _stop(db, r)

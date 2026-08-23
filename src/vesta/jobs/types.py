@@ -32,7 +32,8 @@ class JobHandle(Protocol):
         ...
 
     async def checkpoint(self, blob: Mapping[str, Any]) -> None:
-        """Persist a resume cursor. Called at points the job can restart from."""
+        """Persist a resume cursor. Throttled by the runner (~1/s); the newest
+        cursor is always flushed on pause/cancel/completion and shutdown."""
         ...
 
     def cancelled(self) -> bool:

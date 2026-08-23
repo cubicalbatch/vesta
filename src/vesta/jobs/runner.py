@@ -49,6 +49,13 @@ class _RunState:
     pause_requested: bool = False
     task: asyncio.Task[None] | None = None
     started_monotonic: float | None = None
+    # The live handle, so pause/cancel/finish can flush its newest pending
+    # checkpoint (the handle owns the ~1/s write throttle).
+    handle: JobHandleImpl | None = None
+    # Last status this runner wrote for the job. The runner is the single
+    # in-process writer of ``jobs.status``, so SSE progress events read it from
+    # here instead of re-SELECTing the row per event.
+    status: str | None = None
 
 
 class JobRunner:
@@ -90,6 +97,11 @@ class JobRunner:
         for task in tasks:
             with suppress(asyncio.CancelledError):
                 await task
+        # Each task's CancelledError handler flushes its own pending checkpoint;
+        # sweep any leftover (a handler interrupted by a second cancellation)
+        # so shutdown never loses the last resume offset.
+        for state in self._runs.values():
+            await self._flush_checkpoint(state)
 
     # ── public actions ─────────────────────────────────────────────────────
 
@@ -111,6 +123,7 @@ class JobRunner:
                 (type_, target, params_json, now, now),
             )
             job_id = int(cur.lastrowid) if cur.lastrowid is not None else 0
+        self._runs.setdefault(job_id, _RunState()).status = "queued"
         await self._publish_status(job_id, "queued")
         await self._enqueue(job_id, resume=False)
         return job_id
@@ -260,6 +273,7 @@ class JobRunner:
         await self._set_status(job_id, "running")
         state.started_monotonic = time.monotonic()
         handle = JobHandleImpl(self, job_id)
+        state.handle = handle
         params: dict[str, Any] = dict(record.params)
         cp = _maybe_json(record.checkpoint)
         if cp is not None:
@@ -267,6 +281,9 @@ class JobRunner:
         try:
             await jt.run(handle, params)
         except asyncio.CancelledError:
+            # Land the newest pending checkpoint before the status flip so a
+            # paused/cancelled job resumes from the true last offset.
+            await self._flush_checkpoint(state)
             if state.pause_requested:
                 await self._set_status(job_id, "paused")
                 await self._publish_status(job_id, "paused")
@@ -313,7 +330,13 @@ class JobRunner:
                 (json.dumps(dict(blob)), now, job_id),
             )
 
+    async def _flush_checkpoint(self, state: _RunState | None) -> None:
+        """Force the job's newest pending checkpoint to disk (no-op if none)."""
+        if state is not None and state.handle is not None:
+            await state.handle.flush_checkpoint()
+
     async def _set_status(self, job_id: int, status: str) -> None:
+        self._runs.setdefault(job_id, _RunState()).status = status
         now = _now_iso()
         finished = now if status in _TERMINAL else None
         async with self._db.write() as conn:
@@ -324,6 +347,9 @@ class JobRunner:
             )
 
     async def _finish(self, job_id: int, status: str, *, error: str | None = None) -> None:
+        # Terminal transition: never lose the last offset (resume correctness).
+        await self._flush_checkpoint(self._runs.get(job_id))
+        self._runs.setdefault(job_id, _RunState()).status = status
         now = _now_iso()
         async with self._db.write() as conn:
             await conn.execute(
@@ -336,8 +362,14 @@ class JobRunner:
     # ── SSE fan-out ────────────────────────────────────────────────────────
 
     async def _publish_progress(self, job_id: int, done: int, total: int, message: str) -> None:
-        record = await self.get(job_id)
-        status = record.status if record is not None else "running"
+        # The runner is the single writer of ``jobs.status``: read the cached
+        # value instead of re-SELECTing the row on every (throttled) progress
+        # event. Fall back to the row only when no run-state exists yet.
+        state = self._runs.get(job_id)
+        status = state.status if state is not None else None
+        if status is None:
+            record = await self.get(job_id)
+            status = record.status if record is not None else "running"
         await self._publish(
             job_id,
             {
