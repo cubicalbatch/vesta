@@ -120,15 +120,6 @@ BENCH_TRACE_RETENTION_DAYS = setting(
     max=3650,
     hot=False,
 )
-BENCH_REQUIRE_FRESH_ORACLE = setting(
-    "bench.require_fresh_oracle",
-    bool,
-    True,
-    group="Benchmark",
-    help="Refuse to start a run whose dataset oracle.model differs from the answer "
-    "model (suppress headroom_realised instead with --allow-stale-oracle).",
-    hot=False,
-)
 
 
 def resolve_matrix_axes(
@@ -1076,7 +1067,6 @@ __all__ = [
     "BENCH_JUDGE_CONCURRENCY",
     "BENCH_MAX_CONCURRENT",
     "BENCH_REPEATS",
-    "BENCH_REQUIRE_FRESH_ORACLE",
     "BENCH_SYSTEMS",
     "BENCH_TRACE_RETENTION_DAYS",
     "BenchQuestionResult",

@@ -404,7 +404,6 @@ both `judge_shares_endpoint` and the pipeline `--concurrency` are recorded in
 | `bench.calibration_path` | `benchmarks/calibration_v1.json` | Hand-scored calibration subset. |
 | `bench.calibration_min_correlation` | `0.7` | Below ⇒ untrusted. |
 | `bench.trace_retention_days` | `30` | Prune per-question trace blobs older than N days. |
-| `bench.require_fresh_oracle` | `true` | Refuse stale-ceiling runs. |
 | `inference.llm.endpoint_url` | `https://litellm.loki.onoz.cc/v1` | Answer-model gateway (LiteLLM proxy). |
 | `inference.llm.model` | `lmstudio/unsloth/qwen3.5-4b` | Answer model id on the gateway. |
 | `inference.llm.api_key` | `<litellm key>` | Answer-model gateway key (LiteLLM requires `sk-…`). |

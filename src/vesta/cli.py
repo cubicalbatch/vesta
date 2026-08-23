@@ -298,11 +298,6 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 — one parser 
         action="store_true",
         help="One-shot: import historical answer_runs rows into bench_runs (idempotent), then exit.",
     )
-    p_run.add_argument(
-        "--allow-stale-oracle",
-        action="store_true",
-        help="Suppress headroom_realised when the answer model differs from dataset oracle.model.",
-    )
     p_run.add_argument("--data-dir", default=None, help="Override data.dir.")
     p_ret = bsub.add_parser("retrieval", help="Former `vesta eval` — golden-set retrieval gate.")
     p_ret.add_argument(
