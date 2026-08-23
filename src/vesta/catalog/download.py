@@ -240,8 +240,9 @@ async def _run_download(job: JobHandle, params: Mapping[str, Any]) -> None:
     if bytes_done == 0 and part_path.exists():
         # A checkpoint-less resume starts clean; never append onto an unknown file.
         part_path.unlink(missing_ok=True)
-    elif bytes_done > 0 and part_path.exists() and part_path.stat().st_size < bytes_done:
-        # The .part shrank underneath us (manual deletion, etc.) — restart clean.
+    elif bytes_done > 0 and (not part_path.exists() or part_path.stat().st_size < bytes_done):
+        # The .part vanished or shrank underneath us (manual deletion, etc.) —
+        # restart clean.
         part_path.unlink(missing_ok=True)
         bytes_done = 0
 
@@ -316,6 +317,16 @@ async def _resolve_metalink(meta4_url: str, mirror_policy: str) -> MetalinkInfo:
 # ── the resumable download loop ─────────────────────────────────────────────
 
 
+class _MirrorFailure(Exception):
+    """A mirror attempt failed (non-cancellation), carrying the absolute
+    offset the attempt had checkpointed up to — the loop resumes the next
+    mirror from there instead of its own stale entry offset."""
+
+    def __init__(self, exc: Exception, written: int) -> None:
+        super().__init__(repr(exc))
+        self.written = written
+
+
 async def _download_with_resume(
     *,
     job: JobHandle,
@@ -335,12 +346,17 @@ async def _download_with_resume(
 
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S, follow_redirects=True) as client:
         for idx, mirror in enumerate(mirrors):
+            # The checkpoint is the single source of truth: a failed attempt
+            # (or a crash between a chunk write and its checkpoint) can leave
+            # the .part out of sync with ``bytes_done`` — re-sync before each
+            # attempt so its range append lands exactly at the resume offset.
+            start = _trim_part_to(part_path, bytes_done)
             try:
                 return await _download_one(
                     client=client,
                     url=mirror,
                     part_path=part_path,
-                    start=bytes_done,
+                    start=start,
                     total=total,
                     sha256=sha256,
                     job=job,
@@ -352,13 +368,53 @@ async def _download_with_resume(
                 # Pause/cancel: the checkpoint already landed; re-raise so the
                 # runner records paused/cancelled and resume continues from it.
                 raise
-            except Exception as exc:
+            except _MirrorFailure as exc:
+                # Resume the next mirror from the offset this one actually
+                # checkpointed, not from where this loop entered.
                 _log.warning(
                     "download.mirror_failed",
-                    extra={"mirror": mirror, "index": idx, "error": repr(exc)},
+                    extra={"mirror": mirror, "index": idx, "error": str(exc)},
                 )
+                bytes_done = max(bytes_done, exc.written)
                 continue
     raise DownloadError(f"all {len(mirrors)} mirror(s) failed; no bytes written")
+
+
+def _trim_part_to(part_path: Path, size: int) -> int:
+    """Re-sync ``part_path`` with the ``size``-byte checkpoint before a resume
+    attempt (audit M5), returning the offset to download from.
+
+    A mirror that fails mid-body — or a crash between a chunk write and its
+    checkpoint — leaves bytes past ``size``; they are trimmed so the next
+    attempt's range append lands exactly at the checkpoint (same guarantee as
+    the restart-from-zero reset for range-ignoring mirrors). A .part missing
+    or *shorter* than ``size`` has lost prefix bytes that cannot be
+    reconstructed, so it is removed and the download restarts from zero."""
+    try:
+        actual = part_path.stat().st_size
+    except FileNotFoundError:
+        return 0  # nothing on disk; the wb path creates the file
+    if actual < size:
+        _log.warning(
+            "download.part_shrank", extra={"path": str(part_path), "had": actual, "want": size}
+        )
+        part_path.unlink(missing_ok=True)
+        return 0
+    if actual > size:
+        _log.warning(
+            "download.part_trimmed",
+            extra={"path": str(part_path), "from": actual, "to": size},
+        )
+        try:
+            with part_path.open("r+b") as fh:
+                fh.truncate(size)
+                os.fsync(fh.fileno())
+        except OSError as exc:
+            raise DownloadError(
+                f"cannot resume cleanly: {part_path} has {actual} bytes but the "
+                f"checkpoint says {size}; truncation failed: {exc}"
+            ) from exc
+    return size
 
 
 async def _download_one(
@@ -374,53 +430,63 @@ async def _download_one(
     last_disk_check_init: int,
     t0: float,
 ) -> int:
-    """Stream one mirror to ``part_path`` (append from ``start``). Raises on any
-    network/range failure so the caller tries the next mirror."""
+    """Stream one mirror to ``part_path`` (from ``start``). Raises on any
+    network/range failure so the caller tries the next mirror; failures are
+    wrapped in :class:`_MirrorFailure` carrying the last written offset."""
     headers: dict[str, str] = {}
     if start > 0:
         headers["Range"] = f"bytes={start}-"
 
-    # ``stream`` gives us the body without buffering the whole file in memory.
-    async with client.stream("GET", url, headers=headers) as resp:
-        if resp.status_code not in (200, 206):
-            raise DownloadError(f"mirror returned HTTP {resp.status_code}")
-        served_from_zero = resp.status_code == 200
-        if served_from_zero and start > 0:
-            # This mirror ignored the Range header: restart from zero rather than
-            # silently corrupting the .part by appending the whole file.
-            _log.warning("download.range_ignored", extra={"mirror": url})
-            start = 0
-        content_length = resp.headers.get("Content-Length")
-        # Validate the mirror isn't lying about the size of what it'll serve now.
-        if content_length and content_length.isdigit():
-            served_now = int(content_length)
-            if total > 0 and served_from_zero and served_now != total:
-                raise DownloadError(f"mirror Content-Length {served_now} != expected {total}")
+    written = start
+    try:
+        # ``stream`` gives us the body without buffering the whole file in memory.
+        async with client.stream("GET", url, headers=headers) as resp:
+            if resp.status_code not in (200, 206):
+                raise DownloadError(f"mirror returned HTTP {resp.status_code}")
+            served_from_zero = resp.status_code == 200
+            if served_from_zero and start > 0:
+                # This mirror ignored the Range header: restart from zero rather than
+                # silently corrupting the .part by appending the whole file.
+                _log.warning("download.range_ignored", extra={"mirror": url})
+                start = 0
+                written = 0
+            content_length = resp.headers.get("Content-Length")
+            # Validate the mirror isn't lying about the size of what it'll serve now.
+            if content_length and content_length.isdigit():
+                served_now = int(content_length)
+                if total > 0 and served_from_zero and served_now != total:
+                    raise DownloadError(f"mirror Content-Length {served_now} != expected {total}")
 
-        mode = "ab" if (start > 0 and not served_from_zero) else "wb"
-        if mode == "wb":
-            start = 0
-        written = start
-        digest = hashlib.sha256()
-        last_disk_check = last_disk_check_init
+            # Open read/write and seek to ``start`` — never append-at-EOF, which
+            # would silently drift onto any leftover tail a failed mirror left
+            # behind (audit M5). The caller trims the .part to ``start``; the
+            # explicit seek keeps the write offset honest regardless.
+            digest = hashlib.sha256()
+            last_disk_check = last_disk_check_init
 
-        with part_path.open(mode) as fh:
-            async for chunk in resp.aiter_bytes(_CHUNK):
-                if job.cancelled():
-                    raise asyncio.CancelledError
-                fh.write(chunk)
-                digest.update(chunk)
-                written += len(chunk)
-                # Periodic free-space re-check.
-                if written - last_disk_check >= _DISK_CHECK_EVERY:
-                    _check_free_space(part_path.parent, total, part_path)
-                    last_disk_check = written
-                await _maybe_throttle(written, start, limit_kbps, t0)
-                await _checkpoint(job, written, total, url, sha256)
-            # fsync while the file is still open so the resumed size survives a
-            # crash before the next checkpoint lands.
-            fh.flush()
-            os.fsync(fh.fileno())
+            with part_path.open("wb" if start == 0 else "r+b") as fh:
+                if start > 0:
+                    fh.seek(start)
+                async for chunk in resp.aiter_bytes(_CHUNK):
+                    if job.cancelled():
+                        raise asyncio.CancelledError
+                    fh.write(chunk)
+                    digest.update(chunk)
+                    written += len(chunk)
+                    # Periodic free-space re-check.
+                    if written - last_disk_check >= _DISK_CHECK_EVERY:
+                        _check_free_space(part_path.parent, total, part_path)
+                        last_disk_check = written
+                    await _maybe_throttle(written, start, limit_kbps, t0)
+                    await _checkpoint(job, written, total, url, sha256)
+                # fsync while the file is still open so the resumed size survives a
+                # crash before the next checkpoint lands.
+                fh.flush()
+                os.fsync(fh.fileno())
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        raise _MirrorFailure(exc, written) from exc
 
     if total and written < total:
         raise DownloadError(f"mirror served {written}/{total} bytes then closed")

@@ -16,6 +16,7 @@ same mechanism the runner uses across a real restart).
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -23,12 +24,14 @@ import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
 from vesta import config
 from vesta.catalog import bind_runtime
 from vesta.catalog.download import (
+    _CHUNK,
     DownloadError,
     DownloadZimJob,
     parse_metalink,
@@ -42,6 +45,10 @@ from vesta.jobs.types import RESUME_CHECKPOINT_KEY
 class _RangeHandler(BaseHTTPRequestHandler):
     serve_bytes: bytes = b""  # set per server instance via subclass attribute
     serve_meta4: str | None = None  # when set, *.meta4 paths get this XML
+    # When set, only this many bytes of any data response are sent before the
+    # connection is cut mid-body (a mirror dying partway through).
+    drop_after: int | None = None
+    seen_starts: ClassVar[list[int]] = []  # range-start of every data request served
 
     def log_message(self, format: str, *args: object) -> None:  # silence
         pass
@@ -58,25 +65,29 @@ class _RangeHandler(BaseHTTPRequestHandler):
         data = self.serve_bytes
         total = len(data)
         range_header = self.headers.get("Range")
+        start = 0
+        end = total - 1
+        ranged = False
         if range_header and range_header.startswith("bytes="):
+            ranged = True
             spec = range_header[len("bytes=") :].split("-")
             start = int(spec[0]) if spec[0] else 0
             end = int(spec[1]) if len(spec) > 1 and spec[1] else total - 1
-            chunk = data[start : end + 1]
-            self.send_response(206)
-            self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Length", str(len(chunk)))
+        self.seen_starts.append(start)
+        chunk = data[start : end + 1]
+        self.send_response(206 if ranged else 200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(chunk)))
+        if ranged:
             self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
-            self.send_header("Accept-Ranges", "bytes")
-            self.end_headers()
-            self.wfile.write(chunk)
-        else:
-            self.send_response(200)
-            self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Length", str(total))
-            self.send_header("Accept-Ranges", "bytes")
-            self.end_headers()
-            self.wfile.write(data)
+        self.send_header("Accept-Ranges", "bytes")
+        self.end_headers()
+        if self.drop_after is not None:
+            # Send only the promised prefix, then let the handler return so the
+            # socket closes with Content-Length unmet — a mid-body failure.
+            self.wfile.write(chunk[: self.drop_after])
+            return
+        self.wfile.write(chunk)
 
 
 def _free_port() -> int:
@@ -90,19 +101,30 @@ class _Server:
     XML on ``*.meta4`` paths, with ``{base_url}`` placeholders filled in)
     with range support."""
 
-    def __init__(self, data: bytes, meta4: str | None = None) -> None:
+    def __init__(
+        self, data: bytes, meta4: str | None = None, *, drop_after: int | None = None
+    ) -> None:
         self.data = data
 
         class Handler(_RangeHandler):
             pass
 
         Handler.serve_bytes = data
+        Handler.seen_starts = []  # fresh list per server (class attrs would be shared)
         if meta4 is not None:
             Handler.serve_meta4 = meta4
+        if drop_after is not None:
+            Handler.drop_after = drop_after
+        self._handler_cls: type[_RangeHandler] = Handler
         self._srv = ThreadingHTTPServer(("127.0.0.1", _free_port()), Handler)
         if meta4 is not None and "{base_url}" in meta4:
             Handler.serve_meta4 = meta4.format(base_url=self.base_url)
         self._thread = threading.Thread(target=self._srv.serve_forever, daemon=True)
+
+    @property
+    def seen_starts(self) -> list[int]:
+        """Range starts of the data requests this server has served."""
+        return self._handler_cls.seen_starts
 
     @property
     def base_url(self) -> str:
@@ -526,3 +548,204 @@ async def test_metalink_name_downloads_to_expected_path(
     assert final.read_bytes() == payload
     assert not (zims_dir / "wikimed_en_all_maxi_2026-08.zim.part").exists()
     assert registered == [final]
+
+
+# ── mirror failover keeps the checkpoint authoritative (audit M5) ───────────
+
+
+async def test_mirror_failover_after_mid_body_drop_is_byte_exact(
+    zims_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resuming at ``bytes_done`` > 0, mirror #1 serves part of the requested
+    range then drops the connection mid-body; mirror #2 must take over from
+    the last checkpoint instead of appending its range after the dead
+    attempt's leftover tail. The final file is byte-exact against the true
+    content and passes the whole-file SHA-256 gate."""
+    payload = os.urandom(3 * _CHUNK + 123)
+    sha = hashlib.sha256(payload).hexdigest()
+    half = _CHUNK + 777  # non-aligned resume offset inside the first chunk
+    part = zims_dir / "failover.zim.part"
+    part.write_bytes(payload[:half])
+    checkpoint = json.dumps({"bytes_done": half, "size": len(payload), "sha256": sha, "url": ""})
+    # Flaky mirror sends 1.5 chunks of the range then dies; httpx's chunker
+    # flushes exactly one full _CHUNK (written + checkpointed) before the
+    # truncation surfaces, so mirror #2 resumes at half + _CHUNK.
+    flaky = _Server(payload, drop_after=_CHUNK + _CHUNK // 2)
+    good = _Server(payload)
+    meta4 = (
+        '<?xml version="1.0"?><metalink xmlns="urn:ietf:params:xml:ns:metalink">'
+        '<file name="failover.zim">'
+        f"<size>{len(payload)}</size>"
+        f'<hash type="sha-256">{sha}</hash>'
+        f'<url priority="1">{flaky.base_url}/payload</url>'
+        f'<url priority="2">{good.base_url}/payload</url>'
+        "</file></metalink>"
+    )
+    good._handler_cls.serve_meta4 = meta4  # harness wiring: both mirror URLs are literal
+    flaky.start()
+    good.start()
+    registered: list[Path] = []
+
+    async def register(path: object) -> None:
+        registered.append(Path(path))  # type: ignore[arg-type]
+
+    monkeypatch.setenv("download.min_free_space_gb", "0")
+    try:
+        await _run_job(
+            zims_dir,
+            {"url": f"{good.base_url}/x.zim.meta4", "name": "ignored_stem"},
+            register=register,
+            resume_checkpoint=checkpoint,
+        )
+    finally:
+        flaky.stop()
+        good.stop()
+
+    final = zims_dir / "failover.zim"
+    assert final.read_bytes() == payload
+    assert not (zims_dir / "failover.zim.part").exists()
+    assert registered == [final]
+    # Mirror #1 was asked for the checkpoint range and died mid-body; mirror
+    # #2 was asked for exactly the bytes past what mirror #1 checkpointed.
+    assert flaky.seen_starts == [half]
+    assert good.seen_starts == [half + _CHUNK]
+
+
+def _seed_stale_tail(
+    zims_dir: Path, payload: bytes, sha: str | None, *, name: str = "stale"
+) -> str:
+    """Craft the post-failure state audit M5 describes: a ``<name>.zim.part``
+    whose size runs past its checkpoint (a dead mirror's un-checkpointed
+    tail), plus the resume checkpoint JSON the runner would hand back."""
+    half = len(payload) // 2
+    part = zims_dir / f"{name}.zim.part"
+    part.write_bytes(payload[:half] + b"stale-tail-bytes-from-a-dead-mirror")
+    return json.dumps({"bytes_done": half, "size": len(payload), "sha256": sha or "", "url": ""})
+
+
+async def test_stale_part_tail_beyond_checkpoint_is_trimmed(
+    zims_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A .part longer than its checkpoint must be truncated back to the
+    checkpoint before resuming — appending after the stale tail would stitch
+    the range data into the wrong offset. With checksums on, the pre-fix
+    behavior fails the job here instead of producing a correct file."""
+    payload = os.urandom(4096)
+    sha = hashlib.sha256(payload).hexdigest()
+    checkpoint = _seed_stale_tail(zims_dir, payload, sha)
+    server = _Server(payload)
+    server.start()
+    monkeypatch.setenv("download.mirror_policy", "first")
+    monkeypatch.setenv("download.min_free_space_gb", "0")
+    try:
+        await _run_job(
+            zims_dir,
+            {
+                "url": f"{server.base_url}/file.zim",
+                "name": "stale",
+                "sha256": sha,
+                "size": len(payload),
+            },
+            resume_checkpoint=checkpoint,
+        )
+    finally:
+        server.stop()
+
+    final = zims_dir / "stale.zim"
+    assert final.read_bytes() == payload
+    assert not (zims_dir / "stale.zim.part").exists()
+
+
+async def test_stale_part_tail_without_checksums_is_trimmed(
+    zims_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sha256=None path where silent corruption shipped pre-fix: no hash in
+    the metalink and verification off means nothing downstream catches a
+    mis-stitched resume — the trim itself is what guarantees byte-exactness."""
+    payload = os.urandom(4096)
+    meta4 = (
+        '<?xml version="1.0"?><metalink xmlns="urn:ietf:params:xml:ns:metalink">'
+        '<file name="stale_nohash.zim">'
+        f"<size>{len(payload)}</size>"
+        '<url priority="1">{base_url}/payload</url></file></metalink>'
+    )
+    server = _Server(payload, meta4=meta4)
+    server.start()
+    checkpoint = _seed_stale_tail(zims_dir, payload, None, name="stale_nohash")
+    registered: list[Path] = []
+
+    async def register(path: object) -> None:
+        registered.append(Path(path))  # type: ignore[arg-type]
+
+    monkeypatch.setenv("download.verify_checksums", "false")
+    monkeypatch.setenv("download.min_free_space_gb", "0")
+    try:
+        await _run_job(
+            zims_dir,
+            {"url": f"{server.base_url}/x.zim.meta4", "name": "ignored_stem"},
+            register=register,
+            resume_checkpoint=checkpoint,
+        )
+    finally:
+        server.stop()
+
+    final = zims_dir / "stale_nohash.zim"
+    assert final.read_bytes() == payload
+    assert registered == [final]
+
+
+class _PausingRunner(_FakeRunner):
+    """Flips the cancel flag as soon as progress reaches ``cancel_at_done``,
+    so the job raises CancelledError mid-download like a user pause."""
+
+    def __init__(self, cancel_at_done: int) -> None:
+        super().__init__()
+        self.cancel_at_done = cancel_at_done
+
+    def _is_cancelling(self, job_id: int) -> bool:
+        done = self.progress[-1][0] if self.progress else 0
+        return done >= self.cancel_at_done
+
+
+async def test_pause_during_mirror_leaves_part_at_checkpoint_and_resumes(
+    zims_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancelling during mirror #1 leaves a .part sized exactly at the last
+    checkpoint, and a resumed run finishes byte-exact from that offset."""
+    payload = os.urandom(3 * _CHUNK + 5)
+    sha = hashlib.sha256(payload).hexdigest()
+    server = _Server(payload)
+    server.start()
+    monkeypatch.setenv("download.mirror_policy", "first")
+    monkeypatch.setenv("download.min_free_space_gb", "0")
+    params: dict[str, object] = {
+        "url": f"{server.base_url}/file.zim",
+        "name": "pausable",
+        "sha256": sha,
+        "size": len(payload),
+    }
+    try:
+        bind_runtime(db=None, zims_dir=str(zims_dir), register_archive=_noop_register)
+        config.configure()
+        runner = _PausingRunner(cancel_at_done=_CHUNK)
+        handle = JobHandleImpl(runner, job_id=1)  # type: ignore[arg-type]
+        task = asyncio.create_task(DownloadZimJob().run(handle, params))
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        checkpoint = json.loads(runner.checkpoint or "{}")
+        part = zims_dir / "pausable.zim.part"
+        assert part.exists()
+        assert checkpoint["bytes_done"] == _CHUNK  # one chunk flushed before pause
+        assert part.stat().st_size == checkpoint["bytes_done"]
+
+        await _run_job(zims_dir, params, resume_checkpoint=runner.checkpoint)
+    finally:
+        server.stop()
+
+    final = zims_dir / "pausable.zim"
+    assert final.read_bytes() == payload
