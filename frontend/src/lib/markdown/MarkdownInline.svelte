@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Tokens } from './marked';
 	import type { CitationToken } from './marked';
+	import { isSafeLinkHref } from './link';
 	import CitationChip from './CitationChip.svelte';
 	import MarkdownInline from './MarkdownInline.svelte';
 
@@ -26,9 +27,14 @@
 	{:else if token.type === 'codespan'}
 		<code>{token.text}</code>
 	{:else if token.type === 'link'}
-		<a href={token.href} title={token.title ?? undefined} target="_blank" rel="noreferrer">
+		{#if isSafeLinkHref(token.href)}
+			<a href={token.href} title={token.title ?? undefined} target="_blank" rel="noreferrer">
+				<MarkdownInline tokens={token.tokens ?? []} />
+			</a>
+		{:else}
+			<!-- Hostile/unknown scheme: keep the label (formatting intact), drop the anchor. -->
 			<MarkdownInline tokens={token.tokens ?? []} />
-		</a>
+		{/if}
 	{:else if token.type === 'br'}
 		<br />
 	{:else if token.type === 'html'}
