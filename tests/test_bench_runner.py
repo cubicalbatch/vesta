@@ -6,6 +6,7 @@ expansion, cascade delete, judge cache, compare query, rejudge, and the
 concurrency-invariance trap.
 """
 
+import asyncio
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -125,6 +126,50 @@ class FailSUT:
             error=None,
             trace={},
             resolved_strategy="fail",
+        )
+
+
+class GateBoomSUT:
+    """A SUT that fails fatally once a sibling cell has started."""
+
+    name = "boom"
+    answer_model = "model-a"
+    profile_name = "profile-x"
+    profile_hash = "phash"
+
+    def __init__(self, started: asyncio.Event) -> None:
+        self._started = started
+
+    async def run_one(self, q: BenchQuestion) -> QuestionOutput:
+        await self._started.wait()
+        raise RuntimeError("boom")
+
+
+class SlowSUT:
+    """A SUT that answers slowly and records how far it got."""
+
+    name = "slow"
+    answer_model = "model-a"
+    profile_name = "profile-x"
+    profile_hash = "phash"
+    generates_answers = False
+
+    def __init__(self, started: asyncio.Event, calls: list[str]) -> None:
+        self._started = started
+        self.calls = calls
+
+    async def run_one(self, q: BenchQuestion) -> QuestionOutput:
+        await asyncio.sleep(0.05)
+        self.calls.append(q.id)
+        if not self._started.is_set():
+            self._started.set()
+        return QuestionOutput(
+            answer_text="slow",
+            retrieved_paths=("A",),
+            abstained=False,
+            error=None,
+            trace={},
+            resolved_strategy="slow",
         )
 
 
@@ -313,6 +358,55 @@ async def test_failed_cell_persists_abort_reason(store) -> None:
     assert len(runs) == 1
     assert runs[0].status == "failed"
     assert runs[0].abort_reason == "RuntimeError: boom"
+
+
+@pytest.mark.asyncio
+async def test_first_failed_cell_cancels_sibling_cells(store) -> None:
+    """AUDIT_0824 M3: one failed cell must not abandon the matrix to orphaned
+    background tasks. Sibling cells are cancelled, and after the caller marks
+    them aborted they must never flip back to complete."""
+    qs = (_q("q1"), _q("q2"), _q("q3"))
+    ds = _dataset(qs)
+    started = asyncio.Event()
+    slow_calls: list[str] = []
+
+    def _boom_cell_progress(update: object) -> None:
+        # A fatal cell-level error must escape _run_cell's per-question
+        # catch, so fail the boom cell through its progress hook.
+        if getattr(update, "system", "") == "boom":
+            raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await run_benchmark(
+            dataset=ds,
+            questions=qs,
+            systems=[GateBoomSUT(started), SlowSUT(started, slow_calls)],
+            store=store,
+            judge=FakeJudge(),
+            judge_model="judge-b",
+            run_group="grp-cascade",
+            max_concurrent=2,
+            progress=_boom_cell_progress,
+        )
+
+    # Mirror api/bench._run_to_completion: on the propagated failure every
+    # still-running row is marked aborted.
+    runs = {r.system: r for r in await store.list_runs()}
+    assert set(runs) == {"boom", "slow"}
+    assert runs["boom"].status == "failed"
+    assert runs["boom"].abort_reason == "RuntimeError: boom"
+    assert await store.mark_aborted(runs["slow"].id, "RuntimeError: boom") is True
+
+    # Give any (hypothetical) orphaned sibling ample time to finish its
+    # questions and rewrite its row; it must stay aborted.
+    await asyncio.sleep(0.25)
+    slow = await store.get_run(runs["slow"].id)
+    assert slow is not None
+    assert slow.status == "aborted"
+    assert slow.abort_reason == "RuntimeError: boom"
+    # The sibling was cancelled mid-flight, not left running to completion:
+    # it answered exactly q1 before the failure landed and never progressed.
+    assert slow_calls == ["q1"]
 
 
 # ── Judge cache hit/miss ────────────────────────────────────────────────────

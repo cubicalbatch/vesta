@@ -808,7 +808,6 @@ async def run_benchmark(
     group = run_group or str(uuid.uuid4())
     sub_hash = subset_hash(list(questions))
     cells = [(repeat, system) for repeat in range(repeats) for system in systems]
-    results: list[BenchRunRecord] = []
     sem = asyncio.Semaphore(max(1, max_concurrent))
 
     calibration = await measure_bench_calibration(
@@ -847,7 +846,21 @@ async def run_benchmark(
                 level=level,
             )
 
-    results = list(await asyncio.gather(*(_run_cell_wrapped(r, s) for r, s in cells)))
+    tasks = [asyncio.create_task(_run_cell_wrapped(r, s)) for r, s in cells]
+    try:
+        results = list(await asyncio.gather(*tasks))
+    except BaseException:
+        # A cell failure must not leave sibling cells running detached: after
+        # the first exception the caller (api/bench._run_to_completion) marks
+        # every still-running row aborted and reports the group finished — an
+        # orphaned cell would keep burning LLM calls and later flip its row
+        # from aborted back to complete. Cancel the outstanding cells and wait
+        # for the cancellations to land before propagating.
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
     return results
 
 
