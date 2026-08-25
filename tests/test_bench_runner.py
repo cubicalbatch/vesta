@@ -430,6 +430,58 @@ async def test_two_stage_and_rejudge(store) -> None:
     assert pending_b == []
 
 
+
+@pytest.mark.asyncio
+async def test_rejudge_preserves_rounds_and_latency(store) -> None:
+    """Rejudge must not zero the stored rounds/latency columns or the run's
+    recomputed ``source.latency`` metrics."""
+    qs = (_q("q1"), _q("q2"))
+    judge = FakeJudge()
+    run_id = await store.insert_run(_make_run_record())
+    for i, q in enumerate(qs):
+        await store.insert_question_result(
+            run_id,
+            BenchQuestionResult(
+                run_id=run_id,
+                question_id=q.id,
+                capability=q.capability,
+                difficulty=q.difficulty,
+                question_text=q.question,
+                expected_answer=q.answer,
+                answer_text="generic-answer",
+                abstained=False,
+                verdict=Verdict.PENDING.value,
+                retrieved_paths=("A",),
+                source_hit_rank=1,
+                rounds=3,
+                latency_ms=1234.5 + i,
+            ),
+        )
+
+    graded = await rejudge_run(
+        store,
+        judge,
+        "judge-b",
+        run_id,
+        questions={q.id: q for q in qs},
+        judge_concurrency=2,
+    )
+    assert graded == 2
+
+    rows = {r.question_id: r for r in await store.list_question_results(run_id)}
+    assert rows["q1"].verdict == Verdict.CORRECT.value
+    assert rows["q1"].rounds == 3
+    assert rows["q1"].latency_ms == 1234.5
+    assert rows["q2"].rounds == 3
+    assert rows["q2"].latency_ms == 1235.5
+
+    rec = await store.get_run(run_id)
+    assert rec is not None
+    lat = rec.metrics_json["source"]["latency"]
+    assert isinstance(lat, dict)
+    assert lat["n"] == 2
+    assert lat["p50"] > 0
+
 # ── Concurrency invariance ──────────────────────────────────────────────────
 
 

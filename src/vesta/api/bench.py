@@ -1328,6 +1328,8 @@ def _row_to_result(row: aiosqlite.Row) -> BenchQuestionResult:
         source_coverage=float(row["source_coverage"]),
         sub_fact_coverage=float(sfc) if sfc is not None else None,
         retrieved_paths=paths,
+        rounds=int(row["rounds"]),
+        latency_ms=float(row["latency_ms"]),
         error=str(row["error"]) if row["error"] is not None else None,
         trace=trace,
         input_tokens=int(row["input_tokens"] or 0),
