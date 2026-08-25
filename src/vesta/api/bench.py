@@ -2270,9 +2270,19 @@ async def delete_bench_run(request: Request, run_id: int) -> dict[str, object]:
     """Delete a run (cascades to its per-question rows via FK ON DELETE CASCADE)."""
     state: AppState = app_state(request)
     store = SqliteBenchStore(state.db)
-    ok = await store.delete_run(run_id)
-    if not ok:
+    record = await store.get_run(run_id)
+    if record is None:
         raise HTTPException(status_code=404, detail=f"run {run_id} not found")
+    task = _tasks.get(record.run_group)
+    if task is not None and not task.done():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"run {run_id} belongs to a bench group that is currently executing; "
+                "wait for it to finish or cancel it first"
+            ),
+        )
+    await store.delete_run(run_id)
     return {"deleted": run_id}
 
 

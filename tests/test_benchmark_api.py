@@ -12,6 +12,7 @@ import asyncio
 import json
 import os
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -552,6 +553,102 @@ async def test_delete_run_cascades(app_with_db: tuple[httpx.AsyncClient, Any]) -
     assert await store.list_question_results(run_id) == []
     # Re-delete → 404.
     assert (await client.delete(f"/api/bench/runs/{run_id}")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_run_rejected_while_group_running(
+    app_with_db: tuple[httpx.AsyncClient, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deleting an in-flight cell cascades its question rows away under the
+    runner; the endpoint must refuse with 409 until the group finishes."""
+    client, _ = app_with_db
+    data_dir = Path(os.environ["data.dir"])
+    dataset_path = data_dir / "tiny_bench.json"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "name": "tiny",
+                "version": 1,
+                "questions": [
+                    {
+                        "id": "q1",
+                        "question": "What is 42?",
+                        "capability": "lookup",
+                        "difficulty": "easy",
+                        "slice": "core",
+                        "expected_behavior": "answer",
+                        "answer": "42",
+                        "sources": [
+                            {
+                                "zim": "wikipedia_en_top_nopic_2026-06.zim",
+                                "article_title": "A",
+                                "article_path": "A",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("vesta.api.bench.make_judge_llm", lambda _state, _m: (None, None))
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    run_ids_box: list[int] = []
+
+    async def _fake_run_benchmark(**kwargs: Any) -> list[BenchRunRecord]:
+        started.set()
+        await release.wait()  # hold the group mid-flight
+        store = kwargs["store"]
+        records = []
+        for run_id in run_ids_box:
+            rec = await store.get_run(run_id)
+            assert rec is not None
+            final = replace(rec, status="complete", finished_at="2026-01-01T00:01:00+00:00")
+            await store.update_run(run_id, final)
+            records.append(final)
+        return records
+
+    monkeypatch.setattr("vesta.api.bench.run_benchmark", _fake_run_benchmark)
+
+    resp = await client.post(
+        "/api/bench/run",
+        json={
+            "systems": ["sources_only"],
+            "models": ["model-a"],
+            "dataset": str(dataset_path),
+            "judge_model": "judge-b",
+            "label": "inflight",
+        },
+    )
+    assert resp.status_code == 200
+    run_ids = [int(rid) for rid in resp.json()["run_ids"]]
+    assert len(run_ids) == 1
+    run_ids_box.extend(run_ids)
+    await asyncio.wait_for(started.wait(), timeout=5.0)
+
+    # While the group is executing: DELETE refused, run intact.
+    conflict = await client.delete(f"/api/bench/runs/{run_ids[0]}")
+    assert conflict.status_code == 409
+    assert (await client.get(f"/api/bench/runs/{run_ids[0]}")).status_code == 200
+
+    # After completion: DELETE succeeds.
+    release.set()
+    deadline = asyncio.get_event_loop().time() + 15.0
+    detail: dict[str, Any] = {}
+    while asyncio.get_event_loop().time() < deadline:
+        detail = (await client.get(f"/api/bench/runs/{run_ids[0]}")).json()
+        if detail["status"] != "running":
+            break
+        await asyncio.sleep(0.05)
+    assert detail["status"] == "complete"
+
+    deleted = await client.delete(f"/api/bench/runs/{run_ids[0]}")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] == run_ids[0]
+    assert (await client.get(f"/api/bench/runs/{run_ids[0]}")).status_code == 404
 
 
 # ── Driver event reduction (adapted from the old InProcessAnswerDriver) ─────
