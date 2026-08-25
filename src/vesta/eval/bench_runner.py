@@ -757,11 +757,15 @@ async def _run_cell(  # noqa: PLR0912, PLR0915
 
     except Exception as exc:
         ended = now_iso()
+        reason = f"{type(exc).__name__}: {exc}"
         error_record = replace(
             record,
             finished_at=ended,
             status="failed",
-            abort_reason=f"{type(exc).__name__}: {exc}",
+            abort_reason=reason,
+            # Stash in config_json too: there is no dedicated column, and
+            # _row_to_run lifts the reason back from here on reload.
+            config_json={**record.config_json, "abort_reason": reason},
         )
         await store.update_run(run_id, error_record)
         raise

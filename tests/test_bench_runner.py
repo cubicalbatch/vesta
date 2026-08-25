@@ -6,9 +6,8 @@ expansion, cascade delete, judge cache, compare query, rejudge, and the
 concurrency-invariance trap.
 """
 
-from __future__ import annotations
-
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -254,6 +253,66 @@ async def test_cascade_delete(store) -> None:
     assert ok
     assert await store.get_run(run_id) is None
     assert await store.list_question_results(run_id) == []
+
+
+@pytest.mark.asyncio
+async def test_abort_reason_and_judge_flag_survive_round_trip(store) -> None:
+    """AUDIT_0824: abort_reason and judge_shares_endpoint live in config_json
+    (no dedicated columns) and must survive the persistence round-trip."""
+    rec = replace(_make_run_record(), config_json={"judge_shares_endpoint": True})
+    run_id = await store.insert_run(rec)
+
+    got = await store.get_run(run_id)
+    assert got is not None
+    assert got.judge_shares_endpoint is True
+
+    # mark_aborted stashes the reason; get_run must lift it back.
+    assert await store.mark_aborted(run_id, "process restarted mid-run") is True
+    aborted = await store.get_run(run_id)
+    assert aborted is not None
+    assert aborted.status == "aborted"
+    assert aborted.abort_reason == "process restarted mid-run"
+
+    # The failed-cell path (status='failed', reason stashed in config_json)
+    # keeps its reason through a reload.
+    failed_rec = replace(
+        rec,
+        status="failed",
+        abort_reason="ValueError: boom",
+        config_json={**rec.config_json, "abort_reason": "ValueError: boom"},
+    )
+    await store.update_run(run_id, failed_rec)
+    failed = await store.get_run(run_id)
+    assert failed is not None
+    assert failed.status == "failed"
+    assert failed.abort_reason == "ValueError: boom"
+
+
+@pytest.mark.asyncio
+async def test_failed_cell_persists_abort_reason(store) -> None:
+    """A cell that dies on a fatal error writes status='failed' and its reason
+    must survive a reload (stashed in config_json by the failed-cell path)."""
+
+    def _boom(update: object) -> None:
+        raise RuntimeError("boom")
+
+    qs = (_q("q1"), _q("q2"))
+    ds = _dataset(qs)
+    with pytest.raises(RuntimeError, match="boom"):
+        await run_benchmark(
+            dataset=ds,
+            questions=qs,
+            systems=[FakeSUT()],
+            store=store,
+            judge=FakeJudge(),
+            judge_model="judge-b",
+            run_group="grp-fail",
+            progress=_boom,
+        )
+    runs = await store.list_runs()
+    assert len(runs) == 1
+    assert runs[0].status == "failed"
+    assert runs[0].abort_reason == "RuntimeError: boom"
 
 
 # ── Judge cache hit/miss ────────────────────────────────────────────────────

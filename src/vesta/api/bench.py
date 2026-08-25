@@ -1249,6 +1249,7 @@ def _run_to_row(record: BenchRunRecord) -> tuple[Any, ...]:
 
 def _row_to_run(row: aiosqlite.Row) -> BenchRunRecord:
     cal = row["calibration"]
+    config = json.loads(row["config_json"]) if row["config_json"] else {}
     return BenchRunRecord(
         id=int(row["id"]),
         run_group=str(row["run_group"]),
@@ -1267,8 +1268,12 @@ def _row_to_run(row: aiosqlite.Row) -> BenchRunRecord:
         scope=str(row["scope"]),
         trusted=bool(row["trusted"]),
         calibration=float(cal) if cal is not None else None,
-        config_json=json.loads(row["config_json"]) if row["config_json"] else {},
+        config_json=config,
         metrics_json=json.loads(row["metrics_json"]) if row["metrics_json"] else {},
+        # No dedicated columns: both live in config_json (the failed-cell path
+        # and mark_aborted stash the reason there; _run_cell pins the flag).
+        judge_shares_endpoint=bool(config.get("judge_shares_endpoint", False)),
+        abort_reason=str(config.get("abort_reason", "")),
     )
 
 
