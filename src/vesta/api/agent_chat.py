@@ -1103,6 +1103,14 @@ class _TurnContext:
     #: user message + pre-turn history) the window ledger projects the next
     #: request from when no completed request is on the meter yet.
     prompt_chars: int = 0
+    #: Latched by the follow-up branch when its first request does NOT fit
+    #: ``window_tokens - output_reserve`` — nothing there is shedable (the
+    #: history is caller-owned), so the over-budget shape ships with this
+    #: marker in the budget audit.
+    first_request_over_budget: bool = False
+    #: Latched by the overflow fallback when it dropped the pre-turn history
+    #: because prompt + history would overflow the window plan again.
+    fallback_history_dropped: bool = False
     #: Latched once a result is rejected for budget: further calls are
     #: steered away BEFORE executing (no more retrieval on a dead turn).
     tool_budget_exhausted: bool = False
@@ -1769,11 +1777,23 @@ async def _build_turn(  # noqa: PLR0912, PLR0915
     if ctx.follow_up:
         ctx.sys_prompt = base_prompt + _FOLLOWUP_DIRECTIVE
         ctx.user_message = question
+        # First-request fit check — the twin of turn-1's pre-seed fit below.
+        # A follow-up carries system + directive + question + the FULL
+        # pre-turn history, and none of it is shedable here (the history is
+        # caller-owned), so an over-budget shape cannot be repaired — it is
+        # latched into the budget audit instead (degrade-don't-fail).
+        if budget.window_tokens > 0 and not _request_fits_window(
+            ctx, ctx.user_message, message_history or []
+        ):
+            ctx.first_request_over_budget = True
     else:
         # ── Round-0 pre-seed: the model starts from evidence, not blind. ──
         # Under a window plan, bound the pre-seed so the FIRST
         # request fits ``window - output_reserve`` by construction.
         clause_reserve = len(_STRONG_EVIDENCE_MUST_STATE_CLAUSE) if evidence_mode == "strong" else 0
+        # The legacy path (history present, contextual follow-ups off) re-sends
+        # the whole pre-turn conversation on this first request too, so the fit
+        # sheds pre-seed passages for it exactly like prompt/directive/question.
         seed_fit_chars: int | None = None
         if budget.window_tokens > 0:
             seed_fit_chars = max(
@@ -1784,7 +1804,8 @@ async def _build_turn(  # noqa: PLR0912, PLR0915
                 - clause_reserve
                 - len(_USER_MESSAGE_HEAD)
                 - len(_USER_MESSAGE_TAIL)
-                - len(question),
+                - len(question)
+                - _wire_chars(message_history or []),
             )
         ctx.seed_text = await ctx._do_search(question, exact=True, fit_chars=seed_fit_chars)
         ctx.seed_hit = bool(ctx.turn_cards)
@@ -2146,6 +2167,10 @@ def _budget_audit(ctx: _TurnContext) -> dict[str, Any]:
     byte-identity trap)."""
     d = asdict(ctx.budget)
     d["preseed_dropped"] = ctx.preseed_dropped
+    if ctx.first_request_over_budget:
+        d["first_request_over_budget"] = True
+    if ctx.fallback_history_dropped:
+        d["fallback_history_dropped"] = True
     if ctx.max_tool_rounds > 0:
         d["max_tool_rounds"] = ctx.max_tool_rounds
     return d
@@ -2195,12 +2220,26 @@ async def _iter_recovery_events(  # noqa: PLR0912, PLR0915
     reask_fired = False
     p6_abstain_triggered = False
     if st.crashed:
-        # No tools on the fallback: force a direct answer from the initial sources.
+        # No tools on the fallback: force a direct answer from the initial
+        # sources. Keep the conversation when it fits the window plan — a
+        # follow-up that overflows must not recover amnesic. When
+        # prompt + history would overflow again, drop the history
+        # deliberately (latched for the audit); without a window plan there
+        # is nothing to estimate against, so today's history-less shape stands.
+        fallback_history: list[ModelMessage] | None = message_history or None
+        if (
+            fallback_history is not None
+            and ctx.budget.window_tokens > 0
+            and not _request_fits_window(ctx, ctx.user_message, fallback_history)
+        ):
+            ctx.fallback_history_dropped = True
+            fallback_history = None
         if stream_events:
             yield AnswerResetEvent(reason="fallback")
         try:
             fb = await ctx.build_agent(with_tools=False).run(
                 ctx.user_message,
+                message_history=fallback_history,
                 usage_limits=UsageLimits(request_limit=2),
             )
         except ModelHTTPError as exc:

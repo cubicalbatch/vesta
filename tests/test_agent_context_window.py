@@ -32,7 +32,15 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.function import FunctionModel
 
 from vesta.answer.contracts import AnswerResetEvent, CitationsEvent, TokenEvent, TraceEvent
@@ -1432,3 +1440,169 @@ async def test_aging_firing_counted_in_trace(state: Any, monkeypatch: pytest.Mon
     # the first round's article truncated to the derived budget.
     assert result.trace["aged_requests"] >= 1
     assert result.trace["age_saved_chars"] > 0
+
+
+# ── N7: history-aware fit arithmetic ────────────────────────────────────────
+
+
+def _history_of(*exchanges: tuple[str, str]) -> list[ModelMessage]:
+    """A reconstructed conversation: one user/assistant pair per exchange."""
+    out: list[ModelMessage] = []
+    for q, a in exchanges:
+        out.append(ModelRequest(parts=[UserPromptPart(content=q)]))
+        out.append(ModelResponse(parts=[TextPart(content=a)]))
+    return out
+
+
+async def test_legacy_preseed_fit_sheds_for_history(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """History present with contextual follow-ups OFF (legacy path): the first
+    request carries the whole conversation, so the pre-seed fit must shed tail
+    passages for it too — the request still fits ``window - reserve``."""
+    runtime = FakeToolRuntime(
+        [_scored(i, f"PASSAGE-{i} " + "dense filler. " * 380) for i in range(6)],
+        [_card(i, "s") for i in range(6)],
+        "article",
+    )
+    model = CapturingModel([], "The answer is forty-two [1].")
+    history = _history_of(("prior question " + "q" * 3000, "prior answer " + "a" * 2000))
+    monkeypatch.setattr(agent_chat, "_make_model", lambda *a, **k: model.model)
+    monkeypatch.setattr(agent_chat, "_build_tool_runtime", lambda *a, **k: runtime)
+    monkeypatch.setattr(agent_chat, "_contextual_followups_enabled", lambda sn: False)
+    result = await agent_chat.run_one_turn(
+        state,
+        make_snapshot(**{"answer.agent.context_profile": "8k"}),
+        "What is the answer?",
+        model_id="fake-model",
+        endpoint="http://fake",
+        api_key="k",
+        message_history=history,
+    )
+    b = result.trace["budget"]
+    assert b["window_tokens"] == 8_192
+    # The fitted first request INCLUDES the history and still fits.
+    assert estimate_tokens_for_chars(agent_chat._wire_chars(model.seen[0])) <= (
+        b["window_tokens"] - b["output_reserve"]
+    )
+    # The fit shed pre-seed passages to make room for the conversation.
+    assert b["preseed_dropped"] >= 1
+    assert "prior answer" in str(model.seen[0])
+
+
+async def test_followup_first_request_fit_latched_when_over_budget(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The follow-up branch performs the first-request fit check (the twin of
+    turn-1's pre-seed fit): a shape that fits stays unmarked; an over-budget
+    one — nothing there is shedable — latches ``first_request_over_budget``
+    into the budget audit."""
+    runtime = FakeToolRuntime([], [], "article")
+    monkeypatch.setattr(agent_chat, "_build_tool_runtime", lambda *a, **k: runtime)
+    sn = make_snapshot(**{"answer.agent.context_profile": "8k"})
+
+    small = _history_of(("short question", "short answer"))
+    ctx = await agent_chat._build_turn(
+        state,
+        sn,
+        "Who died first",
+        model_id="m",
+        endpoint="http://fake",
+        api_key="k",
+        message_history=small,
+    )
+    assert ctx.follow_up is True
+    assert ctx.first_request_over_budget is False
+    assert "first_request_over_budget" not in agent_chat._budget_audit(ctx)
+
+    big = _history_of(("question " + "q" * 30_000, "answer " + "a" * 10_000))
+    ctx = await agent_chat._build_turn(
+        state,
+        sn,
+        "Who died first",
+        model_id="m",
+        endpoint="http://fake",
+        api_key="k",
+        message_history=big,
+    )
+    assert ctx.first_request_over_budget is True
+    assert agent_chat._budget_audit(ctx)["first_request_over_budget"] is True
+
+
+class OverflowOnceModel:
+    """First request raises a context-overflow 400; every later one answers.
+    Records every request's messages verbatim."""
+
+    def __init__(self, answer: str):
+        self.seen: list[list[ModelMessage]] = []
+        outer = self
+
+        async def fn(messages: list[ModelMessage], info: Any) -> ModelResponse:
+            outer.seen.append(list(messages))
+            if len(outer.seen) == 1:
+                raise ModelHTTPError(
+                    status_code=400,
+                    model_name="fake-model",
+                    body={"error": "Request exceeded the context window."},
+                )
+            return ModelResponse(parts=[TextPart(content=answer)])
+
+        self.model = FunctionModel(function=fn)
+
+
+async def _overflow_run(
+    state: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    history: list[ModelMessage],
+) -> Any:
+    runtime = FakeToolRuntime(
+        [_scored(i, f"P-{i} small passage") for i in range(6)],
+        [_card(i, "s") for i in range(6)],
+        "article",
+    )
+    model = OverflowOnceModel("Recovered.")
+    monkeypatch.setattr(agent_chat, "_make_model", lambda *a, **k: model.model)
+    monkeypatch.setattr(agent_chat, "_build_tool_runtime", lambda *a, **k: runtime)
+    result = await agent_chat.run_one_turn(
+        state,
+        make_snapshot(**{"answer.agent.context_profile": "8k"}),
+        "What is the answer?",
+        model_id="fake-model",
+        endpoint="http://fake",
+        api_key="k",
+        message_history=history,
+    )
+    return result, model
+
+
+async def test_overflow_fallback_keeps_history_that_fits(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A history-bearing turn whose main run overflows recovers WITH its
+    conversation: when prompt + history fit the window plan, the no-tool
+    fallback re-sends the pre-turn history."""
+    result, model = await _overflow_run(
+        state, monkeypatch, _history_of(("prior question", "prior answer about Lafayette"))
+    )
+    assert result.trace["overflow_fallbacks"] == 1
+    assert result.answer == "Recovered."
+    assert len(model.seen) == 2
+    # The fallback's request carries the pre-turn history AND the question.
+    assert "prior answer about Lafayette" in str(model.seen[1])
+    assert "What is the answer?" in str(model.seen[1])
+    assert "fallback_history_dropped" not in result.trace["budget"]
+
+
+async def test_overflow_fallback_drops_history_that_would_not_fit(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When prompt + history would overflow the window plan again, the
+    fallback sheds the history deliberately and latches the marker."""
+    result, model = await _overflow_run(
+        state, monkeypatch, _history_of(("q " + "q" * 30_000, "a " + "a" * 10_000))
+    )
+    assert result.trace["overflow_fallbacks"] == 1
+    assert len(model.seen) == 2
+    # The fallback recovered WITHOUT the conversation (deliberate degrade).
+    assert "qqqqq" not in str(model.seen[1])
+    assert result.trace["budget"]["fallback_history_dropped"] is True
