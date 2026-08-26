@@ -35,11 +35,8 @@ TOKENS_PER_WORD = 1.3
 #: whitespace, so a single very long unpunctuated run can't become one giant chunk.
 _HARD_SPLIT_MULT = 2.0
 
-# Sentence boundary: end-of-sentence punctuation followed by whitespace (and
-# optionally the start of the next sentence). Keeps the boundary character with
-# the preceding sentence; the whitespace starts the next. Newlines also act as
-# boundaries so list items / headings don't merge into one "sentence".
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?…])\s+|\n+", re.UNICODE)
+_WHITESPACE_RE = re.compile(r"\s", re.UNICODE)
 
 
 def _sentences(text: str) -> list[tuple[int, int]]:
@@ -194,15 +191,21 @@ def split_passages(
 
 
 def _nearest_space_after(text: str, start: int, target_words_hint: int) -> int:
-    """A whitespace offset near ``start + approx target char length``."""
-    approx_chars = int(target_words_hint * TOKENS_PER_WORD * 5)  # ~5 chars/word
+    """A whitespace offset near ``start + approx target char length``.
+
+    Falls back to ``min(target, len(text))`` rather than ``len(text)`` when no
+    whitespace exists at or after ``target``, so unpunctuated/spaceless text splits
+    into target-sized chunks instead of collapsing to EOF. Forward progress is
+    guaranteed (target > start).
+    """
+    approx_chars = max(int(target_words_hint * TOKENS_PER_WORD * 5), 1)  # ~5 chars/word
     target = start + approx_chars
     if target >= len(text):
         return len(text)
-    probe = text.find(" ", target)
-    if probe < 0:
-        return len(text)
-    return probe
+    m = _WHITESPACE_RE.search(text, target)
+    if m is None:
+        return target
+    return m.start()
 
 
 __all__ = ["TOKENS_PER_WORD", "sentence_aligned_spans", "split_passages"]

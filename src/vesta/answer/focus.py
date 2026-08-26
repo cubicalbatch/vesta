@@ -66,10 +66,9 @@ _TOKENS_PER_WORD = 1.3
 _TARGET_TOKENS = 400
 _TARGET_WORDS = max(int(_TARGET_TOKENS / _TOKENS_PER_WORD), 1)
 
-#: Sentence boundary: end-of-sentence punctuation + whitespace, or a newline
-#: (list items/headings don't merge into one "sentence"). Verbatim copy of
-#: ``zim/passages.py``'s ``_SENTENCE_BOUNDARY`` — see the module docstring.
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?…])\s+|\n+", re.UNICODE)
+_WHITESPACE_RE = re.compile(r"\s", re.UNICODE)
+
 
 #: A chunk may grow to this multiple of its target before a hard whitespace
 #: split, so one very long unpunctuated run can't become a single giant chunk.
@@ -140,13 +139,21 @@ def _sentence_spans(text: str) -> list[tuple[int, int]]:
 
 
 def _nearest_space_after(text: str, start: int, target_words_hint: int) -> int:
-    """A whitespace offset near ``start + approx target char length``."""
-    approx_chars = int(target_words_hint * _TOKENS_PER_WORD * 5)  # ~5 chars/word
+    """A whitespace offset near ``start + approx target char length``.
+
+    Falls back to ``min(target, len(text))`` rather than ``len(text)`` when no
+    whitespace exists at or after ``target``, so unpunctuated/spaceless text splits
+    into target-sized chunks instead of collapsing to EOF. Forward progress is
+    guaranteed (target > start).
+    """
+    approx_chars = max(int(target_words_hint * _TOKENS_PER_WORD * 5), 1)  # ~5 chars/word
     target = start + approx_chars
     if target >= len(text):
         return len(text)
-    probe = text.find(" ", target)
-    return probe if probe >= 0 else len(text)
+    m = _WHITESPACE_RE.search(text, target)
+    if m is None:
+        return target
+    return m.start()
 
 
 def _chunk_spans(text: str, target_words: int) -> list[tuple[int, int]]:

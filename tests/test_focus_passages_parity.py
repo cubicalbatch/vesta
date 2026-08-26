@@ -21,6 +21,14 @@ _TEXTS = [
     "And another sentence here.\n" * 8,
     # One giant unpunctuated run (exercises the hard-split path) plus normal tail.
     ("word " * 900) + ". Short tail sentence.",
+    # CJK text without Latin spaces (punctuated and unpunctuated).
+    "量子力学是物理学的一个分支，主要研究微观粒子的运动规律。" * 40,  # noqa: RUF001
+    # Spaceless string (e.g. hex / base64 / uninterrupted sequence).
+    "0123456789abcdef" * 300,
+    # Unicode whitespace (non-breaking space \u00a0, ideographic space \u3000, tab \t).
+    ("word\u00a0" * 450) + ("词语\u3000" * 450),
+    # Newline-separated items / transcript.
+    "\n".join(f"Line {i}: transcript entry content" for i in range(200)),
     "",
 ]
 
@@ -28,6 +36,9 @@ _TEXTS = [
 def test_sentence_boundary_patterns_identical() -> None:
     assert focus_mod._SENTENCE_BOUNDARY.pattern == passages_mod._SENTENCE_BOUNDARY.pattern, (
         "sentence-boundary regex drifted between answer/focus.py and zim/passages.py"
+    )
+    assert focus_mod._WHITESPACE_RE.pattern == passages_mod._WHITESPACE_RE.pattern, (
+        "whitespace regex drifted between answer/focus.py and zim/passages.py"
     )
 
 
