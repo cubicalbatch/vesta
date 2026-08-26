@@ -37,8 +37,7 @@
 	import AcquisitionProgress from '$lib/components/catalog/AcquisitionProgress.svelte';
 	import DiskMeter from '$lib/components/catalog/DiskMeter.svelte';
 	import Check from '@lucide/svelte/icons/check';
-	import { streamChat } from '$lib/answer/client';
-	import { AnswerStream } from '$lib/answer/answerStream.svelte';
+	import { DemoAsk } from '$lib/answer/demo.svelte';
 
 	let step = $state<1 | 2>(1);
 
@@ -161,26 +160,7 @@
 	// ── "Ask a test question" — a canned question through the real answer
 	// stream, so the user sees their model write its very first tokens inline
 	// before leaving the wizard. This is the moment the wizard is for.
-	const TEST_QUESTION = 'In one short sentence, what is Wikipedia?';
-	const testStream = new AnswerStream();
-	let testRunning = $state(false);
-	// Aborted on teardown so navigating away mid-demo cancels the underlying
-	// fetch instead of streaming tokens into a dead component.
-	let testController: AbortController | null = null;
-
-	async function askTestQuestion() {
-		if (testRunning) return;
-		testRunning = true;
-		testController?.abort();
-		testController = new AbortController();
-		try {
-			await testStream.consume(streamChat({ query: TEST_QUESTION }, testController.signal).events);
-		} finally {
-			testRunning = false;
-		}
-	}
-
-
+	const testDemo = new DemoAsk();
 	$effect(() => (addManualOpen ? lockBodyScroll() : undefined));
 
 	// Curated ships in the repo and works with no network. A 503 here means
@@ -328,8 +308,7 @@
 	$effect(() => {
 		return () => {
 			stopReadinessPolling();
-			testController?.abort();
-			testStream.stop();
+			testDemo.dispose();
 		};
 	});
 
@@ -876,16 +855,16 @@
 								<Check class="size-4" />
 								Ready — {readyName ?? 'the model'} is loaded
 							</p>
-							{#if testRunning || testStream.state.text || testStream.state.error}
+							{#if testDemo.running || testDemo.stream.state.text || testDemo.stream.state.error}
 								<div class="mt-2 rounded-md border border-border bg-surface p-3">
-									{#if testStream.state.text}
+									{#if testDemo.stream.state.text}
 										<p class="max-h-28 overflow-y-auto whitespace-pre-wrap text-sm text-ink">
-											{testStream.state.text}
+											{testDemo.stream.state.text}
 										</p>
-									{:else if testStream.state.error}
-										<p class="text-xs text-danger">{testStream.state.error.message}</p>
+									{:else if testDemo.stream.state.error}
+										<p class="text-xs text-danger">{testDemo.stream.state.error.message}</p>
 									{:else}
-										<p class="text-xs text-faint">{testStream.state.detail || 'Reading your archives…'}</p>
+										<p class="text-xs text-faint">{testDemo.stream.state.detail || 'Reading your archives…'}</p>
 									{/if}
 								</div>
 							{/if}
@@ -893,10 +872,10 @@
 								<button
 									type="button"
 									class="rounded-md border border-border bg-surface px-4 py-1.5 text-sm font-medium text-ink hover:bg-surface-muted disabled:opacity-40"
-									disabled={testRunning}
-									onclick={askTestQuestion}
+									disabled={testDemo.running}
+									onclick={() => testDemo.ask()}
 								>
-									{testRunning ? 'Asking…' : 'Ask a test question'}
+									{testDemo.running ? 'Asking…' : 'Ask a test question'}
 								</button>
 							</div>
 						</div>
