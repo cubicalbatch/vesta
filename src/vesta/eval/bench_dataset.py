@@ -9,9 +9,10 @@ flat ``article_title``/``article_path`` pair is gone), and per-question
 
 Boundary: this module imports ONLY
 ``vesta.config`` + stdlib. The loader is pure data — no DB, no ZIM, no inference.
-The dataset hash deliberately EXCLUDES ``oracle``/``closed_book``/``provenance``
-/``tags`` so a re-verification pass does not invalidate the comparability of
-pipeline runs.
+The dataset hash covers every measurement-affecting field (identity, judge
+prompt inputs, source ``required`` flags, filter/attribution tiers) and
+deliberately EXCLUDES ``oracle``/``closed_book``/``provenance``/``tags`` so a
+re-verification pass does not invalidate the comparability of pipeline runs.
 """
 
 from __future__ import annotations
@@ -140,15 +141,23 @@ class BenchDataset:
 def _hash_record(q: BenchQuestion) -> str:
     """The per-question fields that define retrieval + answer identity.
 
-    Deliberately EXCLUDES ``oracle``/``closed_book``/``provenance``/``tags``: a
-    re-verification pass changes those, not the question's identity, and must
-    not invalidate comparability of pipeline runs. Source
-    article_paths and sub-fact texts are sorted so source/sub_fact ORDER (a
-    presentation detail) does not perturb the hash.
+    Includes every field that can change a measured score: ``capability`` /
+    ``difficulty`` / ``level`` / ``status`` gate filtering and attribution,
+    ``answer_detail`` is embedded in every judge prompt, and
+    ``sources[].required`` flips the SourceMetrics denominators and the
+    attribution 2x2. Deliberately EXCLUDES ``oracle``/``closed_book``/
+    ``provenance``/``tags``: a re-verification pass changes those, not the
+    question's identity, and must not invalidate comparability of pipeline runs.
+    Source paths (+ required flags) and sub-fact texts are sorted so source/
+    sub_fact ORDER (a presentation detail) does not perturb the hash.
     """
-    paths = ",".join(sorted(s.article_path for s in q.sources))
+    sources = ",".join(sorted(f"{s.article_path}:{int(s.required)}" for s in q.sources))
     facts = ",".join(sorted(sf.fact for sf in q.sub_facts))
-    return f"{q.id}\x1f{q.question}\x1f{q.answer}\x1f{q.expected_behavior}\x1f{paths}\x1f{facts}"
+    return (
+        f"{q.id}\x1f{q.question}\x1f{q.capability}\x1f{q.difficulty}\x1f{q.level}"
+        f"\x1f{q.status}\x1f{q.expected_behavior}\x1f{q.answer}\x1f{q.answer_detail}"
+        f"\x1f{sources}\x1f{facts}"
+    )
 
 
 def _compute_hash(questions: Sequence[BenchQuestion]) -> str:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -286,6 +287,62 @@ def test_hash_sensitive_to_sources_and_sub_facts(tmp_path: Path) -> None:
     assert load_bench_dataset(str(p)).hash != h1
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("capability", "lookup"),
+        ("difficulty", "hard"),
+        ("level", 2),
+        ("status", "quarantined"),
+        ("answer_detail", "extra detail"),
+    ],
+)
+def test_hash_sensitive_to_measurement_fields(field: str, value: object) -> None:
+    """Every field that can change a measured score must change the dataset
+    identity: capability/difficulty/level/status gate filtering and
+    attribution, answer_detail is embedded in every judge prompt."""
+    base = _q("a")
+    assert dataset_hash([base]) != dataset_hash([replace(base, **{field: value})])
+
+
+def test_hash_sensitive_to_source_required_flag() -> None:
+    """``required:false`` flips the SourceMetrics denominators and the
+    attribution 2x2 — two datasets differing only there must not compare equal
+    under the B7 comparability guard."""
+    a = _q("a", sources=(_src("P"),))
+    b = _q("a", sources=(_src("P", required=False),))
+    assert dataset_hash([a]) != dataset_hash([b])
+
+
+def test_hash_insensitive_to_source_and_sub_fact_order() -> None:
+    """Source / sub_fact order is presentation, not identity."""
+    a = _q(
+        "a",
+        sources=(_src("P1"), _src("P2")),
+        sub_facts=(SubFact(fact="f1"), SubFact(fact="f2")),
+    )
+    b = _q(
+        "a",
+        sources=(_src("P2"), _src("P1")),
+        sub_facts=(SubFact(fact="f2"), SubFact(fact="f1")),
+    )
+    assert dataset_hash([a]) == dataset_hash([b])
+
+
+def test_hash_stable_across_loads(tmp_path: Path) -> None:
+    """Same content → same hash on every load (dict ordering can never leak in)."""
+    p = _dataset_json(
+        tmp_path,
+        [
+            _min_question("wiki-0001"),
+            _min_question("wiki-0002", level=2),
+            _min_question("wiki-0003"),
+        ],
+    )
+    hashes = {load_bench_dataset(str(p)).hash for _ in range(3)}
+    assert len(hashes) == 1
+
+
 def test_subset_hash_differs_from_full_hash() -> None:
     qs = [_q("a"), _q("b"), _q("c")]
     full = dataset_hash(qs)
@@ -342,16 +399,16 @@ def test_loader_rejects_invalid_level(tmp_path: Path) -> None:
         load_bench_dataset(str(p))
 
 
-def test_level_is_hash_insensitive(tmp_path: Path) -> None:
-    """Re-tiering a question must not invalidate run comparability — the
-    subset_hash of a selected level already pins the exact question set."""
+def test_level_is_hash_sensitive(tmp_path: Path) -> None:
+    """Re-tiering changes which questions a run executes, so it must change
+    the dataset identity (AUDIT_0824 N34)."""
     p = _dataset_json(tmp_path, [_min_question("wiki-0001", level=1)])
     h1 = load_bench_dataset(str(p)).hash
     raw = json.loads(p.read_text())
     raw["questions"][0]["level"] = 2
     p.write_text(json.dumps(raw))
     h2 = load_bench_dataset(str(p)).hash
-    assert h1 == h2
+    assert h1 != h2
 
 
 def test_shipped_dataset_level_stratification() -> None:
