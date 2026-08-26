@@ -105,14 +105,29 @@ async def serve_zim_entry(
     return _serve(raw.content, raw.mimetype, request, zim_id=zim_id)
 
 
+class _RangeUnsatisfiable(Exception):
+    """Raised when an HTTP Range header is syntactically valid but unsatisfiable."""
+
+
 def _serve(content: bytes, mimetype: str, request: Request, *, zim_id: int) -> Response:
     headers = {**_CACHE_HEADERS, **_range_headers(mimetype, len(content))}
     # Basic single-range support for media (research: only needed for A/V ZIMs).
     range_hdr = request.headers.get("range")
     if range_hdr and headers.get("Accept-Ranges"):
-        start, end = _parse_range(range_hdr, len(content))
-        if start is not None and end is not None:
+        try:
+            parsed = _parse_range(range_hdr, len(content))
+        except _RangeUnsatisfiable:
+            headers["Content-Range"] = f"bytes */{len(content)}"
+            return Response(
+                content=b"",
+                media_type=mimetype,
+                status_code=416,
+                headers=headers,
+            )
+        if parsed is not None:
+            start, end = parsed
             headers["Content-Range"] = f"bytes {start}-{end}/{len(content)}"
+            headers["Content-Length"] = str(end - start + 1)
             return Response(
                 content=content[start : end + 1],
                 media_type=mimetype,
@@ -122,25 +137,45 @@ def _serve(content: bytes, mimetype: str, request: Request, *, zim_id: int) -> R
     return Response(content=content, media_type=mimetype, headers=headers)
 
 
-def _parse_range(range_hdr: str, size: int) -> tuple[int | None, int | None]:
-    """Parse a ``bytes=start-end`` header (single range only)."""
+def _parse_range(range_hdr: str, size: int) -> tuple[int, int] | None:
+    """Parse a ``bytes=start-end`` header (single range only).
+
+    Returns ``(start, end)`` inclusive byte indices when satisfiable,
+    ``None`` when the header is syntactically invalid (ignored per RFC 9110 §14.2),
+    or raises ``_RangeUnsatisfiable`` when the range cannot be satisfied (HTTP 416).
+    """
     if not range_hdr.startswith("bytes="):
-        return None, None
+        return None
     spec = range_hdr[len("bytes=") :].split(",", maxsplit=1)[0].strip()
     if "-" not in spec:
-        return None, None
-    start_s, _, end_s = spec.partition("-")
-    try:
-        if not start_s:
-            # suffix range: last N bytes
-            n = int(end_s)
-            start = max(size - n, 0)
-            return start, size - 1
-        start = int(start_s)
-        end = int(end_s) if end_s else size - 1
-    except ValueError:
-        return None, None
-    return max(start, 0), min(end, size - 1)
+        return None
+    start_s, _, end_s = (p.strip() for p in spec.partition("-"))
+    if (
+        (not start_s and not end_s)
+        or (start_s and not start_s.isdigit())
+        or (end_s and not end_s.isdigit())
+    ):
+        return None
+
+    if not start_s:
+        # Suffix range: bytes=-N
+        n = int(end_s)
+        if n <= 0 or size == 0:
+            raise _RangeUnsatisfiable()
+        return max(size - n, 0), size - 1
+
+    start = int(start_s)
+    if size == 0 or start >= size:
+        raise _RangeUnsatisfiable()
+
+    if not end_s:
+        # Open-ended range: bytes=N-
+        return start, size - 1
+
+    end = int(end_s)
+    if start > end:
+        raise _RangeUnsatisfiable()
+    return start, min(end, size - 1)
 
 
 __all__ = ["router"]

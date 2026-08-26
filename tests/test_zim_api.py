@@ -8,8 +8,11 @@ enable/disable/delete — all through the composition root the way a client does
 from __future__ import annotations
 
 import urllib.parse
+from pathlib import Path
 
 import httpx
+import pytest
+from starlette.requests import Request
 
 from fixtures.tiny_zim import (
     DISAMBIGUATION_PATH,
@@ -19,6 +22,7 @@ from fixtures.tiny_zim import (
     SOFT_REDIRECT_PATH,
     WEBP_ASSET_PATH,
 )
+from vesta.api.zim import _parse_range, _RangeUnsatisfiable, _serve
 
 
 def _url(zim_id: int, path: str) -> str:
@@ -207,3 +211,175 @@ async def test_samples_endpoint(
         body = await client.get(f"/api/zims/{zim_id}/samples?count=24")
         assert body.status_code == 200
         assert 0 < len(body.json()) <= 24
+
+
+def test_parse_range_valid_and_edge_cases() -> None:
+    """_parse_range unit tests covering valid, suffix, open-ended, unsatisfiable, and zero-size cases."""
+    # Valid range (bytes=0-49 on 100 bytes)
+    assert _parse_range("bytes=0-49", 100) == (0, 49)
+
+    # Suffix range (bytes=-50 on 100 bytes)
+    assert _parse_range("bytes=-50", 100) == (50, 99)
+    # Suffix range larger than representation clamps to start at 0
+    assert _parse_range("bytes=-150", 100) == (0, 99)
+
+    # Open-ended range (bytes=50- on 100 bytes)
+    assert _parse_range("bytes=50-", 100) == (50, 99)
+    assert _parse_range("bytes=0-", 100) == (0, 99)
+
+    # Range with end beyond size clamps to size - 1
+    assert _parse_range("bytes=50-200", 100) == (50, 99)
+
+    # Inverted range (bytes=500-400 -> unsatisfiable)
+    with pytest.raises(_RangeUnsatisfiable):
+        _parse_range("bytes=500-400", 100)
+
+    with pytest.raises(_RangeUnsatisfiable):
+        _parse_range("bytes=10-5", 20)
+
+    # Past-EOF start range (bytes=500-600 on 100-byte file -> unsatisfiable)
+    with pytest.raises(_RangeUnsatisfiable):
+        _parse_range("bytes=500-600", 100)
+
+    with pytest.raises(_RangeUnsatisfiable):
+        _parse_range("bytes=100-", 100)
+
+    # Suffix range with n <= 0
+    with pytest.raises(_RangeUnsatisfiable):
+        _parse_range("bytes=-0", 100)
+
+    # Zero-size resource range handling (all ranges unsatisfiable)
+    with pytest.raises(_RangeUnsatisfiable):
+        _parse_range("bytes=0-49", 0)
+
+    with pytest.raises(_RangeUnsatisfiable):
+        _parse_range("bytes=0-", 0)
+
+    with pytest.raises(_RangeUnsatisfiable):
+        _parse_range("bytes=-50", 0)
+
+    # Malformed / unrecognized syntax (ignored per RFC 9110 §14.2 -> None)
+    assert _parse_range("not-a-range", 100) is None
+    assert _parse_range("bytes=", 100) is None
+    assert _parse_range("bytes=-", 100) is None
+    assert _parse_range("bytes=abc-def", 100) is None
+    assert _parse_range("items=0-10", 100) is None
+    assert _parse_range("bytes=-10-20", 100) is None
+
+
+def test_serve_range_headers_and_responses() -> None:
+    """_serve unit tests covering 206, 416, 200 responses on media and non-media."""
+    dummy_100_bytes = b"x" * 100
+
+    def make_req(range_val: str | None) -> Request:
+        headers = [(b"range", range_val.encode())] if range_val else []
+        return Request({"type": "http", "method": "GET", "headers": headers})
+
+    # 1. Valid range on media -> 206 Partial Content
+    resp = _serve(dummy_100_bytes, "video/webm", make_req("bytes=0-49"), zim_id=1)
+    assert resp.status_code == 206
+    assert resp.headers["Content-Range"] == "bytes 0-49/100"
+    assert resp.headers["Content-Length"] == "50"
+    assert resp.body == b"x" * 50
+
+    # 2. Suffix range on media -> 206 Partial Content
+    resp = _serve(dummy_100_bytes, "video/webm", make_req("bytes=-50"), zim_id=1)
+    assert resp.status_code == 206
+    assert resp.headers["Content-Range"] == "bytes 50-99/100"
+    assert resp.headers["Content-Length"] == "50"
+    assert resp.body == b"x" * 50
+
+    # 3. Open-ended range on media -> 206 Partial Content
+    resp = _serve(dummy_100_bytes, "video/webm", make_req("bytes=50-"), zim_id=1)
+    assert resp.status_code == 206
+    assert resp.headers["Content-Range"] == "bytes 50-99/100"
+    assert resp.headers["Content-Length"] == "50"
+    assert resp.body == b"x" * 50
+
+    # 4. Inverted range -> 416 Range Not Satisfiable
+    resp = _serve(dummy_100_bytes, "video/webm", make_req("bytes=500-400"), zim_id=1)
+    assert resp.status_code == 416
+    assert resp.headers["Content-Range"] == "bytes */100"
+    assert resp.body == b""
+
+    # 5. Past-EOF range -> 416 Range Not Satisfiable
+    resp = _serve(dummy_100_bytes, "video/webm", make_req("bytes=500-600"), zim_id=1)
+    assert resp.status_code == 416
+    assert resp.headers["Content-Range"] == "bytes */100"
+    assert resp.body == b""
+
+    # 6. Zero-size resource range -> 416 Range Not Satisfiable
+    resp = _serve(b"", "video/webm", make_req("bytes=0-49"), zim_id=1)
+    assert resp.status_code == 416
+    assert resp.headers["Content-Range"] == "bytes */0"
+    assert resp.body == b""
+
+    # 7. Malformed range on media -> ignored -> 200 OK
+    resp = _serve(dummy_100_bytes, "video/webm", make_req("bytes=malformed"), zim_id=1)
+    assert resp.status_code == 200
+    assert "Content-Range" not in resp.headers
+    assert resp.body == dummy_100_bytes
+
+    # 8. Range request on non-media (e.g. text/html) -> ignored -> 200 OK
+    resp = _serve(b"<html></html>", "text/html", make_req("bytes=0-4"), zim_id=1)
+    assert resp.status_code == 200
+    assert "Content-Range" not in resp.headers
+    assert resp.body == b"<html></html>"
+
+
+async def test_passthrough_media_range_endpoint(
+    tmp_path: Path,
+) -> None:
+    """HTTP endpoint test for Range handling over a real media ZIM fixture."""
+    import os
+
+    from fixtures.tiny_media_zim import VIDEO_PATH, build_tiny_media_zim
+    from vesta.main import create_app
+
+    zims_dir = tmp_path / "zims"
+    zims_dir.mkdir(parents=True, exist_ok=True)
+    build_tiny_media_zim(zims_dir / "tiny_media.zim")
+    os.environ["data.dir"] = str(tmp_path)
+    os.environ["inference.llm.model"] = ""
+    try:
+        app = create_app()
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get("/api/zims")
+                zim_id = int(resp.json()["archives"][0]["id"])
+                video_url = f"/api/zim/{zim_id}/{VIDEO_PATH}"
+
+                # 1. Valid range: bytes=0-3
+                r206 = await client.get(video_url, headers={"Range": "bytes=0-3"})
+                assert r206.status_code == 206
+                assert r206.headers["content-range"] == "bytes 0-3/15"
+                assert r206.headers["content-length"] == "4"
+                assert r206.content == b"\x1a\x45\xdf\xa3"
+
+                # 2. Suffix range: bytes=-4
+                r_suffix = await client.get(video_url, headers={"Range": "bytes=-4"})
+                assert r_suffix.status_code == 206
+                assert r_suffix.headers["content-range"] == "bytes 11-14/15"
+                assert r_suffix.headers["content-length"] == "4"
+                assert r_suffix.content == b"tial"
+
+                # 3. Open-ended range: bytes=10-
+                r_open = await client.get(video_url, headers={"Range": "bytes=10-"})
+                assert r_open.status_code == 206
+                assert r_open.headers["content-range"] == "bytes 10-14/15"
+                assert r_open.headers["content-length"] == "5"
+                assert r_open.content == b"rtial"
+
+                # 4. Inverted range: bytes=500-400 -> 416
+                r416_inv = await client.get(video_url, headers={"Range": "bytes=500-400"})
+                assert r416_inv.status_code == 416
+                assert r416_inv.headers["content-range"] == "bytes */15"
+
+                # 5. Past-EOF range: bytes=500-600 -> 416
+                r416_eof = await client.get(video_url, headers={"Range": "bytes=500-600"})
+                assert r416_eof.status_code == 416
+                assert r416_eof.headers["content-range"] == "bytes */15"
+    finally:
+        os.environ.pop("data.dir", None)
+        os.environ.pop("inference.llm.model", None)
