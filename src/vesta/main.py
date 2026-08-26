@@ -252,6 +252,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     stale = await reconcile_stale(db, vector_store, configured_fps)
     if stale:
         log.warning("index.stale_after_embedder_change", zim_ids=stale)
+    # Reconcile zims rows a dead indexer left 'running' BEFORE seeding the
+    # VECTORS flag: the seed query counts 'running' as indexed, so a stranded
+    # partial build would otherwise be served as if complete (AUDIT_0824 M11).
+    await _reconcile_stranded_index_rows(db, log)
     await _seed_indexed_state(db)
 
     # 5e. Wire the vector-store cascade into archive removal (vec0 is not
@@ -389,6 +393,36 @@ def _wire_inference(
 
     bind_on_model_ready(_model_ready)
     return gateway, supervisor, llm_runtime
+
+
+async def _reconcile_stranded_index_rows(db: Database, log: Any) -> None:
+    """Downgrade zims rows a dead indexer left 'running' to resumable 'paused'.
+
+    ``vesta index`` stamps index_status='running' at start; SIGKILL / power
+    loss runs no exit arm, so the row would stay 'running' forever — and the
+    VECTORS seed query counts 'running' as indexed, serving a partial build's
+    vectors as if complete. A row whose lease is held by a LIVE foreign
+    process (a detached indexer running right now) is left alone: its own
+    exit paths stamp the final status. Runs before runner.start() so this
+    process's own resumed jobs (same pid ⇒ never a foreign holder) can't be
+    mistaken for orphans. Failures are logged, never startup-blocking."""
+    try:
+        from vesta.index.job import _pause_running_build
+        from vesta.index.leases import active_holder
+
+        async with db.read() as conn:
+            cur = await conn.execute("SELECT id FROM zims WHERE index_status='running'")
+            stranded = [int(row["id"]) for row in await cur.fetchall()]
+        paused = 0
+        for zim_id in stranded:
+            if await active_holder(db, zim_id) is not None:
+                continue
+            await _pause_running_build(db, zim_id)
+            paused += 1
+        if paused:
+            log.info("index.stranded_rows_paused", count=paused)
+    except Exception as exc:
+        log.warning("index.reconcile_failed", error=repr(exc))
 
 
 async def _reconcile_bench_runs(db: Database, log: Any) -> None:

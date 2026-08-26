@@ -197,6 +197,17 @@ class IndexZimJob:
             # VECTORS claim left over from the 'running' stamp.
             await reseed_indexed_state(db)
             raise
+        except BaseException:
+            # A force-quit raises KeyboardInterrupt — a BaseException neither
+            # arm above catches — so the row kept 'running' forever after the
+            # second Ctrl+C, and reseed_indexed_state counts 'running' as
+            # indexed: the next boot seeded VECTORS from a partial build.
+            # Stamp resumable-paused (the checkpoint/sidecar holds the resume
+            # position) and re-raise; SIGKILL / power loss never reaches any
+            # arm and is reconciled by the startup sweep instead.
+            await _pause_running_build(db, zim_id)
+            await reseed_indexed_state(db)
+            raise
         finally:
             await release_index_lease(db, zim_id, owner_id=owner_id)
 
