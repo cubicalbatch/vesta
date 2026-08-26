@@ -54,15 +54,13 @@ class ChunkSpec:
     ``char_end`` index into :pyattr:`ExtractedArticle.text` and recover the span
     from the ZIM by offset (no text is stored in the vector table).
     ``ordinal`` is the per-article chunk order the indexer persists on the chunk
-    row. ``is_lead`` flags the title+lead chunk so a future lead-boost policy can
-    find it without re-deriving it.
+    row.
     """
 
     text: str
     char_start: int
     char_end: int
     ordinal: int
-    is_lead: bool
 
 
 def _first_h2_start(sections: tuple[Section, ...]) -> int:
@@ -117,7 +115,6 @@ def chunks_for_article(article: ExtractedArticle, depth: int) -> list[ChunkSpec]
                     char_start=p.char_start,
                     char_end=p.char_end,
                     ordinal=ordinal,
-                    is_lead=p.is_lead,
                 )
             )
         return chunks
@@ -131,7 +128,6 @@ def chunks_for_article(article: ExtractedArticle, depth: int) -> list[ChunkSpec]
                 char_start=lead_start,
                 char_end=lead_end,
                 ordinal=0,
-                is_lead=True,
             )
         )
 
@@ -156,7 +152,6 @@ def chunks_for_article(article: ExtractedArticle, depth: int) -> list[ChunkSpec]
                         char_start=last.char_start,
                         char_end=len(article.text),
                         ordinal=last.ordinal,
-                        is_lead=last.is_lead,
                     )
                 break
             # A section longer than the target becomes several chunks rather
@@ -174,7 +169,6 @@ def chunks_for_article(article: ExtractedArticle, depth: int) -> list[ChunkSpec]
                         char_start=section.char_start + rel_start,
                         char_end=section.char_start + rel_end,
                         ordinal=len(chunks),
-                        is_lead=False,
                     )
                 )
             # The cap counts SECTIONS, not chunks — its job is to stop a giant

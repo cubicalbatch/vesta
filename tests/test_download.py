@@ -191,9 +191,7 @@ class _FakeRunner:
     async def _publish_progress(self, job_id: int, done: int, total: int, message: str) -> None:
         self.progress.append((done, total))
 
-    async def _write_progress(
-        self, job_id: int, done: int, total: int, message: str, *, final: bool
-    ) -> None:
+    async def _write_progress(self, job_id: int, done: int, total: int, message: str) -> None:
         pass
 
     async def _write_checkpoint(self, job_id: int, blob: object) -> None:

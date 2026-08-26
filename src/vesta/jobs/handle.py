@@ -46,7 +46,7 @@ class JobHandleImpl:
         # Always publish to SSE (cheap); throttle only the SQLite write.
         await self._runner._publish_progress(self._job_id, done, total, message)
         if should_persist:
-            await self._runner._write_progress(self._job_id, done, total, message, final=is_final)
+            await self._runner._write_progress(self._job_id, done, total, message)
             self._last_write_s = now
 
     async def checkpoint(self, blob: Mapping[str, Any]) -> None:

@@ -68,13 +68,6 @@ VECTORS_PER_ARTICLE_BAND: dict[int, tuple[float, float, float]] = {
     3: (1.0, 5.0, 18.5),
 }
 
-#: Depth → expected vectors per article. The band's midpoint, kept as a separate
-#: mapping because callers that only want a point estimate (and the public
-#: ``__all__``) predate the band.
-VECTORS_PER_ARTICLE: dict[int, float] = {
-    depth: band[1] for depth, band in VECTORS_PER_ARTICLE_BAND.items()
-}
-
 #: Bytes per stored vector (f32 dim 384 + chunk metadata + index overhead).
 #:
 #: Verified 2026-08-19 against the live index: the ``vectors_d384`` shadow tables
@@ -244,7 +237,6 @@ def initial_estimate(total_articles: int, depth: int) -> Estimate:
 __all__ = [
     "BYTES_PER_VECTOR",
     "CALIBRATION_WINDOW",
-    "VECTORS_PER_ARTICLE",
     "VECTORS_PER_ARTICLE_BAND",
     "Estimate",
     "ThroughputTracker",

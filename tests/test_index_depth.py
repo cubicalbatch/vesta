@@ -85,7 +85,7 @@ def test_depth1_single_lead_chunk_to_first_h2() -> None:
     (c,) = chunks
     first_h2 = article.sections[0].char_start
     assert (c.char_start, c.char_end) == (0, first_h2)
-    assert c.is_lead and c.ordinal == 0
+    assert c.ordinal == 0
     # The encoder sees the title prefix; the stored offsets recover only the
     # raw lead span.
     assert c.text.startswith("Test Article > ")
@@ -112,9 +112,7 @@ def test_depth2_lead_plus_one_chunk_per_h2() -> None:
     article = _sectioned_article(3)
     chunks = chunks_for_article(article, 2)
     assert len(chunks) == 4
-    assert chunks[0].is_lead
     for chunk, section in zip(chunks[1:], article.sections, strict=True):
-        assert not chunk.is_lead
         # Sections shorter than DEPTH2_SECTION_TARGET_TOKENS stay one chunk.
         # The span starts at the section and covers all of its content; the
         # sentence-aligned end may drop trailing whitespace, never text.
@@ -142,7 +140,7 @@ def test_depth2_long_section_splits_instead_of_truncating() -> None:
     article = _article(text, (section,))
 
     chunks = chunks_for_article(article, 2)
-    section_chunks = [c for c in chunks if not c.is_lead]
+    section_chunks = chunks[1:]
 
     assert len(section_chunks) > 1, "an oversized section must split"
     # Contiguous, starting at the section and covering all of its text.
@@ -164,7 +162,7 @@ def test_depth2_skips_level1_sections() -> None:
     article = _article(text, sections)
     chunks = chunks_for_article(article, 2)
     # Only the lead chunk: level-1 headings are not H2 divisions.
-    assert len(chunks) == 1 and chunks[0].is_lead
+    assert len(chunks) == 1
 
 
 def test_depth2_cap_folds_tail_into_last_section() -> None:
@@ -199,5 +197,3 @@ def test_depth3_every_passage_with_stage_b_text_shape() -> None:
         span = article.text[c.char_start : c.char_end]
         assert span.strip()
         assert c.text.endswith(span)
-    # The lead passage is flagged.
-    assert any(c.is_lead for c in chunks)

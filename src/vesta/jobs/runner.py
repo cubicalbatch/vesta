@@ -338,7 +338,7 @@ class JobRunner:
             pending = handle.pending_final()
             if pending is not None:
                 done, total, message = pending
-                await self._write_progress(job_id, done, total, message, final=True)
+                await self._write_progress(job_id, done, total, message)
             await self._finish(job_id, "done")
 
     # ── cancellation flag ──────────────────────────────────────────────────
@@ -349,9 +349,7 @@ class JobRunner:
 
     # ── persistence ────────────────────────────────────────────────────────
 
-    async def _write_progress(
-        self, job_id: int, done: int, total: int, message: str, *, final: bool
-    ) -> None:
+    async def _write_progress(self, job_id: int, done: int, total: int, message: str) -> None:
         rate, eta = _rate_eta(self._runs.get(job_id), done, total)
         now = _now_iso()
         async with self._db.write() as conn:

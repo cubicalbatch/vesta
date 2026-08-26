@@ -18,7 +18,6 @@ from __future__ import annotations
 from vesta.index.estimate import (
     BYTES_PER_VECTOR,
     CALIBRATION_WINDOW,
-    VECTORS_PER_ARTICLE,
     VECTORS_PER_ARTICLE_BAND,
     ThroughputTracker,
     disk_band,
@@ -36,7 +35,9 @@ def test_no_samples_zero_rate_and_disk_estimate_present() -> None:
     assert est.articles_total == 10_000
     assert est.articles_done == 0
     # Disk is known before any timing data: articles x vectors/article x bytes.
-    assert est.disk_bytes_expected == int(10_000 * VECTORS_PER_ARTICLE[1] * BYTES_PER_VECTOR)
+    assert est.disk_bytes_expected == int(
+        10_000 * VECTORS_PER_ARTICLE_BAND[1][1] * BYTES_PER_VECTOR
+    )
     assert est.disk_bytes_low < est.disk_bytes_expected < est.disk_bytes_high
 
 
@@ -108,7 +109,7 @@ def test_disk_scales_with_depth() -> None:
     d3 = initial_estimate(1_000, 3)
     assert d3.disk_bytes_expected > d1.disk_bytes_expected
     ratio = d3.disk_bytes_expected / d1.disk_bytes_expected
-    assert ratio == VECTORS_PER_ARTICLE[3] / VECTORS_PER_ARTICLE[1]
+    assert ratio == VECTORS_PER_ARTICLE_BAND[3][1] / VECTORS_PER_ARTICLE_BAND[1][1]
 
 
 def test_completed_run_estimates_zero_remaining() -> None:
@@ -131,7 +132,7 @@ def test_static_vector_and_disk_bands() -> None:
     - Disk band brackets live index ground truth and unknown depth falls back to depth 1.
     """
     # Depth 1 is exactly 1.0 with no upside spread.
-    assert VECTORS_PER_ARTICLE[1] == 1.0
+    assert VECTORS_PER_ARTICLE_BAND[1][1] == 1.0
     low, expected, high = VECTORS_PER_ARTICLE_BAND[1]
     assert low < expected == high == 1.0
 
@@ -142,7 +143,6 @@ def test_static_vector_and_disk_bands() -> None:
     for depth in (1, 2, 3):
         v_low, v_exp, v_high = VECTORS_PER_ARTICLE_BAND[depth]
         assert v_low <= v_exp <= v_high
-        assert VECTORS_PER_ARTICLE[depth] == v_exp
 
         d_low, d_exp, d_high = disk_band(10_000, depth)
         assert d_low < d_exp < d_high, f"depth {depth}: {d_low} {d_exp} {d_high}"
