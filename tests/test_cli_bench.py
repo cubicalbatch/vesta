@@ -15,6 +15,7 @@ import argparse
 import asyncio
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -239,6 +240,31 @@ async def test_bench_compare_buckets(
     assert "BROKEN" in out
     assert "q1" in out
     assert "fixed" in out
+
+
+@pytest.mark.asyncio
+async def test_bench_compare_refuses_dataset_mismatch(
+    cli_db: Database, monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`vesta bench compare` refuses runs over different datasets (exit 1)."""
+    from vesta import cli
+    from vesta.api.bench import SqliteBenchStore
+    store = SqliteBenchStore(cli_db)
+    rid_a = await store.insert_run(_run_record(1))
+    rec_b = replace(_run_record(2), dataset_hash="other")
+    rid_b = await store.insert_run(rec_b)
+
+    @asynccontextmanager
+    async def _fake_open(*_args, **_kwargs):
+        yield _fake_state(cli_db)
+
+    monkeypatch.setattr(cli, "_open_runtime", _fake_open)
+
+    args = cli._build_parser().parse_args(["bench", "compare", str(rid_a), str(rid_b)])
+    code = await cli._cmd_bench_compare_cli(args)
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "dataset mismatch" in out
 
 
 def test_bench_umbrella_surface(capsys: pytest.CaptureFixture[str]) -> None:

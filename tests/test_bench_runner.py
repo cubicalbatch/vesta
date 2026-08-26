@@ -25,6 +25,7 @@ from vesta.eval.bench_runner import (
     BenchQuestionResult,
     BenchRunRecord,
     CompareResult,
+    IncomparableRuns,
     QuestionOutput,
     _rebuild_scored,
     compare_runs,
@@ -525,6 +526,38 @@ async def test_compare_runs(store) -> None:
     assert cmp.only_b == ("q5",)
     assert cmp.only_a == ()
     assert cmp.shared_denominator == 4
+
+
+@pytest.mark.asyncio
+async def test_compare_runs_refuses_dataset_mismatch(store) -> None:
+    """Different dataset_hash → refused, never a silent misleading diff."""
+    rec = _make_run_record()
+    run_a = await store.insert_run(rec)
+    run_b = await store.insert_run(replace(rec, label="b", dataset_hash="ffffff"))
+    with pytest.raises(IncomparableRuns, match="dataset mismatch"):
+        await compare_runs(store, run_a, run_b)
+
+
+@pytest.mark.asyncio
+async def test_compare_runs_refuses_subset_mismatch(store) -> None:
+    """A filtered run (subset_hash set) is not comparable to a full run."""
+    rec = _make_run_record()
+    run_a = await store.insert_run(rec)
+    run_b = await store.insert_run(replace(rec, label="b", subset_hash="deadbeef"))
+    with pytest.raises(IncomparableRuns, match="subset mismatch"):
+        await compare_runs(store, run_a, run_b)
+
+
+@pytest.mark.asyncio
+async def test_compare_runs_allows_profile_mismatch(store) -> None:
+    """A/B across profiles on the same dataset stays allowed (the point of bench)."""
+    rec = _make_run_record()
+    run_a = await store.insert_run(rec)
+    run_b = await store.insert_run(
+        replace(rec, label="b", profile_name="hybrid", profile_hash="other")
+    )
+    cmp = await compare_runs(store, run_a, run_b)
+    assert cmp.shared_denominator == 0
 
 
 # ── Two-stage + rejudge ─────────────────────────────────────────────────────

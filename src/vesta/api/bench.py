@@ -57,6 +57,7 @@ from vesta.eval.bench_runner import (
     BenchQuestionResult,
     BenchRunRecord,
     BenchStore,
+    IncomparableRuns,
     QuestionOutput,
     compare_runs,
     resolve_judge_concurrency,
@@ -2213,23 +2214,26 @@ async def compare_bench_runs(
             raise HTTPException(status_code=404, detail=f"run {rid} not found")
 
     pairs: list[ComparePair] = []
-    for i in range(len(ids)):
-        for j in range(i + 1, len(ids)):
-            cmp = await compare_runs(store, ids[i], ids[j])
-            pairs.append(
-                ComparePair(
-                    run_a=cmp.run_a,
-                    run_b=cmp.run_b,
-                    shared_denominator=cmp.shared_denominator,
-                    fixed=list(cmp.fixed),
-                    broken=list(cmp.broken),
-                    both_correct=list(cmp.both_correct),
-                    both_wrong=list(cmp.both_wrong),
-                    only_a=list(cmp.only_a),
-                    only_b=list(cmp.only_b),
-                    deltas=cmp.deltas,
+    try:
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                cmp = await compare_runs(store, ids[i], ids[j])
+                pairs.append(
+                    ComparePair(
+                        run_a=cmp.run_a,
+                        run_b=cmp.run_b,
+                        shared_denominator=cmp.shared_denominator,
+                        fixed=list(cmp.fixed),
+                        broken=list(cmp.broken),
+                        both_correct=list(cmp.both_correct),
+                        both_wrong=list(cmp.both_wrong),
+                        only_a=list(cmp.only_a),
+                        only_b=list(cmp.only_b),
+                        deltas=cmp.deltas,
+                    )
                 )
-            )
+    except IncomparableRuns as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return BenchCompareResponse(runs=ids, pairs=pairs)
 
 

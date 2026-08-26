@@ -1009,8 +1009,14 @@ def _verdict_is_correct(v: str) -> bool:
     return v == Verdict.CORRECT.value
 
 
-def _verdict_is_wrong(v: str) -> bool:
-    return v in (Verdict.INCORRECT.value, Verdict.PARTIAL.value)
+class IncomparableRuns(ValueError):
+    """Two bench runs differ on dataset identity and must not be compared.
+
+    Raised by :func:`compare_runs` when ``dataset_hash`` or ``subset_hash``
+    disagree — the same refusal posture as eval's degraded-vs-clean guard.
+    Profile/model differences are deliberately NOT guarded: A/B across profiles
+    is what the benchmark exists to measure.
+    """
 
 
 async def compare_runs(store: BenchStore, run_a: int, run_b: int) -> CompareResult:
@@ -1020,7 +1026,29 @@ async def compare_runs(store: BenchStore, run_a: int, run_b: int) -> CompareResu
     wrong (regressions). ``both_correct`` / ``both_wrong``. ``only_a`` /
     ``only_b`` = questions present in only one run (different subsets —
     ``shared_denominator`` is the intersection).
+
+    Refuses runs whose dataset identity differs (:class:`IncomparableRuns`):
+    a different ``dataset_hash`` or ``subset_hash`` makes fixed/broken lists
+    meaningless.
     """
+    rec_a = await store.get_run(run_a)
+    rec_b = await store.get_run(run_b)
+    if rec_a is None or rec_b is None:
+        raise IncomparableRuns(
+            f"run {run_a if rec_a is None else run_b} not found"
+        )
+    if rec_a.dataset_hash != rec_b.dataset_hash:
+        raise IncomparableRuns(
+            f"dataset mismatch: run {run_a} dataset_hash={rec_a.dataset_hash[:8]!r} "
+            f"vs run {run_b} dataset_hash={rec_b.dataset_hash[:8]!r} — runs over "
+            "different datasets are not comparable"
+        )
+    if rec_a.subset_hash != rec_b.subset_hash:
+        raise IncomparableRuns(
+            f"subset mismatch: run {run_a} subset_hash={rec_a.subset_hash[:8]!r} "
+            f"vs run {run_b} subset_hash={rec_b.subset_hash[:8]!r} — a filtered "
+            "run is not comparable to a full run"
+        )
     rows_a = {r.question_id: r for r in await store.list_question_results(run_a)}
     rows_b = {r.question_id: r for r in await store.list_question_results(run_b)}
 
@@ -1102,8 +1130,8 @@ __all__ = [
     "BenchRunRecord",
     "BenchStore",
     "CompareResult",
+    "IncomparableRuns",
     "ProgressUpdate",
-    "QuestionOutput",
     "SystemUnderTest",
     "compare_runs",
     "rejudge_run",

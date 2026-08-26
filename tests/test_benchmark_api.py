@@ -73,7 +73,12 @@ def _q(qid: str, *, capability: str = "lookup", answer: str = "42") -> BenchQues
 
 
 def _run_record(
-    *, system: str, run_group: str = "group-1", status: str = "complete"
+    *,
+    system: str,
+    run_group: str = "group-1",
+    status: str = "complete",
+    dataset_hash: str = "abc123",
+    subset_hash: str = "",
 ) -> BenchRunRecord:
     return BenchRunRecord(
         run_group=run_group,
@@ -82,8 +87,8 @@ def _run_record(
         finished_at="2026-01-01T00:01:00+00:00",
         status=status,
         dataset_name="vesta_test",
-        dataset_hash="abc123",
-        subset_hash="",
+        dataset_hash=dataset_hash,
+        subset_hash=subset_hash,
         system=system,
         profile_name="profile-x",
         profile_hash="phash",
@@ -129,12 +134,21 @@ def _result_row(run_id: int, qid: str, verdict: str, shr: int | None = 1) -> Ben
     )
 
 
-async def _seed_run(app: Any, *, system: str, verdicts: dict[str, str]) -> int:
+async def _seed_run(
+    app: Any,
+    *,
+    system: str,
+    verdicts: dict[str, str],
+    dataset_hash: str = "abc123",
+    subset_hash: str = "",
+) -> int:
     """Insert a run + its per-question rows directly into the app's DB."""
     from vesta.api.bench import SqliteBenchStore
 
     store = SqliteBenchStore(app.state.vesta.db)
-    run_id = await store.insert_run(_run_record(system=system))
+    run_id = await store.insert_run(
+        _run_record(system=system, dataset_hash=dataset_hash, subset_hash=subset_hash)
+    )
     for qid, v in verdicts.items():
         await store.insert_question_result(run_id, _result_row(run_id, qid, v))
     return run_id
@@ -492,6 +506,60 @@ async def test_compare_four_buckets(app_with_db: tuple[httpx.AsyncClient, Any]) 
     assert pair["both_correct"] == ["q3"]
     assert pair["both_wrong"] == ["q4"]
     assert pair["only_b"] == ["q5"]
+
+
+@pytest.mark.asyncio
+async def test_compare_refuses_dataset_mismatch(
+    app_with_db: tuple[httpx.AsyncClient, Any],
+) -> None:
+    """Different dataset_hash → 409, never a silent misleading diff."""
+    client, app = app_with_db
+    run_a = await _seed_run(app, system="system-a", verdicts={"q1": "correct"})
+    run_b = await _seed_run(
+        app,
+        system="system-b",
+        verdicts={"q1": "incorrect"},
+        dataset_hash="ffffff",
+    )
+    resp = await client.get("/api/bench/compare", params={"runs": f"{run_a},{run_b}"})
+    assert resp.status_code == 409
+    assert "dataset mismatch" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_compare_refuses_subset_mismatch(
+    app_with_db: tuple[httpx.AsyncClient, Any],
+) -> None:
+    """A filtered run (subset_hash set) is not comparable to a full run."""
+    client, app = app_with_db
+    run_a = await _seed_run(app, system="system-a", verdicts={"q1": "correct"})
+    run_b = await _seed_run(
+        app,
+        system="system-b",
+        verdicts={"q1": "incorrect"},
+        subset_hash="deadbeef",
+    )
+    resp = await client.get("/api/bench/compare", params={"runs": f"{run_a},{run_b}"})
+    assert resp.status_code == 409
+    assert "subset mismatch" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_compare_allows_profile_mismatch(
+    app_with_db: tuple[httpx.AsyncClient, Any],
+) -> None:
+    """A/B across profiles on the same dataset is the benchmark's purpose."""
+    from vesta.api.bench import SqliteBenchStore
+
+    client, app = app_with_db
+    store = SqliteBenchStore(app.state.vesta.db)
+    run_a = await store.insert_run(_run_record(system="system-a"))
+    run_b = await store.insert_run(
+        replace(_run_record(system="system-b"), profile_name="hybrid", profile_hash="other")
+    )
+    resp = await client.get("/api/bench/compare", params={"runs": f"{run_a},{run_b}"})
+    assert resp.status_code == 200
+    assert len(resp.json()["pairs"]) == 1
 
 
 @pytest.mark.asyncio

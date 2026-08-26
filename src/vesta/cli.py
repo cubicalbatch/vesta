@@ -1110,7 +1110,7 @@ async def _cmd_bench_rejudge(args: argparse.Namespace) -> int:
 async def _cmd_bench_compare(state: Any, run_a: int, run_b: int) -> int:
     """Print the per-question diff + four buckets for two runs (state = AppState)."""
     from vesta.api.bench import SqliteBenchStore
-    from vesta.eval.bench_runner import compare_runs
+    from vesta.eval.bench_runner import IncomparableRuns, compare_runs
 
     store = SqliteBenchStore(state.db)
     ra = await store.get_run(run_a)
@@ -1118,7 +1118,11 @@ async def _cmd_bench_compare(state: Any, run_a: int, run_b: int) -> int:
     if ra is None or rb is None:
         print(f"compare: run {run_a if ra is None else run_b} not found.")
         return 1
-    comp = await compare_runs(store, run_a, run_b)
+    try:
+        comp = await compare_runs(store, run_a, run_b)
+    except IncomparableRuns as exc:
+        print(f"compare: {exc}")
+        return 1
     print(f"compare run {run_a} [{ra.system}] vs run {run_b} [{rb.system}]")
     print(
         f"  shared questions: {comp.shared_denominator}  "
