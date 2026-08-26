@@ -124,30 +124,14 @@ def load_slice(path: Path) -> tuple[str, list[GoldenEntry]]:
     return name, entries
 
 
-# ── Archive pin (eval config) ────────────────────────────────────────────────
-# These two settings pin the eval reference archive: results are meaningless
-# across archive versions. The
-# filename AND the sha256 are pinned so a re-release cannot masquerade as the
-# same set.
+# ── Archive pin ──────────────────────────────────────────────────────────────
+# The eval reference archive is a repo-constant pin, not a user-facing
+# setting: results are meaningless across archive versions, so the filename
+# AND the sha256 are fixed here — a re-release cannot masquerade as the same
+# set, and relocating the archive is an operator concern outside the app.
 
-EVAL_ARCHIVE_PATH = setting(
-    "eval.archive.path",
-    str,
-    "wikipedia_en_top_nopic_2026-06.zim",
-    group="Eval / Golden set",
-    help="Filename of the pinned reference ZIM the full golden set runs against. "
-    "The ~2.1 GiB wikipedia_en_top_nopic_2026-06 archive; results are pinned to it.",
-    hot=False,
-)
-EVAL_ARCHIVE_CHECKSUM = setting(
-    "eval.archive.checksum",
-    str,
-    "b2806831e14690cbcafeb1b6e7bd4439fd59b3e5fbeaeb300a5792dece510ee0",
-    group="Eval / Golden set",
-    help="sha256 of the pinned eval archive. A mismatch means the reference set "
-    "is stale and every recorded number is no longer comparable.",
-    hot=False,
-)
+EVAL_ARCHIVE_PATH = "wikipedia_en_top_nopic_2026-06.zim"
+EVAL_ARCHIVE_CHECKSUM = "b2806831e14690cbcafeb1b6e7bd4439fd59b3e5fbeaeb300a5792dece510ee0"
 
 EVAL_JUDGE_ENDPOINT_URL = setting(
     "eval.judge.endpoint_url",
@@ -225,8 +209,8 @@ def load_full_set() -> GoldenSet:
             continue
         _, slice_entries = load_slice(path)
         entries.extend(slice_entries)
-    archive_path = str(EVAL_ARCHIVE_PATH.default)
-    archive_checksum = str(EVAL_ARCHIVE_CHECKSUM.default)
+    archive_path = EVAL_ARCHIVE_PATH
+    archive_checksum = EVAL_ARCHIVE_CHECKSUM
     gs = GoldenSet(
         name="full",
         archive_path=archive_path,
@@ -310,8 +294,6 @@ def verify_against_archive(gs: GoldenSet, resolve_text: TextResolver) -> list[st
 
 
 __all__ = [
-    "EVAL_ARCHIVE_CHECKSUM",
-    "EVAL_ARCHIVE_PATH",
     "EVAL_JUDGE_MODEL",
     "EVAL_REGRESSION_EPSILON",
     "GOLDEN_DIR",

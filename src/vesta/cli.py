@@ -1791,8 +1791,8 @@ async def _eval_run(state: AppState, args: argparse.Namespace) -> int:
             metrics=metrics,
             results=results,
             settings_snapshot=config.strip_secret_values(config.snapshot().values),
-            archive_path=str(EVAL_ARCHIVE_PATH.default),
-            archive_checksum=str(EVAL_ARCHIVE_CHECKSUM.default),
+            archive_path=EVAL_ARCHIVE_PATH,
+            archive_checksum=EVAL_ARCHIVE_CHECKSUM,
             notes="cli",
         )
         print(f"\n persisted run id={run_id}")
@@ -1959,8 +1959,8 @@ async def _print_baseline_delta(
         profile_hash=profile.hash,
         profile_yaml=profile_to_yaml(profile),
         golden_hash=golden.hash,
-        archive_path=str(EVAL_ARCHIVE_PATH.default),
-        archive_checksum=str(EVAL_ARCHIVE_CHECKSUM.default),
+        archive_path=EVAL_ARCHIVE_PATH,
+        archive_checksum=EVAL_ARCHIVE_CHECKSUM,
         settings_snapshot={},
         git_sha="",
         machine_id="",
@@ -1996,8 +1996,8 @@ async def _resolve_baseline(
         profile_hash=base_profile.hash,
         profile_yaml=profile_to_yaml(base_profile),
         golden_hash=golden.hash,
-        archive_path=str(EVAL_ARCHIVE_PATH.default),
-        archive_checksum=str(EVAL_ARCHIVE_CHECKSUM.default),
+        archive_path=EVAL_ARCHIVE_PATH,
+        archive_checksum=EVAL_ARCHIVE_CHECKSUM,
         settings_snapshot={},
         git_sha="",
         machine_id="",
@@ -2229,7 +2229,7 @@ async def _cmd_bench(args: argparse.Namespace) -> int:
     archive_path = args.archive
     if archive_path is None:
         # Default to the pinned archive if present.
-        default = Path("data/zims") / str(EVAL_ARCHIVE_PATH.default)
+        default = Path("data/zims") / EVAL_ARCHIVE_PATH
         archive_path = str(default) if default.exists() else None
 
     extraction_rows: list[dict[str, object]] = []
