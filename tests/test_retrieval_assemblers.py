@@ -331,6 +331,31 @@ def test_section_window_max_per_article_counts_winning_sections() -> None:
     assert {sp.passage.ordinal for sp in result.passages} == {0}
 
 
+def test_section_window_budget_charges_only_marginal_tokens() -> None:
+    """Overlapping windows: a later winner whose neighbours were already
+    claimed by an earlier winner must be charged only its newly added
+    members. Charging the whole window group double-counts shared
+    neighbours against the budget and rejects later winners whose marginal
+    cost fits, assembling strictly less context than the budget allows."""
+
+    def words(tag: str) -> str:
+        return " ".join(f"{tag}{i}" for i in range(10))  # 10 tokens each
+
+    a = SectionWindow(params=SectionWindow.Params(budget_tokens=55, max_per_article=5))
+    passages = [
+        _sp(words("p0"), path="A", ordinal=0, score=0.7, breadcrumb="Sec"),
+        _sp(words("p1"), path="A", ordinal=1, score=0.1, breadcrumb="Sec"),
+        _sp(words("p2"), path="A", ordinal=2, score=0.9, breadcrumb="Sec"),
+        _sp(words("p3"), path="A", ordinal=3, score=0.1, breadcrumb="Sec"),
+        _sp(words("p4"), path="A", ordinal=4, score=0.8, breadcrumb="Sec"),
+    ]
+    # Winner 2 claims {1,2,3} (30 tok); winner 4 adds only p4 (+10);
+    # winner 0 adds only p0 (+10) → 50 tokens total, within the 55 budget.
+    # Full-group charging would count 30+20+20=70 and stop before p0.
+    result = a.assemble(passages, _BIG_BUDGET, _pq(), tr=None)  # type: ignore[arg-type]
+    assert {sp.passage.ordinal for sp in result.passages} == {0, 1, 2, 3, 4}
+
+
 def test_section_window_card_and_confidence_use_winning_passage_not_first_ordinal() -> None:
     """``expanded`` interleaves same-section neighbours in ordinal order, not
     score order — a lower-ordinal neighbour of the winner can be its FIRST
@@ -906,17 +931,17 @@ def _ref_section_window_assemble(
                 if neighbour is not None and neighbour.passage.breadcrumb == sp.passage.breadcrumb:
                     group.append(neighbour)
         group.sort(key=lambda g: g.passage.ordinal)
-        group_tokens = sum(len(g.passage.text.split()) for g in group)
-        if group_tokens + tokens_used > token_budget and expanded:
+        new_members = [
+            g for g in group if (g.passage.zim_id, g.passage.path, g.passage.ordinal) not in seen
+        ]
+        marginal_tokens = sum(len(g.passage.text.split()) for g in new_members)
+        if marginal_tokens + tokens_used > token_budget and expanded:
             break
-        for g in group:
-            gkey = (g.passage.zim_id, g.passage.path, g.passage.ordinal)
-            if gkey in seen:
-                continue
-            seen.add(gkey)
+        for g in new_members:
+            seen.add((g.passage.zim_id, g.passage.path, g.passage.ordinal))
             expanded.append(g)
         per_article[sp.passage.path] = per_article.get(sp.passage.path, 0) + 1
-        tokens_used += group_tokens
+        tokens_used += marginal_tokens
     return expanded
 
 

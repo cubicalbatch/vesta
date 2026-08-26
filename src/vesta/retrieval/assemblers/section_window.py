@@ -83,21 +83,25 @@ class SectionWindow:
             if dedup_gate is not None and dedup_gate.is_near_duplicate(sp):
                 continue
             group = self._window_group(sp, by_key)
-            group_tokens = sum(len(g.passage.text.split()) for g in group)
-            if group_tokens + tokens_used > token_budget and expanded:
+            new_members = [
+                g
+                for g in group
+                if (g.passage.zim_id, g.passage.path, g.passage.ordinal) not in seen
+            ]
+            # Budget accounting is marginal: members already claimed by an
+            # earlier winner cost nothing here.
+            marginal_tokens = sum(len(g.passage.text.split()) for g in new_members)
+            if marginal_tokens + tokens_used > token_budget and expanded:
                 break
-            for g in group:
-                gkey = (g.passage.zim_id, g.passage.path, g.passage.ordinal)
-                if gkey in seen:
-                    continue
-                seen.add(gkey)
+            for g in new_members:
+                seen.add((g.passage.zim_id, g.passage.path, g.passage.ordinal))
                 expanded.append(g)
                 # neighbours are part of the selection later winners are
                 # deduped against, so the gate tracks them too.
                 if dedup_gate is not None:
                     dedup_gate.accept(g)
             per_article[sp.passage.path] = per_article.get(sp.passage.path, 0) + 1
-            tokens_used += group_tokens
+            tokens_used += marginal_tokens
 
         ordered = apply_ordering(expanded, self._params.ordering)
         return build_result(expanded, ordered, q.terms, tr, source="section_window")
