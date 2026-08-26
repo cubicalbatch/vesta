@@ -2248,8 +2248,6 @@ async def _iter_recovery_events(  # noqa: PLR0912, PLR0915
         ):
             ctx.fallback_history_dropped = True
             fallback_history = None
-        if stream_events:
-            yield AnswerResetEvent(reason="fallback")
         try:
             fb = await ctx.build_agent(with_tools=False).run(
                 ctx.user_message,
@@ -2269,7 +2267,11 @@ async def _iter_recovery_events(  # noqa: PLR0912, PLR0915
             st.answer = fb.output
             st.final_messages = fb.all_messages()
             st.usage = st.usage + fb.usage
+            # Outcome-first ordering (AUDIT_0824 C5): the reset is owed only
+            # when a replacement actually follows — a fallback that itself
+            # overflows or produces nothing must not leave a dangling erase.
             if stream_events and st.answer:
+                yield AnswerResetEvent(reason="fallback")
                 yield TokenEvent(st.answer)
     else:
         if ctx.compact_reask:
@@ -2304,8 +2306,6 @@ async def _iter_recovery_events(  # noqa: PLR0912, PLR0915
                 if message is None:
                     st.reask["reason"] = "fit"  # nothing fits — keep the answer we have
                 else:
-                    if stream_events and not p6_abstain_triggered:
-                        yield AnswerResetEvent(reason="compact_reask")
                     started_reask = time.monotonic()
                     try:
                         ra = await ctx.build_agent(with_tools=False).run(
@@ -2352,11 +2352,13 @@ async def _iter_recovery_events(  # noqa: PLR0912, PLR0915
                             inputs=step_inputs,
                             outputs=step_outputs,
                         )
-                        if stream_events:
-                            if p6_abstain_triggered:
-                                yield AnswerResetEvent(reason="compact_reask")
-                            if st.answer:
-                                yield TokenEvent(st.answer)
+                        # Outcome-first ordering (AUDIT_0824 C5), both
+                        # triggers: the reset fires only when the replacement
+                        # text follows — a re-ask that fails (usage cap /
+                        # overflow) keeps the steered answer, so no erase.
+                        if stream_events and st.answer:
+                            yield AnswerResetEvent(reason="compact_reask")
+                            yield TokenEvent(st.answer)
         if (
             not reask_fired
             and not p6_abstain_triggered
@@ -2373,8 +2375,6 @@ async def _iter_recovery_events(  # noqa: PLR0912, PLR0915
             # _plan_abstain_retry (fit the window, else dedup, else skip).
             # When the compact re-ask fired it REPLACES this
             # retry (one planned recovery channel, not two stacked).
-            if stream_events:
-                yield AnswerResetEvent(reason="abstention_retry")
             plan = _plan_abstain_retry(ctx, message_history)
             if plan is None:
                 pass  # even the dedup retry would overflow — keep the refusal
@@ -2392,7 +2392,11 @@ async def _iter_recovery_events(  # noqa: PLR0912, PLR0915
                     st.answer = retry.output
                     st.final_messages = retry.all_messages()
                     st.usage = st.usage + retry.usage
-                    if stream_events:
+                    # Outcome-first ordering (AUDIT_0824 C5): the reset fires
+                    # only when the replacement text follows — a skipped plan
+                    # or a failed retry keeps the refusal, so no erase.
+                    if stream_events and st.answer:
+                        yield AnswerResetEvent(reason="abstention_retry")
                         yield TokenEvent(st.answer)
                 except UsageLimitExceeded:
                     pass  # keep the original refusal; don't crash

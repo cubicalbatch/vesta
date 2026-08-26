@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from pydantic_ai.exceptions import UsageLimitExceeded
+from pydantic_ai.exceptions import ModelHTTPError, UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.models.function import DeltaToolCall, FunctionModel
 
@@ -508,3 +508,207 @@ async def test_warmup_failure_ends_stream_at_no_llm_error(
     assert errors[0].code == "no_llm"
     assert isinstance(events[-1], ErrorEvent)
     assert sum(isinstance(e, DoneEvent) for e in events) == 0
+
+
+# ── (j) answer_reset outcome-first ordering (AUDIT_0824 C5) ─────────────────
+
+
+def _assert_no_dangling_reset(events: list[Any]) -> None:
+    """Every ``answer_reset`` must be IMMEDIATELY followed by a replacement
+    token — an erase with no replacement leaves the client with no answer
+    text at all (the bug class AUDIT_0824 C5 fixes)."""
+    for i, event in enumerate(events):
+        if isinstance(event, AnswerResetEvent):
+            assert i + 1 < len(events), f"dangling {event.reason} reset at stream end"
+            assert isinstance(events[i + 1], TokenEvent), (
+                f"{event.reason} reset not immediately followed by a token"
+            )
+
+
+def _overflow_request(messages: list[ModelMessage], info: Any) -> ModelResponse:
+    """The non-streaming recovery paths see this as a context overflow."""
+    raise ModelHTTPError(
+        status_code=400,
+        model_name="stub",
+        body={"message": "Context size has been exceeded."},
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_fallback_emits_no_dangling_reset(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The main run crashes AND the no-tool fallback itself overflows: the
+    pre-fix ordering emitted ``answer_reset(fallback)`` up front and then
+    nothing — the client erased its text for no replacement. The reset must
+    not fire at all when the arm fails."""
+
+    async def crash_stream(messages: list[ModelMessage], info: Any) -> AsyncIterator[Any]:
+        if False:  # make this an async generator so function.py can peek it
+            yield None
+        raise UsageLimitExceeded("request limit hit")
+
+    stub = FunctionModel(function=_overflow_request, stream_function=crash_stream)
+    monkeypatch.setattr(agent_chat, "_make_model", lambda *a, **k: stub)
+    events = await _collect(state, "Einstein")
+
+    assert [e for e in events if isinstance(e, AnswerResetEvent)] == []
+    _assert_no_dangling_reset(events)
+    # The empty final answer terminates the stream per rule 8.
+    assert isinstance(events[-1], ErrorEvent)
+    assert events[-1].code == "budget_exhausted"
+
+
+def _reask_snapshot() -> Any:
+    """Forced-on compact re-ask with a user-set cap of one tool round, so the
+    second tool attempt trips the round cap and latches the trigger."""
+    from vesta.config.settings import SettingsSnapshot, all_settings
+
+    values: dict[str, object] = {s.key: s.default for s in all_settings().values()}
+    values.update({"answer.agent.compact_reask": "on", "answer.agent.max_tool_rounds": 1})
+    return SettingsSnapshot(values=values)
+
+
+def _round_cap_reask_model(
+    *,
+    final_text: str = "The steered answer [1].",
+    reask_fn: Any = None,
+) -> FunctionModel:
+    """Round 0 reads a card (consuming ``max_tool_rounds=1``), round 1
+    attempts another call — steered by the round cap — and the next round
+    streams the steered answer. ``reask_fn`` is what the recovery core's
+    non-streaming re-ask request sees (default: the stub fallback answer)."""
+
+    async def default_fn(messages: list[ModelMessage], info: Any) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content="stub fallback answer [1]")])
+
+    step = {"n": 0}
+
+    async def stream_fn(messages: list[ModelMessage], info: Any) -> AsyncIterator[Any]:
+        step["n"] += 1
+        # Distinct cards: a repeat read would hit the dedup guard before the
+        # round-cap probe and never latch the trigger.
+        if step["n"] == 1:
+            yield {0: DeltaToolCall(name="read_article", json_args='{"n": 1}')}
+        elif step["n"] == 2:
+            yield {0: DeltaToolCall(name="read_article", json_args='{"n": 2}')}
+        else:
+            yield final_text
+
+    return FunctionModel(function=reask_fn or default_fn, stream_function=stream_fn)
+
+
+@pytest.mark.asyncio
+async def test_compact_reask_resets_only_before_replacement(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On success the ``compact_reask`` reset comes AFTER the steered tokens,
+    immediately before the single replacement token — never up front."""
+
+    def reask_fn(messages: list[ModelMessage], info: Any) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content="The re-asked answer [1].")])
+
+    stub = _round_cap_reask_model(final_text="The steered answer [1].", reask_fn=reask_fn)
+    monkeypatch.setattr(agent_chat, "_make_model", lambda *a, **k: stub)
+    events = [
+        ev async for ev in agent_chat.iter_agent_turn_events(state, _reask_snapshot(), "Einstein")
+    ]
+
+    resets = [e for e in events if isinstance(e, AnswerResetEvent) and e.reason == "compact_reask"]
+    assert len(resets) == 1
+    idx = events.index(resets[0])
+    # Outcome-first: the steered tokens streamed BEFORE the reset…
+    first_token_idx = min(i for i, e in enumerate(events) if isinstance(e, TokenEvent))
+    assert idx > first_token_idx
+    assert any("steered" in t.text for t in events[:idx] if isinstance(t, TokenEvent))
+    # …and the reset is immediately followed by the single replacement token.
+    assert isinstance(events[idx + 1], TokenEvent)
+    assert events[idx + 1].text == "The re-asked answer [1]."
+    trace = dict(next(e for e in events if isinstance(e, TraceEvent)).trace)
+    assert trace["compact_reask"]["fired"] is True
+    assert trace["compact_reask"]["trigger"] == "round_cap"
+    _assert_no_dangling_reset(events)
+
+
+@pytest.mark.asyncio
+async def test_failed_compact_reask_emits_no_dangling_reset(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the re-ask itself fails (usage cap), the steered answer stands and
+    NO reset may have been emitted — the old up-front erase left clients with
+    an empty accumulator over a still-live answer."""
+
+    def usage_exceeded(messages: list[ModelMessage], info: Any) -> ModelResponse:
+        raise UsageLimitExceeded("request limit hit")
+
+    stub = _round_cap_reask_model(reask_fn=usage_exceeded)
+    monkeypatch.setattr(agent_chat, "_make_model", lambda *a, **k: stub)
+    events = [
+        ev async for ev in agent_chat.iter_agent_turn_events(state, _reask_snapshot(), "Einstein")
+    ]
+
+    assert [e for e in events if isinstance(e, AnswerResetEvent)] == []
+    tokens = "".join(t.text for t in events if isinstance(t, TokenEvent))
+    assert "The steered answer" in tokens  # stands, un-erased
+    trace = dict(next(e for e in events if isinstance(e, TraceEvent)).trace)
+    assert trace["compact_reask"]["fired"] is False
+    assert trace["compact_reask"]["trigger"] == "round_cap"
+    _assert_no_dangling_reset(events)
+
+
+def _abstain_model(*, retry_fn: Any) -> FunctionModel:
+    """Round 0 streams a refusal; the abstention retry then runs the
+    non-streaming ``retry_fn``."""
+
+    async def stream_fn(messages: list[ModelMessage], info: Any) -> AsyncIterator[Any]:
+        yield "I cannot find the answer in the provided sources."
+
+    return FunctionModel(function=retry_fn, stream_function=stream_fn)
+
+
+@pytest.mark.asyncio
+async def test_abstention_retry_resets_only_before_replacement(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On success the ``abstention_retry`` reset comes AFTER the refusal
+    tokens, immediately before the single replacement token."""
+
+    def retry_fn(messages: list[ModelMessage], info: Any) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content="The answer is 42 [1].")])
+
+    monkeypatch.setattr(
+        agent_chat, "_make_model", lambda *a, **k: _abstain_model(retry_fn=retry_fn)
+    )
+    events = await _collect(state, "Einstein")
+
+    resets = [e for e in events if isinstance(e, AnswerResetEvent)]
+    assert len(resets) == 1
+    assert resets[0].reason == "abstention_retry"
+    idx = events.index(resets[0])
+    # The refusal streamed first; the reset precedes only the replacement.
+    refusal_tokens = [e for e in events[:idx] if isinstance(e, TokenEvent)]
+    assert any("cannot find" in t.text for t in refusal_tokens)
+    assert isinstance(events[idx + 1], TokenEvent)
+    assert events[idx + 1].text == "The answer is 42 [1]."
+    _assert_no_dangling_reset(events)
+
+
+@pytest.mark.asyncio
+async def test_failed_abstention_retry_emits_no_dangling_reset(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the retry overflows too, the refusal stands and NO reset may have
+    been emitted — plan-skip, usage-cap and overflow failures alike keep the
+    original answer on every path."""
+
+    monkeypatch.setattr(
+        agent_chat, "_make_model", lambda *a, **k: _abstain_model(retry_fn=_overflow_request)
+    )
+    events = await _collect(state, "Einstein")
+
+    assert [e for e in events if isinstance(e, AnswerResetEvent)] == []
+    tokens = "".join(t.text for t in events if isinstance(t, TokenEvent))
+    assert "cannot find" in tokens  # the refusal stands, un-erased
+    trace = dict(next(e for e in events if isinstance(e, TraceEvent)).trace)
+    assert trace["overflow_fallbacks"] == 1
+    _assert_no_dangling_reset(events)
