@@ -34,7 +34,7 @@ class DegradationRecord:
     """Why a component was dropped from the pipeline (degrade-don't-fail)."""
 
     component: str
-    missing: str  # Capability value (StrEnum serializes to its string)
+    missing: str  # Capability value (StrEnum serializes to its string) or error category
     reason: str
 
     def to_dict(self) -> dict[str, str]:
@@ -119,11 +119,11 @@ class Trace:
     def _record(self, stage: StageCtx) -> None:
         self._stages.append(stage)
 
-    def degraded(self, component: str, missing: Capability, reason: str) -> None:
-        """Record that a component was dropped because a capability was missing.
+    def degraded(self, component: str, missing: Capability | str, reason: str) -> None:
+        """Record that a component was dropped because a capability was missing or a runtime error occurred.
 
         Degrade-don't-fail: the pipeline does not raise when a profile names a component
-        whose ``requires`` are unmet — it records the drop here and continues.
+        whose ``requires`` are unmet or encounters a runtime failure — it records the drop here and continues.
         """
         self._degradations.append(
             DegradationRecord(component=component, missing=str(missing), reason=reason)

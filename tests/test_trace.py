@@ -52,3 +52,18 @@ def test_degradation_recorded_with_capability_and_reason() -> None:
     assert out["degradations"] == [
         {"component": "cross_encoder", "missing": "cross_encoder", "reason": "model not present"}
     ]
+
+
+def test_degradation_recorded_with_string_missing_category() -> None:
+    tr = Trace()
+    tr.degraded("fuser/rrf", "runtime_error", "division by zero")
+    tr.degraded("preparer/custom", "not_found", "custom preparer not registered")
+    out = tr.to_dict()
+    assert out["degradations"] == [
+        {"component": "fuser/rrf", "missing": "runtime_error", "reason": "division by zero"},
+        {
+            "component": "preparer/custom",
+            "missing": "not_found",
+            "reason": "custom preparer not registered",
+        },
+    ]

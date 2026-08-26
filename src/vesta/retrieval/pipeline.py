@@ -187,29 +187,38 @@ async def run_pipeline(  # noqa: PLR0912,PLR0915
     for pc in profile.preparers:
         cls = resolve_component("query_preparer", pc.impl)
         if cls is None:
+            tr.degraded(
+                component=f"preparer/{pc.impl}",
+                missing="not_found",
+                reason=f"query_preparer {pc.impl!r} not found in registry",
+            )
             continue
         if not _check_capabilities(cls, "preparer", pc.impl, capabilities, tr):
             continue
-        params = _resolve_params(cls, pc.params)
         try:
-            instance = cls(params=params, archives=deps.archives, rewriter=deps.rewriter)
-        except TypeError:
-            # Preparers fall back rung by rung as they drop deps they don't take:
-            # ``rewriter`` (only ``conversational_rewrite`` accepts it)
-            # → ``archives`` (``alias_expand``) → params-only
-            # (``normalize``). Same ladder pattern ``_run_source`` uses for the
-            # ``vectors``/``encoders`` deps.
+            params = _resolve_params(cls, pc.params)
             try:
-                instance = cls(params=params, archives=deps.archives)
+                instance = cls(params=params, archives=deps.archives, rewriter=deps.rewriter)
             except TypeError:
-                # Preparers that take no archives dep fall back to params-only.
+                # Preparers fall back rung by rung as they drop deps they don't take:
+                # ``rewriter`` (only ``conversational_rewrite`` accepts it)
+                # → ``archives`` (``alias_expand``) → params-only
+                # (``normalize``). Same ladder pattern ``_run_source`` uses for the
+                # ``vectors``/``encoders`` deps.
                 try:
-                    instance = cls(params=params)
-                except Exception:
-                    continue
-            except Exception:
-                continue
-        except Exception:
+                    instance = cls(params=params, archives=deps.archives)
+                except TypeError:
+                    # Preparers that take no archives dep fall back to params-only.
+                    try:
+                        instance = cls(params=params) if params is not None else cls()
+                    except TypeError:
+                        instance = cls()
+        except Exception as exc:
+            tr.degraded(
+                component=f"preparer/{pc.impl}",
+                missing="runtime_error",
+                reason=f"preparer instantiation failed: {exc}",
+            )
             continue
         with tr.stage("preparer", pc.impl, pc.params) as st:
             st.add_inputs({"terms": list(pq.terms), "text": pq.text})
@@ -217,6 +226,11 @@ async def run_pipeline(  # noqa: PLR0912,PLR0915
                 pq = await instance.prepare(pq, tr)
             except Exception as exc:
                 st.add_outputs({"error": str(exc)})
+                tr.degraded(
+                    component=f"preparer/{pc.impl}",
+                    missing="runtime_error",
+                    reason=f"preparer execution failed: {exc}",
+                )
             st.add_outputs({"terms": list(pq.terms), "text": pq.text})
 
     # ── Step 2: CandidateSources (concurrent fan-out) ─────────────────────
@@ -225,32 +239,41 @@ async def run_pipeline(  # noqa: PLR0912,PLR0915
     async def _run_source(pc: ProfileComponent) -> list[Candidate]:
         cls = resolve_component("candidate_source", pc.impl)
         if cls is None:
+            tr.degraded(
+                component=f"candidate_source/{pc.impl}",
+                missing="not_found",
+                reason=f"candidate_source {pc.impl!r} not found in registry",
+            )
             return []
         if not _check_capabilities(cls, "candidate_source", pc.impl, capabilities, tr):
             return []
-        params = _resolve_params(cls, pc.params)
         try:
-            instance = cls(
-                params=params,
-                archives=deps.archives,
-                vectors=deps.vectors,
-                encoders=deps.encoders,
-            )
-        except TypeError:
-            # Sources without a vectors/encoders dep (every lexical source today;
-            # ``vector_knn`` is the first to accept them) fall
-            # back to archives-only, then to params-only — the same ladder scorers
-            # use for the ``encoders`` dep.
+            params = _resolve_params(cls, pc.params)
             try:
-                instance = cls(params=params, archives=deps.archives)
+                instance = cls(
+                    params=params,
+                    archives=deps.archives,
+                    vectors=deps.vectors,
+                    encoders=deps.encoders,
+                )
             except TypeError:
+                # Sources without a vectors/encoders dep (every lexical source today;
+                # ``vector_knn`` is the first to accept them) fall
+                # back to archives-only, then to params-only — the same ladder scorers
+                # use for the ``encoders`` dep.
                 try:
-                    instance = cls(params=params) if params is not None else cls()
-                except Exception:
-                    return []
-            except Exception:
-                return []
-        except Exception:
+                    instance = cls(params=params, archives=deps.archives)
+                except TypeError:
+                    try:
+                        instance = cls(params=params) if params is not None else cls()
+                    except TypeError:
+                        instance = cls()
+        except Exception as exc:
+            tr.degraded(
+                component=f"candidate_source/{pc.impl}",
+                missing="runtime_error",
+                reason=f"candidate_source instantiation failed: {exc}",
+            )
             return []
         async with sem:
             with tr.stage("candidate_source", pc.impl, pc.params) as st:
@@ -259,6 +282,11 @@ async def run_pipeline(  # noqa: PLR0912,PLR0915
                     cands = list(await instance.find(pq, scope, tr))
                 except Exception as exc:
                     st.add_outputs({"error": str(exc)})
+                    tr.degraded(
+                        component=f"candidate_source/{pc.impl}",
+                        missing="runtime_error",
+                        reason=f"candidate_source execution failed: {exc}",
+                    )
                     cands = []
                 st.add_outputs({"candidate_count": len(cands)})
         return cands
@@ -290,13 +318,26 @@ async def run_pipeline(  # noqa: PLR0912,PLR0915
     # ── Step 3: Fuser ─────────────────────────────────────────────────────
     fuser_cls = resolve_component("fuser", profile.fusion.impl)
     fused: list[Candidate] = []
-    if fuser_cls is not None and _check_capabilities(
-        fuser_cls, "fuser", profile.fusion.impl, capabilities, tr
-    ):
-        params = _resolve_params(fuser_cls, profile.fusion.params)
+    if fuser_cls is None:
+        tr.degraded(
+            component=f"fuser/{profile.fusion.impl}",
+            missing="not_found",
+            reason=f"fuser {profile.fusion.impl!r} not found in registry",
+        )
+    elif _check_capabilities(fuser_cls, "fuser", profile.fusion.impl, capabilities, tr):
+        fuser = None
         try:
-            fuser = fuser_cls(params=params) if params is not None else fuser_cls()
-        except Exception:
+            params = _resolve_params(fuser_cls, profile.fusion.params)
+            try:
+                fuser = fuser_cls(params=params) if params is not None else fuser_cls()
+            except TypeError:
+                fuser = fuser_cls()
+        except Exception as exc:
+            tr.degraded(
+                component=f"fuser/{profile.fusion.impl}",
+                missing="runtime_error",
+                reason=f"fuser instantiation failed: {exc}",
+            )
             fuser = None
         if fuser is not None:
             with tr.stage("fuser", profile.fusion.impl, profile.fusion.params) as st:
@@ -310,6 +351,11 @@ async def run_pipeline(  # noqa: PLR0912,PLR0915
                     fused = list(fuser.fuse(all_candidates, tr))
                 except Exception as exc:
                     st.add_outputs({"error": str(exc)})
+                    tr.degraded(
+                        component=f"fuser/{profile.fusion.impl}",
+                        missing="runtime_error",
+                        reason=f"fuser execution failed: {exc}",
+                    )
                     fused = list(_flat_union(all_candidates))
                 st.add_outputs({"fused_count": len(fused)})
     if not fused:
@@ -318,13 +364,31 @@ async def run_pipeline(  # noqa: PLR0912,PLR0915
     # ── Step 4: PassageBuilder ────────────────────────────────────────────
     passages_cls = resolve_component("passage_builder", profile.passages.impl)
     passages: list[Passage] = []
-    if passages_cls is not None and _check_capabilities(
+    if passages_cls is None:
+        tr.degraded(
+            component=f"passage_builder/{profile.passages.impl}",
+            missing="not_found",
+            reason=f"passage_builder {profile.passages.impl!r} not found in registry",
+        )
+    elif _check_capabilities(
         passages_cls, "passage_builder", profile.passages.impl, capabilities, tr
     ):
-        params = _resolve_params(passages_cls, profile.passages.params)
+        builder = None
         try:
-            builder = passages_cls(params=params, archives=deps.archives)
-        except Exception:
+            params = _resolve_params(passages_cls, profile.passages.params)
+            try:
+                builder = passages_cls(params=params, archives=deps.archives)
+            except TypeError:
+                try:
+                    builder = passages_cls(params=params) if params is not None else passages_cls()
+                except TypeError:
+                    builder = passages_cls()
+        except Exception as exc:
+            tr.degraded(
+                component=f"passage_builder/{profile.passages.impl}",
+                missing="runtime_error",
+                reason=f"passage_builder instantiation failed: {exc}",
+            )
             builder = None
         if builder is not None:
             with tr.stage("passage_builder", profile.passages.impl, profile.passages.params) as st:
@@ -333,6 +397,11 @@ async def run_pipeline(  # noqa: PLR0912,PLR0915
                     passages = await builder.build(fused, pq, tr)
                 except Exception as exc:
                     st.add_outputs({"error": str(exc)})
+                    tr.degraded(
+                        component=f"passage_builder/{profile.passages.impl}",
+                        missing="runtime_error",
+                        reason=f"passage_builder execution failed: {exc}",
+                    )
                 st.add_outputs({"passage_count": len(passages)})
 
     # ── Step 5: PassageScorers (chain) ────────────────────────────────────
@@ -343,21 +412,32 @@ async def run_pipeline(  # noqa: PLR0912,PLR0915
     for pc in profile.scorers:
         cls = resolve_component("passage_scorer", pc.impl)
         if cls is None:
+            tr.degraded(
+                component=f"passage_scorer/{pc.impl}",
+                missing="not_found",
+                reason=f"passage_scorer {pc.impl!r} not found in registry",
+            )
             continue
         if not _check_capabilities(cls, "passage_scorer", pc.impl, capabilities, tr):
             continue
-        params = _resolve_params(cls, pc.params)
         try:
-            scorer = cls(params=params, encoders=deps.encoders)
-        except TypeError:
-            # Scorers with no encoders dep (e.g. lexical_overlap) fall back to
-            # params-only construction — the same dance preparers already do
-            # for the ``archives`` dep.
+            params = _resolve_params(cls, pc.params)
             try:
-                scorer = cls(params=params) if params is not None else cls()
-            except Exception:
-                continue
-        except Exception:
+                scorer = cls(params=params, encoders=deps.encoders)
+            except TypeError:
+                # Scorers with no encoders dep (e.g. lexical_overlap) fall back to
+                # params-only construction — the same dance preparers already do
+                # for the ``archives`` dep.
+                try:
+                    scorer = cls(params=params) if params is not None else cls()
+                except TypeError:
+                    scorer = cls()
+        except Exception as exc:
+            tr.degraded(
+                component=f"passage_scorer/{pc.impl}",
+                missing="runtime_error",
+                reason=f"passage_scorer instantiation failed: {exc}",
+            )
             continue
         with tr.stage("passage_scorer", pc.impl, pc.params) as st:
             st.add_inputs({"passage_count": len(scored)})
@@ -365,6 +445,11 @@ async def run_pipeline(  # noqa: PLR0912,PLR0915
                 scored = list(await scorer.score(scored, pq, tr))
             except Exception as exc:
                 st.add_outputs({"error": str(exc)})
+                tr.degraded(
+                    component=f"passage_scorer/{pc.impl}",
+                    missing="runtime_error",
+                    reason=f"passage_scorer execution failed: {exc}",
+                )
             st.add_outputs({"passage_count": len(scored)})
 
     # ── Step 6: ContextAssembler ──────────────────────────────────────────
