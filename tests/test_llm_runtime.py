@@ -582,6 +582,7 @@ async def test_rebuild_leaving_local_stops_supervisor(
     runtime, sup = make_runtime(url, local_snapshot())
     await runtime.ensure_ready()
     assert sup.is_running()
+    assert runtime._resolved_id == QWEN_ID
     await runtime.rebuild(
         make_snapshot(
             **{
@@ -592,6 +593,28 @@ async def test_rebuild_leaving_local_stops_supervisor(
         )
     )
     assert sup.stop_calls == 1
+    assert runtime._state == "absent"
+    assert runtime._resolved_id is None
+
+
+async def test_rebuild_entering_local_resets_state_and_id(
+    router_server: tuple[FakeRouter, str],
+) -> None:
+    _router, url = router_server
+    runtime, _sup = make_runtime(
+        url,
+        make_snapshot(
+            **{
+                "inference.llm.source": "remote",
+                "inference.llm.endpoint_url": "http://remote:1234/v1",
+                "inference.llm.model": "m",
+            }
+        ),
+    )
+    assert runtime._state == "absent"
+    await runtime.rebuild(local_snapshot())
+    assert runtime._state == "unloaded"
+    assert runtime._resolved_id is None
 
 
 async def test_rebuild_force_restart_restarts_supervisor_when_running(

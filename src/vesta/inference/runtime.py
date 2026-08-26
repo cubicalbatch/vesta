@@ -358,11 +358,15 @@ class LlmRuntime:
                         _log.warning("llm.unload_failed", extra={"error": str(exc)})
                 await self._supervisor.restart()
 
-        if old_source != new_source and new_source == "remote":
-            if self._supervisor is not None:
-                with contextlib.suppress(Exception):
-                    await self._supervisor.stop()
-            self._state = "absent"
+        if old_source != new_source:
+            self._resolved_id = None
+            if new_source == "remote":
+                if self._supervisor is not None:
+                    with contextlib.suppress(Exception):
+                        await self._supervisor.stop()
+                self._state = "absent"
+            else:
+                self._state = "unloaded"
 
     # ── Status ───────────────────────────────────────────────────────────────
 

@@ -65,6 +65,23 @@ class TestOpenAIGateway:
             await gw.aclose()
         mock_close.assert_awaited_once()
 
+    def test_reconfigure_and_properties(self) -> None:
+        """reconfigure updates base_url, api_key, supervisor, and the client."""
+        mock_sup = MagicMock()
+        gw = OpenAIGateway(
+            base_url="http://127.0.0.1:8081/v1", api_key="local", supervisor=mock_sup
+        )
+        assert gw.base_url == "http://127.0.0.1:8081/v1"
+        assert gw.api_key == "local"
+        assert gw.supervisor is mock_sup
+        assert str(gw._client.base_url) == "http://127.0.0.1:8081/v1/"
+
+        gw.reconfigure(base_url="http://remote.api:1234/v1", api_key="sk-secret", supervisor=None)
+        assert gw.base_url == "http://remote.api:1234/v1"
+        assert gw.api_key == "sk-secret"
+        assert gw.supervisor is None
+        assert str(gw._client.base_url) == "http://remote.api:1234/v1/"
+
     @pytest.mark.asyncio
     async def test_chat_stream_yields_deltas(self) -> None:
         """The gateway maps OpenAI chunks to ChatDelta objects."""
@@ -1054,6 +1071,262 @@ class TestInferenceCapabilityProbe:
             assert Capability.LLM not in _capability_probe()
         finally:
             bind_gateway(None, None)
+            bind_models_dir(None)
+            config.reset_for_test()
+
+
+class TestRebindLifecycle:
+    def test_needs_child_rebind_keys(self) -> None:
+        from vesta.config.settings import SettingsSnapshot
+        from vesta.inference import (
+            INFERENCE_LLM_API_KEY,
+            INFERENCE_LLM_ENDPOINT_URL,
+            INFERENCE_LLM_MODEL,
+            INFERENCE_LLM_SOURCE,
+            INFERENCE_LOCAL_CONTEXT_SIZE,
+            _needs_child_rebind,
+        )
+        from vesta.inference.runtime import LlmRuntime
+
+        snap_local_1 = SettingsSnapshot(
+            {
+                "inference.llm.source": "local",
+                "inference.llm.endpoint_url": "",
+                "inference.llm.api_key": "",
+                "inference.llm.model": "qwen.gguf",
+                "inference.local.context_size": 8192,
+                "inference.local.idle_unload_seconds": 900,
+                "inference.local.binary_path": "llama-server",
+                "inference.local.models_max": 1,
+                "inference.local.threads_gen": 6,
+                "inference.local.threads_prefill": 8,
+            }
+        )
+        runtime = LlmRuntime(supervisor=None, snapshot=snap_local_1)
+
+        # 1. Changed set with restart keys
+        assert _needs_child_rebind(runtime, snap_local_1, {INFERENCE_LLM_SOURCE.key})
+        assert _needs_child_rebind(runtime, snap_local_1, {INFERENCE_LLM_ENDPOINT_URL.key})
+        assert _needs_child_rebind(runtime, snap_local_1, {INFERENCE_LLM_API_KEY.key})
+        assert _needs_child_rebind(runtime, snap_local_1, {INFERENCE_LOCAL_CONTEXT_SIZE.key})
+
+        # 2. Non-restart key in changed set
+        assert not _needs_child_rebind(runtime, snap_local_1, {INFERENCE_LLM_MODEL.key})
+
+        # 3. changed is None, detecting difference between snapshots
+        snap_remote = SettingsSnapshot(
+            {
+                **snap_local_1.values,
+                "inference.llm.source": "remote",
+                "inference.llm.endpoint_url": "http://remote:1234/v1",
+            }
+        )
+        assert _needs_child_rebind(runtime, snap_remote, None)
+
+        snap_model_only = SettingsSnapshot(
+            {
+                **snap_local_1.values,
+                "inference.llm.model": "other.gguf",
+            }
+        )
+        assert not _needs_child_rebind(runtime, snap_model_only, None)
+
+    @pytest.mark.asyncio
+    async def test_rebuild_runtime_flip_to_remote_and_endpoint_change(self, tmp_path: Path) -> None:
+        """I3 regression: flipping source local -> remote rebinds runtime and gateway."""
+        from vesta import config
+        from vesta.inference import (
+            bind_gateway,
+            bind_models_dir,
+            bind_runtime,
+            build_gateway_from_settings,
+            build_runtime_from_settings,
+            get_gateway,
+            get_runtime,
+            get_supervisor,
+            rebuild_runtime,
+        )
+        from vesta.inference.gateway import OpenAIGateway
+
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        (models_dir / "qwen.gguf").write_bytes(b"gguf")
+
+        config.configure()
+        config.set_db_values({"inference.llm.source": "local", "inference.llm.model": "qwen.gguf"})
+        bind_models_dir(models_dir)
+        snap = config.snapshot()
+        gw, sup = build_gateway_from_settings(snap, data_dir=tmp_path)
+        bind_gateway(gw, sup)
+        rt = build_runtime_from_settings(snap, data_dir=tmp_path, supervisor=sup)
+        bind_runtime(rt)
+
+        try:
+            assert get_supervisor() is not None
+            assert get_runtime() is not None
+            assert get_gateway() is not None
+
+            # Flip to remote
+            config.set_db_values(
+                {
+                    "inference.llm.source": "remote",
+                    "inference.llm.endpoint_url": "http://remote.host:8000/v1",
+                    "inference.llm.api_key": "sk-key-123",
+                    "inference.llm.model": "remote-qwen",
+                }
+            )
+            rebuilt = await rebuild_runtime(changed={"inference.llm.source"})
+            assert rebuilt
+
+            live_gw = get_gateway()
+            live_rt = get_runtime()
+            assert live_gw is not None and live_rt is not None
+            assert isinstance(live_gw, OpenAIGateway)
+            assert live_gw.base_url == "http://remote.host:8000/v1"
+            assert live_gw.api_key == "sk-key-123"
+            assert live_gw.supervisor is None
+            assert get_supervisor() is None
+            assert live_rt.target().source == "remote"
+            assert live_rt.target().base_url == "http://remote.host:8000/v1"
+
+            # Change remote endpoint / API key
+            config.set_db_values(
+                {
+                    "inference.llm.source": "remote",
+                    "inference.llm.endpoint_url": "http://remote2:9000/v1",
+                    "inference.llm.api_key": "sk-key-456",
+                    "inference.llm.model": "remote-qwen",
+                }
+            )
+            await rebuild_runtime(changed={"inference.llm.endpoint_url", "inference.llm.api_key"})
+            assert live_gw.base_url == "http://remote2:9000/v1"
+            assert live_gw.api_key == "sk-key-456"
+        finally:
+            bind_gateway(None, None)
+            bind_runtime(None)
+            bind_models_dir(None)
+            config.reset_for_test()
+
+    @pytest.mark.asyncio
+    async def test_rebuild_runtime_flip_to_local(self, tmp_path: Path) -> None:
+        """I3 regression: flipping source remote -> local rebinds runtime and supervisor."""
+        from vesta import config
+        from vesta.inference import (
+            bind_gateway,
+            bind_models_dir,
+            bind_runtime,
+            build_gateway_from_settings,
+            build_runtime_from_settings,
+            get_gateway,
+            get_runtime,
+            get_supervisor,
+            rebuild_runtime,
+        )
+        from vesta.inference.gateway import OpenAIGateway
+
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        (models_dir / "qwen.gguf").write_bytes(b"gguf")
+
+        config.configure()
+        config.set_db_values(
+            {
+                "inference.llm.source": "remote",
+                "inference.llm.endpoint_url": "http://remote.host:8000/v1",
+                "inference.llm.api_key": "sk-key-123",
+                "inference.llm.model": "remote-qwen",
+            }
+        )
+        bind_models_dir(models_dir)
+        snap = config.snapshot()
+        gw, sup = build_gateway_from_settings(snap, data_dir=tmp_path)
+        bind_gateway(gw, sup)
+        rt = build_runtime_from_settings(snap, data_dir=tmp_path, supervisor=sup)
+        bind_runtime(rt)
+
+        try:
+            assert get_supervisor() is None
+
+            # Flip to local
+            config.set_db_values(
+                {
+                    "inference.llm.source": "local",
+                    "inference.llm.model": "qwen.gguf",
+                }
+            )
+            await rebuild_runtime(changed={"inference.llm.source"})
+            live_gw = get_gateway()
+            live_rt = get_runtime()
+            live_sup = get_supervisor()
+            assert live_sup is not None
+            assert isinstance(live_gw, OpenAIGateway)
+            assert live_gw.supervisor is live_sup
+            assert live_gw.base_url == live_sup.base_url
+            assert live_rt is not None
+            assert live_rt.target().source == "local"
+        finally:
+            bind_gateway(None, None)
+            bind_runtime(None)
+            bind_models_dir(None)
+            config.reset_for_test()
+
+    @pytest.mark.asyncio
+    async def test_rebuild_runtime_mutates_existing_gateway_in_place(self, tmp_path: Path) -> None:
+        """AppState.gateway reference stays valid and is updated in-place."""
+        from vesta import config
+        from vesta.api.state import AppState
+        from vesta.inference import (
+            bind_gateway,
+            bind_models_dir,
+            bind_runtime,
+            build_gateway_from_settings,
+            build_runtime_from_settings,
+            rebuild_runtime,
+        )
+        from vesta.inference.gateway import OpenAIGateway
+
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        (models_dir / "qwen.gguf").write_bytes(b"gguf")
+
+        config.configure()
+        config.set_db_values(
+            {
+                "inference.llm.source": "local",
+                "inference.llm.model": "qwen.gguf",
+            }
+        )
+        bind_models_dir(models_dir)
+        snap = config.snapshot()
+        gw, sup = build_gateway_from_settings(snap, data_dir=tmp_path)
+        bind_gateway(gw, sup)
+        rt = build_runtime_from_settings(snap, data_dir=tmp_path, supervisor=sup)
+        bind_runtime(rt)
+
+        state = AppState(db=MagicMock(), runner=MagicMock(), gateway=gw, supervisor=sup)
+
+        try:
+            assert state.gateway is gw
+            assert isinstance(state.gateway, OpenAIGateway)
+            assert state.gateway.base_url.startswith("http://127.0.0.1:")
+
+            config.set_db_values(
+                {
+                    "inference.llm.source": "remote",
+                    "inference.llm.endpoint_url": "http://remote-api:5000/v1",
+                    "inference.llm.api_key": "sk-123",
+                    "inference.llm.model": "remote-m",
+                }
+            )
+            await rebuild_runtime(changed={"inference.llm.source"})
+
+            assert state.gateway is gw  # instance preserved
+            assert state.gateway.base_url == "http://remote-api:5000/v1"
+            assert state.gateway.api_key == "sk-123"
+            assert state.gateway.supervisor is None
+        finally:
+            bind_gateway(None, None)
+            bind_runtime(None)
             bind_models_dir(None)
             config.reset_for_test()
 

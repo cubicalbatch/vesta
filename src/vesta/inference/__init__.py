@@ -353,10 +353,11 @@ def get_runtime() -> LlmRuntime | None:
 
 
 #: Settings baked into the supervisor's command line / ``models.ini`` at
-#: construction. A change leaves any running child stale, so the runtime is
-#: rebound fresh (a new supervisor with the new command; the old child is
-#: stopped) instead of merely ``rebuild()``-ing — ``LlmRuntime.rebuild``
-#: deliberately does not restart the child for these.
+#: construction or defining the inference backend source / endpoint. A change
+#: leaves any running child stale or requires a different gateway configuration,
+#: so the runtime and gateway are rebound fresh (a new supervisor / endpoint;
+#: the old child is stopped) instead of merely ``rebuild()``-ing —
+#: ``LlmRuntime.rebuild`` deliberately does not restart the child for these.
 _CHILD_RESTART_KEYS = frozenset(
     {
         INFERENCE_LOCAL_BINARY_PATH.key,
@@ -364,6 +365,9 @@ _CHILD_RESTART_KEYS = frozenset(
         INFERENCE_LOCAL_MODELS_MAX.key,
         INFERENCE_LOCAL_THREADS_GEN.key,
         INFERENCE_LOCAL_THREADS_PREFILL.key,
+        INFERENCE_LLM_SOURCE.key,
+        INFERENCE_LLM_ENDPOINT_URL.key,
+        INFERENCE_LLM_API_KEY.key,
     }
 )
 
@@ -371,7 +375,7 @@ _CHILD_RESTART_KEYS = frozenset(
 def _needs_child_rebind(
     old_runtime: LlmRuntime, snapshot: SettingsSnapshot, changed: Collection[str] | None
 ) -> bool:
-    """Whether the change set needs a fresh runtime (supervisor restart).
+    """Whether the change set needs a fresh runtime (supervisor restart / gateway rebind).
 
     Beyond the always-restart keys: ``idle_unload_seconds`` only needs the
     child restarted when the ``--sleep-idle-seconds`` *flag's presence*
@@ -383,37 +387,90 @@ def _needs_child_rebind(
     old_snapshot = getattr(old_runtime, "snapshot", None)
     if old_snapshot is None:  # a stub runtime has no snapshot — no rebind
         return False
+    if any(old_snapshot.values.get(k) != snapshot.values.get(k) for k in _CHILD_RESTART_KEYS):
+        return True
     old_idle = int(old_snapshot.get(INFERENCE_LOCAL_IDLE_UNLOAD_SECONDS))
     new_idle = int(snapshot.get(INFERENCE_LOCAL_IDLE_UNLOAD_SECONDS))
     return (old_idle > 0) != (new_idle > 0)
+
+
+def _resolve_models_dir(old_runtime: LlmRuntime, snapshot: SettingsSnapshot) -> Path | None:
+    """Locate the models directory from the binding, old runtime, or settings."""
+    models_dir = get_models_dir()
+    if models_dir is not None:
+        return models_dir
+    runtime_models_dir = getattr(old_runtime, "_models_dir", None)
+    if isinstance(runtime_models_dir, Path):
+        return runtime_models_dir
+    try:
+        from vesta import config
+
+        return Path(str(snapshot.get(config.DATA_DIR))) / "models"
+    except Exception:
+        return None
+
+
+def _rebind_gateway(
+    snapshot: SettingsSnapshot,
+    supervisor: LlamaServerSupervisor | None,
+) -> None:
+    """Update or construct the live Gateway and re-bind it."""
+    from vesta.inference.gateway import OpenAIGateway
+
+    source = str(snapshot.get(INFERENCE_LLM_SOURCE))
+    api_key = str(snapshot.get(INFERENCE_LLM_API_KEY))
+    gateway = get_gateway()
+
+    if source == "remote":
+        endpoint = str(snapshot.get(INFERENCE_LLM_ENDPOINT_URL))
+        if gateway is not None and isinstance(gateway, OpenAIGateway):
+            gateway.reconfigure(base_url=endpoint, api_key=api_key, supervisor=None)
+            bind_gateway(gateway, None)
+        else:
+            bind_gateway(OpenAIGateway(base_url=endpoint, api_key=api_key, supervisor=None), None)
+    else:  # local
+        base_url = supervisor.base_url if supervisor is not None else ""
+        gw_key = api_key or "local"
+        if gateway is not None and isinstance(gateway, OpenAIGateway):
+            gateway.reconfigure(base_url=base_url, api_key=gw_key, supervisor=supervisor)
+            bind_gateway(gateway, supervisor)
+        else:
+            bind_gateway(
+                OpenAIGateway(base_url=base_url, api_key=gw_key, supervisor=supervisor),
+                supervisor,
+            )
 
 
 async def _rebind_runtime(old_runtime: LlmRuntime, snapshot: SettingsSnapshot) -> None:
     """Build a fresh runtime + supervisor and swap every reference to it.
 
     The fresh runtime is built *before* the old one is retired, so a build
-    failure leaves the old runtime serving. The gateway keeps its identity
-    (fixed local port ⇒ same base URL) and only swaps its supervisor, so
-    ``AppState.gateway`` stays valid.
+    failure leaves the old runtime serving. The gateway and supervisor bindings
+    are updated to reflect the new source/endpoint/supervisor, preserving
+    the gateway instance identity where possible so ``AppState.gateway``
+    stays valid.
     """
-    models_dir = get_models_dir()
-    if models_dir is None:
-        # Outside the composition root — nothing to rebind onto.
-        await old_runtime.rebuild(snapshot)
-        return
-    fresh = build_runtime_from_settings(snapshot, data_dir=models_dir.parent)
+    models_dir = _resolve_models_dir(old_runtime, snapshot)
+    fresh: LlmRuntime | None = None
+    if models_dir is not None:
+        fresh = build_runtime_from_settings(snapshot, data_dir=models_dir.parent)
+
     was_running = old_runtime.watchdog_running
     await old_runtime.retire()
-    gateway = get_gateway()
-    if gateway is not None and fresh.supervisor is not None:
-        from vesta.inference.gateway import OpenAIGateway
 
-        if isinstance(gateway, OpenAIGateway):
-            gateway.attach_supervisor(fresh.supervisor)
-        bind_gateway(gateway, fresh.supervisor)
-    bind_runtime(fresh)
-    if was_running:
-        fresh.start()
+    supervisor = fresh.supervisor if fresh is not None else None
+    _rebind_gateway(snapshot, supervisor)
+
+    if fresh is not None:
+        bind_runtime(fresh)
+        if was_running:
+            fresh.start()
+    else:
+        await old_runtime.rebuild(snapshot)
+        bind_runtime(old_runtime)
+        if was_running:
+            old_runtime.start()
+
     logging.getLogger(__name__).info("inference.runtime_rebound")
 
 

@@ -199,6 +199,7 @@ class OpenAIGateway:
         self._base_url = base_url
         self._api_key = api_key
         self._supervisor = supervisor
+        self._timeout = timeout
         self._client = AsyncOpenAI(
             base_url=base_url,
             api_key=api_key or "not-set",
@@ -209,6 +210,16 @@ class OpenAIGateway:
     def base_url(self) -> str:
         """The OpenAI-compatible base URL this client points at."""
         return self._base_url
+
+    @property
+    def api_key(self) -> str:
+        """The configured API key (or 'local' / empty for local/unauthenticated)."""
+        return self._api_key
+
+    @property
+    def supervisor(self) -> LlamaServerSupervisor | None:
+        """The supervised child's owner (``None`` for the remote source)."""
+        return self._supervisor
 
     async def _ensure_ready(self) -> None:
         """For the local source, ensure the supervised ``llama-server`` is up.
@@ -228,6 +239,30 @@ class OpenAIGateway:
         which baked command line) ``_ensure_ready`` may spawn.
         """
         self._supervisor = supervisor
+
+    def reconfigure(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        supervisor: LlamaServerSupervisor | None = None,
+        timeout: float | None = None,
+    ) -> None:
+        """Update gateway configuration (base URL, API key, supervisor).
+
+        Rebuilds the underlying ``AsyncOpenAI`` client so requests route to
+        the new endpoint with the new authentication.
+        """
+        if timeout is not None:
+            self._timeout = timeout
+        self._base_url = base_url
+        self._api_key = api_key
+        self._supervisor = supervisor
+        self._client = AsyncOpenAI(
+            base_url=base_url,
+            api_key=api_key or "not-set",
+            timeout=self._timeout,
+        )
 
     async def chat_stream(
         self,
