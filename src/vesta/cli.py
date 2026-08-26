@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
     if command == "index":
         return asyncio.run(_cmd_index(args))
     if command == "models":
-        return _cmd_models(args)
+        return asyncio.run(_cmd_models(args))
     parser.error(f"unknown command {command!r}")
     return 2  # unreachable
 
@@ -2162,18 +2162,45 @@ async def _regression(state: AppState, args: argparse.Namespace) -> int:
     return 0 if decision.passed else 1
 
 
+async def _load_db_settings(data_dir: str | None) -> Path:
+    """Resolve the data dir and seed the resolver with settings-table values.
+
+    A lightweight sibling of ``_open_runtime`` for commands that need correct
+    settings but no archives/vectors/gateway (``vesta models``, ``vesta bench
+    hardware``). Without it those commands resolve default+env only and ignore
+    DB-customized ``encoders.*`` repos. A missing DB (fresh install, before
+    the first boot) keeps the default+env behavior — nothing is created.
+    """
+    config.configure()
+    ddir = Path(data_dir or str(config.get(config.DATA_DIR)))
+    db_path = ddir / "vesta.db"
+    if not db_path.exists():
+        return ddir
+    db = Database(str(db_path), busy_timeout_ms=int(config.get(config.DB_BUSY_TIMEOUT_MS)))
+    try:
+        await db.start()
+        async with db.write() as conn:
+            await run_migrations(conn)
+        async with db.read() as conn:
+            stored = await load_settings(conn)
+        config.set_db_values(stored)
+    finally:
+        await db.stop()
+    return ddir
+
+
 # ── `vesta models` ──────────────────────────────────────────────────────────
 
 
-def _cmd_models(args: argparse.Namespace) -> int:
+async def _cmd_models(args: argparse.Namespace) -> int:
     """Download the configured static/embed/rerank models into encoders.model_dir.
 
     Dev/install-time only — never called from the request path (encoders/
-    module docstring). Reads settings default+env only (no DB layer needed for
-    a one-shot fetch); pass --data-dir to control where models land.
+    module docstring). Settings resolve through the same layers as the app
+    (default → env → settings table), so DB-customized ``encoders.*`` repos
+    are fetched; pass --data-dir to control where models land.
     """
-    config.configure()
-    ddir = Path(args.data_dir or str(config.get(config.DATA_DIR)))
+    ddir = await _load_db_settings(args.data_dir)
     model_dir = ddir / "models"
     from vesta.encoders import (
         ENCODERS_EMBED_MODEL,
@@ -2202,7 +2229,7 @@ def _cmd_models(args: argparse.Namespace) -> int:
 # ── `vesta bench` ───────────────────────────────────────────────────────────
 
 
-async def _run_encoder_bench(args: argparse.Namespace) -> list[dict[str, object]]:
+async def _run_encoder_bench(ddir: Path) -> list[dict[str, object]]:
     """Real encoder rows when models are on disk (``vesta models``); each row
     falls back to a ``DeferredRow`` on its own if that particular
     role's model is absent — a missing reranker doesn't block the embedder row.
@@ -2212,8 +2239,6 @@ async def _run_encoder_bench(args: argparse.Namespace) -> list[dict[str, object]
     must not import ``vesta.encoders``, so it can't ``await`` a real ``Encoder``
     directly) — and ``_cmd_bench`` is itself already inside a running loop.
     """
-    config.configure()
-    ddir = Path(args.data_dir or str(config.get(config.DATA_DIR)))
     mgr = build_manager_from_settings(config.snapshot(), model_dir=ddir / "models")
     embed_enc = await mgr.get_embed()
     rerank_enc = await mgr.get_rerank()
@@ -2235,12 +2260,13 @@ async def _cmd_bench(args: argparse.Namespace) -> int:
     cpu = hardware.measure_cpu_info()
     rows.append(hardware.measure_gemm_ceiling().to_row())
     rows.append(hardware.measure_memory_bandwidth().to_row())
-    rows.extend(await _run_encoder_bench(args))
+    ddir = await _load_db_settings(args.data_dir)
+    rows.extend(await _run_encoder_bench(ddir))
 
     archive_path = args.archive
     if archive_path is None:
-        # Default to the pinned archive if present.
-        default = Path("data/zims") / EVAL_ARCHIVE_PATH
+        # Default to the pinned archive under the configured data root if present.
+        default = ddir / "zims" / EVAL_ARCHIVE_PATH
         archive_path = str(default) if default.exists() else None
 
     extraction_rows: list[dict[str, object]] = []

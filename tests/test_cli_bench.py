@@ -31,6 +31,8 @@ from vesta.cli import CLIPipelineRunner, _open_runtime
 from vesta.config.capabilities import Capability, compute_capabilities
 from vesta.db.connection import Database
 from vesta.db.migrations import run_migrations
+from vesta.db.settings_store import upsert_setting
+from vesta.encoders import ENCODERS_EMBED_MODEL
 from vesta.eval.bench_dataset import (
     BenchDataset,
     BenchQuestion,
@@ -38,6 +40,7 @@ from vesta.eval.bench_dataset import (
     dataset_hash,
 )
 from vesta.eval.bench_runner import BenchRunRecord, QuestionOutput, run_benchmark
+from vesta.eval.golden import EVAL_ARCHIVE_PATH
 from vesta.retrieval.profiles import load_profile
 from vesta.vectors import get_store
 
@@ -956,3 +959,161 @@ def test_resolve_profile_unknown_exits_cleanly(cli_db: Database) -> None:
     assert p.name == "lexical"
     with pytest.raises(SystemExit, match="no_such_profile"):
         cli._resolve_profile(state, "no_such_profile")
+
+
+# ── `vesta models` / `bench hardware` DB-aware settings (AUDIT_0824 N20) ────
+
+_GTE_REPO = "onnx-community/gte-modernbert-base-ONNX"
+_GRANITE_REPO = "onnx-community/granite-embedding-small-english-r2-ONNX"
+
+
+@pytest.fixture
+async def settings_data_dir(tmp_path: Path) -> Path:
+    """A data root whose vesta.db pins a non-default embed repo."""
+    db = Database(str(tmp_path / "vesta.db"), busy_timeout_ms=1000)
+    await db.start()
+    async with db.write() as conn:
+        await run_migrations(conn)
+        await upsert_setting(conn, "encoders.embed.model", _GTE_REPO, "2026-08-26T00:00:00Z")
+    await db.stop()
+    return tmp_path
+
+
+def _stub_hardware_rows(monkeypatch: MonkeyPatch) -> None:
+    """Replace the physical measurements with instant stub rows."""
+    monkeypatch.setattr(cli.hardware, "measure_cpu_info", lambda: {"machine_id": "test-machine"})
+    monkeypatch.setattr(
+        cli.hardware,
+        "measure_gemm_ceiling",
+        lambda: SimpleNamespace(to_row=lambda: {"name": "gemm"}),
+    )
+    monkeypatch.setattr(
+        cli.hardware,
+        "measure_memory_bandwidth",
+        lambda: SimpleNamespace(to_row=lambda: {"name": "mem"}),
+    )
+    monkeypatch.setattr(
+        cli.encoder,
+        "embedder_throughput",
+        lambda enc: SimpleNamespace(to_row=lambda: {"name": "embed"}),
+    )
+    monkeypatch.setattr(
+        cli.encoder,
+        "reranker_latency",
+        lambda enc: SimpleNamespace(to_row=lambda: {"name": "rerank"}),
+    )
+
+
+@pytest.mark.asyncio
+async def test_cmd_models_fetches_db_configured_repos(
+    settings_data_dir: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`vesta models` fetches the repos stored in the settings table, not the
+    built-in defaults (N20)."""
+    config.reset_for_test()
+    fetched: list[tuple[str, str, Path]] = []  # (role, repo_id, model_dir)
+
+    def _fake_ensure_model(spec: Any, model_dir: Path) -> Path:
+        fetched.append((str(spec.role), str(spec.repo_id), model_dir))
+        return model_dir / str(spec.repo_id)
+
+    monkeypatch.setattr(cli, "ensure_model", _fake_ensure_model)
+    try:
+        rc = await cli._cmd_models(argparse.Namespace(role=None, data_dir=str(settings_data_dir)))
+    finally:
+        config.reset_for_test()
+    assert rc == 0
+    by_role = {role: repo for role, repo, _ in fetched}
+    assert by_role["embed"] == _GTE_REPO
+    assert by_role["embed"] != _GRANITE_REPO
+    assert all(model_dir == settings_data_dir / "models" for _, _, model_dir in fetched)
+
+
+@pytest.mark.asyncio
+async def test_cmd_models_without_db_keeps_defaults(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """No DB yet (fresh install) → default+env behavior is unchanged."""
+    config.reset_for_test()
+    monkeypatch.delenv("VESTA_ENCODERS_EMBED_MODEL", raising=False)
+    fetched: list[str] = []
+    monkeypatch.setattr(
+        cli, "ensure_model", lambda spec, model_dir: fetched.append(str(spec.repo_id))
+    )
+    try:
+        rc = await cli._cmd_models(argparse.Namespace(role=["embed"], data_dir=str(tmp_path)))
+    finally:
+        config.reset_for_test()
+    assert rc == 0
+    assert fetched == [_GRANITE_REPO]
+
+
+@pytest.mark.asyncio
+async def test_bench_hardware_builds_encoders_from_db_settings(
+    settings_data_dir: Path, tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`bench hardware` measures the DB-configured encoder repos (N20)."""
+    config.reset_for_test()
+    _stub_hardware_rows(monkeypatch)
+    seen: dict[str, Any] = {}
+
+    class _FakeMgr:
+        async def get_embed(self) -> object:
+            return object()
+
+        async def get_rerank(self) -> object:
+            return object()
+
+    def _fake_build(snapshot: Any, *, model_dir: Path | None = None) -> _FakeMgr:
+        seen["embed"] = str(snapshot.get(ENCODERS_EMBED_MODEL))
+        seen["model_dir"] = model_dir
+        return _FakeMgr()
+
+    monkeypatch.setattr(cli, "build_manager_from_settings", _fake_build)
+    args = argparse.Namespace(
+        skip_extraction=True,
+        archive=None,
+        out_dir=str(tmp_path / "bench_results"),
+        data_dir=str(settings_data_dir),
+    )
+    try:
+        rc = await cli._cmd_bench(args)
+    finally:
+        config.reset_for_test()
+    assert rc == 0
+    assert seen["embed"] == _GTE_REPO
+    assert seen["model_dir"] == settings_data_dir / "models"
+
+
+@pytest.mark.asyncio
+async def test_bench_hardware_archive_default_anchored_to_data_root(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """With no --archive, the pinned archive resolves under <data-dir>/zims —
+    independent of the process working directory (N20)."""
+    config.reset_for_test()
+    data_root = tmp_path / "elsewhere"
+    (data_root / "zims").mkdir(parents=True)
+    archive = data_root / "zims" / EVAL_ARCHIVE_PATH
+    archive.write_bytes(b"not a real zim")
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    captured: list[str] = []
+    monkeypatch.setattr(cli, "_run_extraction_bench", lambda path: captured.append(path) or [])
+    _stub_hardware_rows(monkeypatch)
+    monkeypatch.setattr(
+        cli.encoder, "onnx_int8_speedup", lambda: SimpleNamespace(to_row=lambda: {"name": "int8"})
+    )
+    args = argparse.Namespace(
+        skip_extraction=False,
+        archive=None,
+        out_dir=str(tmp_path / "bench_results"),
+        data_dir=str(data_root),
+    )
+    try:
+        rc = await cli._cmd_bench(args)
+    finally:
+        config.reset_for_test()
+    assert rc == 0
+    assert captured == [str(archive)]
