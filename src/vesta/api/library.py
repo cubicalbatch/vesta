@@ -7,7 +7,6 @@ filesystem:
   recommended filters). Never ships the full ~3 000-row list to the client.
 * ``POST /api/catalog/refresh`` — re-cache the OPDS feed; a job so its progress
   and any outage lands on the jobs panel.
-* ``GET /api/catalog/{id}`` — one catalog entry.
 * ``POST /api/zims/download`` — enqueue a resumable checksummed download.
 * ``GET /api/catalog/state`` — cheap cache summary for the library page header.
 
@@ -250,17 +249,6 @@ async def list_catalog_languages(
     _require_enabled(state)
     langs = await catalog_languages(state.db)
     return {"languages": [CatalogLanguageOut(**lang).model_dump() for lang in langs]}
-
-
-@router.get("/api/catalog/{entry_id}")
-async def get_catalog_entry(
-    entry_id: str, state: AppState = Depends(app_state)
-) -> dict[str, object]:
-    _require_enabled(state)
-    row = await get_entry(state.db, entry_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="catalog entry not found")
-    return _entry_out(row).model_dump()
 
 
 @router.post("/api/catalog/refresh", response_model=RefreshResponse)

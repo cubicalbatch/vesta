@@ -81,7 +81,6 @@ class LlmStatusOut(BaseModel):
     seconds_since_last_use: float | None
     estimated_ram_bytes: int
     error: str | None
-    hardware: str | None = None  # "cpu"|"gpu" local; None remote/unknown
 
 
 class InstalledModel(BaseModel):

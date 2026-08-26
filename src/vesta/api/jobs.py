@@ -1,4 +1,4 @@
-"""Job endpoints: list, create, inspect, control, and SSE progress streams.
+"""Job endpoints: list, create, control, and SSE progress streams.
 
 SSE is hand-formatted so we add no
 extra dependency. A reconnecting client always gets a snapshot first, then live
@@ -168,14 +168,6 @@ def _validate_job_params(jtype: str, params: dict[str, Any]) -> None:
     if validator is None:
         raise HTTPException(status_code=400, detail=f"job type {jtype!r} accepts no params")
     validator(params)
-
-
-@router.get("/{job_id}")
-async def get_job(job_id: int, state: AppState = Depends(app_state)) -> dict[str, object]:
-    record = await state.runner.get(job_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail="job not found")
-    return record.to_dict()
 
 
 @router.get("/{job_id}/stream")

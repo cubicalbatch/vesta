@@ -80,25 +80,25 @@ async def test_put_rejects_out_of_bounds(app_client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_list_get_job(app_client: httpx.AsyncClient) -> None:
+async def test_create_list_job(app_client: httpx.AsyncClient) -> None:
     create = await app_client.post(
         "/api/jobs", json={"type": "noop", "params": {"total": 3, "delay": 0.01}}
     )
     assert create.status_code == 200
     jid = create.json()["id"]
-    # let it finish
+    # let it finish (the list payload carries each job's status)
     for _ in range(100):
         await asyncio.sleep(0.01)
-        got = await app_client.get(f"/api/jobs/{jid}")
-        if got.json().get("status") in {"done", "error", "cancelled"}:
+        listed = await app_client.get("/api/jobs")
+        if any(
+            j["id"] == jid and j["status"] in {"done", "error", "cancelled"}
+            for j in listed.json()["jobs"]
+        ):
             break
-    got = await app_client.get(f"/api/jobs/{jid}")
-    assert got.status_code == 200
-    assert got.json()["status"] == "done"
-
     listed = await app_client.get("/api/jobs")
     assert listed.status_code == 200
-    assert any(j["id"] == jid for j in listed.json()["jobs"])
+    row = next(j for j in listed.json()["jobs"] if j["id"] == jid)
+    assert row["status"] == "done"
 
 
 @pytest.mark.asyncio

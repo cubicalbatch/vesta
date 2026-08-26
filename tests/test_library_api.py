@@ -155,17 +155,6 @@ async def test_catalog_pagination(app_client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_catalog_entry_by_id(app_client: httpx.AsyncClient) -> None:
-    await _seed_catalog(app_client)
-    resp = await app_client.get("/api/catalog/urn:uuid:fff")
-    assert resp.status_code == 200
-    assert resp.json()["name"] == "devdocs_en_lit"
-    # Unknown id → 404.
-    resp = await app_client.get("/api/catalog/urn:uuid:nope")
-    assert resp.status_code == 404
-
-
-@pytest.mark.asyncio
 async def test_refresh_catalog_enqueues_job(app_client: httpx.AsyncClient) -> None:
     resp = await app_client.post("/api/catalog/refresh")
     assert resp.status_code == 200

@@ -2,9 +2,8 @@
 
 Covers the supervisor's ``hw_class`` (``--list-devices`` parsing, timeout and
 error degrade, one-shot caching, GPU banner override), the drained child
-output, and the ``hardware`` field threaded through ``LlmTarget`` / ``LlmStatus``
-/ ``GET /api/models/status``. No real binary is ever spawned: the subprocess
-seam is monkeypatched throughout.
+output, and the ``hardware`` field threaded through ``LlmTarget`` / ``LlmStatus``.
+No real binary is ever spawned: the subprocess seam is monkeypatched throughout.
 """
 
 from __future__ import annotations
@@ -308,49 +307,6 @@ async def test_runtime_status_survives_hw_failure(
     )
     status = await runtime.status()  # must not raise
     assert status.hardware is None
-
-
-# ── API surface ─────────────────────────────────────────────────────────────
-
-
-class StubStatusRuntime:
-    """Pinned at the get_runtime seam; serves one fixed status."""
-
-    def __init__(self, status: LlmStatus) -> None:
-        self._status = status
-
-    async def status(self) -> LlmStatus:
-        return self._status
-
-
-async def test_models_status_endpoint_exposes_hardware(
-    app_client: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from vesta import inference
-
-    status = LlmStatus(
-        source="local",
-        configured=True,
-        installed=True,
-        state="loaded",
-        model_file="stub.gguf",
-        display_name="Stub",
-        model_id="stub",
-        size_bytes=1,
-        context_size=8192,
-        thinking=False,
-        thinking_supported=True,
-        idle_unload_seconds=900,
-        seconds_since_last_use=None,
-        estimated_ram_bytes=0,
-        error=None,
-        hardware="cpu",
-    )
-    monkeypatch.setattr(inference, "get_runtime", lambda: StubStatusRuntime(status))
-    resp = await app_client.get("/api/models/status")
-    assert resp.status_code == 200
-    body: dict[str, object] = resp.json()
-    assert body["hardware"] == "cpu"
 
 
 # ── test isolation ──────────────────────────────────────────────────────────
