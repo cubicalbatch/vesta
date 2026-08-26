@@ -44,7 +44,6 @@ __all__ = [
     "BENCH_JUDGE_MAX_TOKENS",
     "BENCH_JUDGE_RETRIES",
     "BENCH_JUDGE_TEMPERATURE",
-    "RUBRIC_PROMPT_VERSION",
     "AnswerMetrics",
     "AttributionMatrix",
     "CapabilityBreakdown",
@@ -67,7 +66,6 @@ __all__ = [
     "reference_points",
     "render_rubric",
     "retrieved_precision",
-    "rubric_prompt_hash",
     "score_question",
     "source_coverage",
     "source_hit_rank",
@@ -203,7 +201,6 @@ class ScoredQuestion:
     reason: str = ""
     abstained: bool = False
     sub_facts_present: tuple[bool, ...] = ()
-    judge_model: str = ""
     error: str | None = None
     answer_input_tokens: int = 0
     answer_output_tokens: int = 0
@@ -233,7 +230,6 @@ def score_question(
         reason=outcome.reason,
         abstained=abstained,
         sub_facts_present=outcome.sub_facts_present,
-        judge_model=outcome.judge_model,
         answer_input_tokens=answer_input_tokens,
         answer_output_tokens=answer_output_tokens,
         latency_ms=latency_ms,
@@ -385,7 +381,6 @@ def aggregate_source_metrics(results: Sequence[ScoredQuestion]) -> SourceMetrics
 # a judge that sees the context starts grading faithfulness, a
 # different metric, and a judge using its own memory grades its own style.
 
-RUBRIC_PROMPT_VERSION = "16.1"
 
 #: Bound on the model answer embedded verbatim in the judge prompt. Legit
 #: answers are generated at ``max_tokens=1024`` (~4k chars); a pathological
@@ -480,27 +475,6 @@ def _render_rubric(
         "}\n"
         'where "abstained" is true iff the model declined to answer.'
     )
-
-
-def rubric_prompt_hash() -> str:
-    """sha256 of the rendered rubric over placeholder inputs (a prompt change is
-    detectable). Truncated to 16 hex, mirroring the ``rubric_prompt_hash``
-    convention so a run's ``judge_prompt_hash`` pin is stable and comparable.
-
-    Note: this is the TEMPLATE hash. The judge CACHE key hashes the
-    fully RENDERED rubric (which embeds ground truth) so a ground-truth fix
-    invalidates its own cache entries.
-    """
-    sample = _render_rubric(
-        question="<question>",
-        known_answer="<known_answer>",
-        known_detail="<known_detail>",
-        model_answer="<model_answer>",
-        abstained=False,
-        expected_behavior="answer",
-        sub_facts=["<sub_fact_a>", "<sub_fact_b>"],
-    )
-    return hashlib.sha256(sample.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
 def render_rubric(
@@ -1085,7 +1059,9 @@ def attribution_by_capability(
 
 @dataclass(frozen=True)
 class TokenUsage:
-    """Set-level token usage for one cost category (answer or judge).
+    """Set-level token usage for the ANSWER side of a run. Judge-side tokens
+    are never measured or persisted, so no judge category exists — only the
+    answer aggregation (``bench_runner._compute_metrics``) produces one.
 
     ``total`` / ``p50`` are the headline numbers. ``p50`` is the median
     per-question total (input + output); ``p50_input`` / ``p50_output`` are the
@@ -1124,7 +1100,7 @@ def aggregate_token_usage(
     """Reduce per-question token counts into set-level usage.
 
     ``input_attr`` / ``output_attr`` name the :class:`ScoredQuestion` fields to
-    sum (``answer_input_tokens`` / ``judge_input_tokens`` etc.). Returns zeros
+    sum (``answer_input_tokens`` / ``answer_output_tokens``). Returns zeros
     when the set is empty or every question is 0 (no-LLM systems, endpoints
     that do not report usage).
     """

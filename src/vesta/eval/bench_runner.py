@@ -159,8 +159,6 @@ class QuestionOutput:
     ``retrieved_paths`` are the canonical article paths from the source cards —
     the input to every source metric. ``abstained`` is the harness decision.
     ``trace`` is the versioned pipeline trace (prunable on the row).
-    ``citation_supported`` is the fraction of the answer supported by citations
-    (from ``answer/citations.py``, recorded — not scored).
     """
 
     answer_text: str
@@ -171,7 +169,6 @@ class QuestionOutput:
     resolved_strategy: str = ""
     rounds: int = 0
     tool_calls: int = 0
-    citation_supported: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
 
@@ -1000,7 +997,7 @@ async def rejudge_run(
 
     if scored and record is not None:
         all_rows = await store.list_question_results(run_id)
-        all_scored = _rebuild_scored(all_rows, questions or {}, judge_model)
+        all_scored = _rebuild_scored(all_rows, questions or {})
         metrics = _compute_metrics(
             all_scored,
             answer_model=answer_model,
@@ -1014,7 +1011,6 @@ async def rejudge_run(
 def _rebuild_scored(
     rows: Sequence[BenchQuestionResult],
     questions: Mapping[str, BenchQuestion],
-    judge_model: str,
 ) -> list[ScoredQuestion]:
     """Rebuild ScoredQuestion list from stored rows (for metrics recompute)."""
     out: list[ScoredQuestion] = []
@@ -1038,7 +1034,6 @@ def _rebuild_scored(
             reason=row.verdict_reason,
             sub_facts_present=sfp,
             abstained=row.abstained,
-            judge_model=judge_model,
         )
         out.append(
             score_question(

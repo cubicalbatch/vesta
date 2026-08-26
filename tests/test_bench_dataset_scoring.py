@@ -30,7 +30,6 @@ from vesta.eval.bench_dataset import (
 )
 from vesta.eval.bench_scoring import (
     _MAX_MODEL_ANSWER_CHARS,
-    RUBRIC_PROMPT_VERSION,
     JudgeOutcome,
     ScoredQuestion,
     SourceMetrics,
@@ -49,7 +48,6 @@ from vesta.eval.bench_scoring import (
     reference_points,
     render_rubric,
     retrieved_precision,
-    rubric_prompt_hash,
     score_question,
     source_coverage,
     source_hit_rank,
@@ -120,7 +118,6 @@ def _scored(
         verdict=verdict,
         abstained=abstained,
         sub_facts_present=sub_facts_present,
-        judge_model="fake-judge",
     )
 
 
@@ -547,13 +544,6 @@ class _FakeJudge:
     async def judge(self, prompt: str) -> str:
         self.calls.append(prompt)
         return self._responses.pop(0) if self._responses else ""
-
-
-def test_rubric_prompt_version_and_hash() -> None:
-    assert RUBRIC_PROMPT_VERSION == "16.1"
-    h = rubric_prompt_hash()
-    assert len(h) == 16
-    assert rubric_prompt_hash() == h  # stable
 
 
 def test_render_rubric_bounds_pathological_model_answer() -> None:
@@ -1002,7 +992,6 @@ def test_score_question_bundles_fields() -> None:
     assert sq.verdict == Verdict.PARTIAL
     assert sq.abstained is True  # harness decision, not the judge echo (False)
     assert sq.sub_facts_present == (True,)
-    assert sq.judge_model == "jm"
 
 
 def test_score_question_abstention_follows_harness_not_judge_echo() -> None:

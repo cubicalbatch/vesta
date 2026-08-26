@@ -398,7 +398,6 @@ both `judge_shares_endpoint` and the pipeline `--concurrency` are recorded in
 | Key | Default | Purpose |
 |---|---|---|
 | `bench.dataset` | `benchmarks/vesta_bench_v2.json` | Dataset path. |
-| `bench.slice` | `core` | Default slice (Wikipedia-only; `core` = `all`). |
 | `bench.max_concurrent` | `1` | Pipeline questions in flight. |
 | `bench.judge.concurrency` | `4` | Judge calls in flight. |
 | `bench.judge.temperature` | `0.0` | Judge temperature. |

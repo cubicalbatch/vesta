@@ -43,19 +43,6 @@ BENCH_DATASET = setting(
     "set whose questions carry stable slug ids.",
     hot=False,
 )
-BENCH_SLICE = setting(
-    "bench.slice",
-    str,
-    "core",
-    group="Benchmark",
-    help="Default question slice. The benchmark is Wikipedia-only ('core' "
-    "is the whole set; the legacy non-Wikipedia 'cross' slice was retired). "
-    "A --slice/limit filter records both the full-set hash and a subset_hash "
-    "so filtered runs are never silently compared to full runs.",
-    choices=("core",),
-    hot=False,
-)
-
 
 # ── Domain objects (frozen — the shapes shared across modules) ──────────────
 
@@ -81,14 +68,14 @@ class BenchSource:
 class SubFact:
     """One discrete fact a compositional question must assemble.
 
-    ``source_index`` points into the question's ``sources[]`` so a missing
-    sub-fact can be attributed to a specific unretrieved article. Sub-facts are
-    JUDGED (the structured rubric reports ``sub_facts_present[]``), never
-    substring-matched.
+    Sub-facts are JUDGED (the structured rubric reports ``sub_facts_present[]``),
+    never substring-matched. The dataset's per-sub-fact ``source_index`` hints
+    are an authoring aid only (checked by ``scripts/bench_authoring/validate.py``
+    against the raw JSON) — nothing downstream reads them, so they are not
+    loaded.
     """
 
     fact: str
-    source_index: int = 0
 
 
 @dataclass(frozen=True)
@@ -287,7 +274,8 @@ def _parse_source(s: object, slug: str, idx: int) -> BenchSource:
 def _parse_sub_facts(raw: object, ctx: str) -> tuple[SubFact, ...]:
     """Parse ``sub_facts``; malformed entries RAISE like every sibling field —
     silently dropping one would grade a compositional question as a plain
-    one (AUDIT_0824 N38)."""
+    one (AUDIT_0824 N38). The ``source_index`` hint is not loaded (nothing
+    downstream reads it) and stays in the JSON untouched."""
     if not isinstance(raw, list):
         raise ValueError(f"{ctx}: 'sub_facts' must be a list")
     out: list[SubFact] = []
@@ -298,10 +286,7 @@ def _parse_sub_facts(raw: object, ctx: str) -> tuple[SubFact, ...]:
         fact = _src(sf, "fact", sctx)
         if not fact:
             raise ValueError(f"{sctx}: field 'fact' must be a non-empty string")
-        raw_index = sf.get("source_index", 0)
-        if isinstance(raw_index, bool) or not isinstance(raw_index, int):
-            raise ValueError(f"{sctx}: source_index must be an int, got {raw_index!r}")
-        out.append(SubFact(fact=fact, source_index=raw_index))
+        out.append(SubFact(fact=fact))
     return tuple(out)
 
 
@@ -417,7 +402,6 @@ def load_bench_dataset(path: str | Path = str(BENCH_DATASET.default)) -> BenchDa
 
 __all__ = [
     "BENCH_DATASET",
-    "BENCH_SLICE",
     "BenchDataset",
     "BenchQuestion",
     "BenchSource",

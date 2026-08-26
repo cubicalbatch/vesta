@@ -865,7 +865,7 @@ def test_rebuild_scored_matches_live_abstention_source() -> None:
         verdict=Verdict.CORRECT.value,
         verdict_reason="r",
     )
-    rebuilt = _rebuild_scored([row], {q.id: q}, "jm")
+    rebuilt = _rebuild_scored([row], {q.id: q})
     # The live path scores the same shape from outputs[q.id].abstained.
     live = score_question(
         q,
