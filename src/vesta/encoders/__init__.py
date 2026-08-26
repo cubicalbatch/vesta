@@ -141,7 +141,7 @@ RETRIEVAL_RERANK_TRUNCATE_TOKENS = setting(
     "~90-180ms latency figure assumes it).",
     min=32,
     max=512,
-    hot=True,
+    hot=False,
 )
 
 #: The live manager, bound by the composition root (``main`` lifespan). A
@@ -219,6 +219,7 @@ def build_manager_from_settings(
 __all__ = [
     "ENCODERS_CPU_MEM_ARENA",
     "ENCODERS_EMBED_MODEL",
+    "ENCODERS_INDEX_INTRA_OP_THREADS",
     "ENCODERS_INTRA_OP_THREADS",
     "ENCODERS_MODEL_DIR",
     "ENCODERS_POOL_SIZE",

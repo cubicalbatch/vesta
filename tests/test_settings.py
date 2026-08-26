@@ -47,6 +47,16 @@ def test_chat_history_and_trace_settings_declared() -> None:
     assert schema["chat.trace_retention_days"].min == 0
 
 
+def test_rerank_truncate_tokens_setting_is_cold() -> None:
+    """retrieval.rerank.truncate_tokens is baked into the cached cross-encoder at
+    construction time and must be marked hot=False (AUDIT_0824 Z3)."""
+    import vesta.encoders  # noqa: F401
+
+    schema = {s.key: s for s in config.schema()}
+    assert "retrieval.rerank.truncate_tokens" in schema
+    assert schema["retrieval.rerank.truncate_tokens"].hot is False
+
+
 def test_schema_describes_every_declared_setting() -> None:
     items = config.schema()
     assert len(items) >= 7  # see config/__init__.py

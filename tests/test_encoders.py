@@ -808,6 +808,42 @@ def test_capability_probe_empty_when_no_manager_bound() -> None:
     assert _capability_probe() == frozenset()
 
 
+# ── Settings and manager factory (AUDIT_0824 Z3) ─────────────────────────────
+
+
+def test_build_manager_from_settings_resolves_snapshot(tmp_path: Path) -> None:
+    from vesta import config
+    from vesta.encoders import (
+        ENCODERS_INDEX_INTRA_OP_THREADS,
+        RETRIEVAL_RERANK_TRUNCATE_TOKENS,
+        build_manager_from_settings,
+    )
+
+    config.configure(
+        env={
+            "encoders.model_dir": str(tmp_path / "custom_models"),
+            "encoders.index_intra_op_threads": "6",
+            "retrieval.rerank.truncate_tokens": "128",
+        }
+    )
+    snap = config.snapshot()
+    mgr = build_manager_from_settings(snap)
+    assert mgr._model_dir == tmp_path / "custom_models"
+    assert mgr._index_intra_op_threads == 6
+    assert mgr._rerank_truncate_tokens == 128
+    assert RETRIEVAL_RERANK_TRUNCATE_TOKENS.hot is False
+    assert ENCODERS_INDEX_INTRA_OP_THREADS.hot is False
+
+
+def test_encoders_all_exports_complete() -> None:
+    from vesta import encoders
+
+    assert "ENCODERS_INDEX_INTRA_OP_THREADS" in encoders.__all__
+    assert "RETRIEVAL_RERANK_TRUNCATE_TOKENS" in encoders.__all__
+    for name in encoders.__all__:
+        assert hasattr(encoders, name), f"{name} in __all__ but not exported"
+
+
 # ── Integration: real downloaded models (skips if `vesta models` wasn't run) ─
 
 _REAL_MODEL_DIR = Path("data/models")
