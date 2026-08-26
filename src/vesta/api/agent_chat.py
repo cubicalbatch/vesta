@@ -2650,6 +2650,14 @@ async def iter_agent_turn_events(  # noqa: PLR0912, PLR0915
         answer = ""
         usage = RunUsage()
         crashed = False
+        #: Whether the ``status_buf`` drain below ran. A crash inside
+        #: ``run_stream``'s ``__aenter__`` (a tool-round model request, e.g.
+        #: UsageLimitExceeded / context overflow on a later round) skips the
+        #: whole ``async with`` body — including that drain — so anything the
+        #: tool closures buffered (notably a follow-up turn's latched first
+        #: ``sources`` event) is still pending and must be emitted before the
+        #: fallback answer cites those cards.
+        buf_drained = False
         # Same overflow-recovery counter as run_one_turn.
         overflow_fallbacks = 0
         llm_started = time.monotonic()
@@ -2663,8 +2671,7 @@ async def iter_agent_turn_events(  # noqa: PLR0912, PLR0915
                 # burned before crashing; recovery folds on top of it.
                 usage=usage,
             ) as result:
-                # Tool-round statuses were collected into ctx.status_buf during
-                # __aenter__ (the search/read_article closures append there).
+                buf_drained = True
                 for s in ctx.status_buf:
                     yield s
                 yield StatusEvent("generating", "Thinking…")
@@ -2680,6 +2687,17 @@ async def iter_agent_turn_events(  # noqa: PLR0912, PLR0915
                 overflow_fallbacks += 1
             else:
                 raise  # a real bug (bad request, auth, provider 500) — stay loud
+        if crashed and not buf_drained:
+            # The crash happened inside ``run_stream``'s ``__aenter__``, so the
+            # buffered statuses — and, on a follow-up, the latched first
+            # ``sources(merge=False)`` event — never reached the client (the
+            # in-body drain above was skipped). Emit them now: the fallback
+            # answer cites these cards, and the trailing merge delta excludes
+            # exactly ``first_sources_keys``, so this is the client's only
+            # copy. Ordering stays protocol-valid (statuses + sources before
+            # any token).
+            for event in ctx.status_buf:
+                yield event
 
         st = _TurnRecoveryState(
             crashed=crashed,

@@ -407,3 +407,58 @@ async def test_usage_limit_crash_keeps_main_run_tokens(
     assert trace["total_tokens"] > ctrl_trace["total_tokens"]
     assert trace["input_tokens"] > 0
     assert trace["output_tokens"] > 0
+
+
+# ── (h) follow-up crash after a search still delivers the latched sources ───
+
+
+@pytest.mark.asyncio
+async def test_followup_crash_after_search_still_emits_latched_sources(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A follow-up's FIRST ``sources`` event is buffered by the ``search`` tool
+    closure and drained only inside ``run_stream``'s body. When a LATER model
+    request crashes inside ``__aenter__`` (UsageLimitExceeded on the round
+    after the search), the buffer must still reach the client before the
+    fallback answer — which cites those cards — and the trailing merge delta
+    must not replay them (docs/sse-protocol.md "Sources merge" numbering).
+    """
+
+    async def stream_fn(messages: list[ModelMessage], info: Any) -> AsyncIterator[Any]:
+        has_return = any(
+            isinstance(m, ModelRequest)
+            and any(getattr(p, "part_kind", None) == "tool-return" for p in m.parts)
+            for m in messages
+        )
+        if has_return:
+            # Crash on the round AFTER the search executed — the __aenter__
+            # path where the buffered events were never drained.
+            raise UsageLimitExceeded("request limit hit")
+        yield {0: DeltaToolCall(name="search", json_args='{"query": "Einstein"}')}
+
+    stub = FunctionModel(function=_dummy_request, stream_function=stream_fn)
+    monkeypatch.setattr(agent_chat, "_make_model", lambda *a, **k: stub)
+
+    history = [ModelRequest(parts=[UserPromptPart(content="Who was Einstein?")])]
+    events = await _collect(state, "When was he born?", message_history=history)
+
+    sources = [e for e in events if isinstance(e, SourcesEvent)]
+    assert sources, "latched follow-up sources event lost on post-search crash"
+    assert len(sources) == 1  # delivered once — the merge delta excludes it
+    first = sources[0]
+    assert first.merge is False
+    assert first.cards
+
+    src_idx = events.index(first)
+    resets = [e for e in events if isinstance(e, AnswerResetEvent)]
+    assert [r.reason for r in resets] == ["fallback"]
+    reset_idx = events.index(resets[0])
+    # Protocol ordering: sources before the fallback regenerate.
+    assert src_idx < reset_idx
+    assert all(not isinstance(e, TokenEvent) for e in events[:src_idx])
+
+    tokens_after = [e for e in events[reset_idx + 1 :] if isinstance(e, TokenEvent)]
+    assert len(tokens_after) == 1
+    assert tokens_after[0].text == "stub fallback answer [1]"
+
+    assert isinstance(events[-1], DoneEvent)
