@@ -376,9 +376,10 @@ def extract_many(
 ) -> list[ExtractedArticle]:
     """Bulk multi-process extraction. Thin by design.
 
-    ``processes`` defaults to 1; caller sizes it from ``zim.extract_processes``
-    and CPU budget. Returns results in ``paths`` order. An empty ``paths`` is a
-    no-op (avoids spinning up a Pool for nothing).
+    ``processes`` defaults to 1; callers pass an explicit count (the CLI
+    benchmark hardcodes its measurement point). Returns results in ``paths``
+    order. An empty ``paths`` is a no-op (avoids spinning up a Pool for
+    nothing).
     """
     if not paths:
         return []

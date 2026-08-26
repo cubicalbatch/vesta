@@ -44,6 +44,8 @@ class VectorKnn:
     requires: ClassVar[frozenset[Capability]] = frozenset({Capability.VECTORS})
 
     class Params(BaseModel):
+        #: Neighbours fetched per query before per-article dedup.
+        k: int = 40
         #: A/B toggle: False drops this source without removing it from the profile.
         enabled: bool = True
 

@@ -47,7 +47,7 @@ SERVER_HOST = setting(
     "127.0.0.1",
     group="Server",
     help="Network interface to bind. 127.0.0.1 keeps an unauthenticated app local; "
-    "set 0.0.0.0 to expose it (pair with server.auth.password).",
+    "set 0.0.0.0 only on a trusted network (no auth layer exists yet).",
     hot=False,  # requires restart
 )
 SERVER_PORT = setting(
@@ -59,16 +59,6 @@ SERVER_PORT = setting(
     min=1,
     max=65535,
     hot=False,  # requires restart
-)
-SERVER_AUTH_PASSWORD = setting(
-    "server.auth.password",
-    str,
-    "",
-    group="Server",
-    help="Optional single password for exposure beyond localhost. Empty = "
-    "no auth. Leave blank or unchanged when saving to keep the stored password.",
-    hot=True,
-    secret=True,
 )
 DATA_DIR = setting(
     "data.dir",
@@ -136,26 +126,6 @@ ZIM_READ_POOL_SIZE = setting(
     max=32,
     hot=False,
 )
-ZIM_EXTRACT_PROCESSES = setting(
-    "zim.extract_processes",
-    int,
-    1,
-    group="ZIM / Storage",
-    help="Worker processes for bulk extraction. Threads scale negatively "
-    "for this workload; processes do not. 1 = inline (query-time path).",
-    min=1,
-    max=64,
-    hot=True,
-)
-QUERY_STOPWORDS_ENABLED = setting(
-    "query.stopwords.enabled",
-    bool,
-    True,
-    group="Query / Preprocessing",
-    help="Strip stopwords/interrogatives before libzim queries. Mandatory: without it "
-    "natural-language questions return 0 results.",
-    hot=True,
-)
 QUERY_STOPWORDS_LIST = setting(
     "query.stopwords.list",
     str,
@@ -166,43 +136,9 @@ QUERY_STOPWORDS_LIST = setting(
         "explain,tell,about,there,here"
     ),
     group="Query / Preprocessing",
-    help="Comma-separated stopword + interrogative list stripped during query preprocessing.",
-    hot=True,
-)
-QUERY_LADDER_ENABLED = setting(
-    "query.ladder.enabled",
-    bool,
-    True,
-    group="Query / Preprocessing",
-    help="Apply the fallback ladder (all-terms → stopword-stripped → OR-of-terms → "
-    "title). Each rung is recorded in the trace.",
-    hot=True,
-)
-PASSAGES_TARGET_TOKENS = setting(
-    "passages.target_tokens",
-    int,
-    400,
-    group="Passages / Chunking",
-    help="Target passage size in tokens (~400). Sized by a word-to-token calibration factor.",
-    min=64,
-    max=4096,
-    hot=True,
-)
-PASSAGES_SENTENCE_ALIGNED = setting(
-    "passages.sentence_aligned",
-    bool,
-    True,
-    group="Passages / Chunking",
-    help="Split passages on sentence boundaries. Disable only for tests.",
-    hot=True,
-)
-PASSAGES_BREADCRUMB_ENABLED = setting(
-    "passages.breadcrumb.enabled",
-    bool,
-    True,
-    group="Passages / Chunking",
-    help="Prepend an 'Article > Section' breadcrumb to every passage (matches "
-    "model training distribution; free Contextual-Retrieval approximation).",
+    help="Comma-separated stopword + interrogative list. Query preprocessing "
+    "uses its own fixed list; this one budgets the chat read_article tool's "
+    "focused view.",
     hot=True,
 )
 
@@ -211,18 +147,11 @@ __all__ = [
     "DB_BUSY_TIMEOUT_MS",
     "JOBS_MAX_CONCURRENT_NOOP",
     "LOGGING_LEVEL",
-    "PASSAGES_BREADCRUMB_ENABLED",
-    "PASSAGES_SENTENCE_ALIGNED",
-    "PASSAGES_TARGET_TOKENS",
-    "QUERY_LADDER_ENABLED",
-    "QUERY_STOPWORDS_ENABLED",
     "QUERY_STOPWORDS_LIST",
     "SECRET_MASK",
-    "SERVER_AUTH_PASSWORD",
     "SERVER_HOST",
     "SERVER_PORT",
     "ZIM_CLUSTER_CACHE_MB",
-    "ZIM_EXTRACT_PROCESSES",
     "ZIM_READ_POOL_SIZE",
     "Capability",
     "CapabilitySet",
