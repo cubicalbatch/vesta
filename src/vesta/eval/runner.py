@@ -35,7 +35,6 @@ from vesta.eval.golden import SLICES, GoldenEntry, GoldenSet, load_set
 from vesta.eval.metrics import (
     LatencyPercentiles,
     RunMetrics,
-    SliceMetrics,
     aggregate,
     degradations_from_traces,
     latency_from_traces,
@@ -313,17 +312,19 @@ async def evaluate_profile(
 
 def _reduce_metrics(results: Sequence[QueryResult]) -> RunMetrics:
     """Aggregate per-query results into per-slice + overall metrics + latency."""
-    slices: dict[str, SliceMetrics] = {}
     # Group by slice; the 'all' aggregate spans every non-abstention query.
-    by_slice: dict[str, list[tuple[Sequence[str], Sequence[str]]]] = {s: [] for s in SLICES}
+    # Only recall-eligible queries feed slice rows: an out_of_corpus query has
+    # no gold source by construction, so its recall row would be a fabricated
+    # all-zero that persists reading as a measured 0.0 (AUDIT_0824 N38).
+    by_slice: dict[str, list[tuple[Sequence[str], Sequence[str]]]] = {}
     all_pairs: list[tuple[Sequence[str], Sequence[str]]] = []
     for r in results:
         pair = (list(r.retrieved_paths), list(r.entry.expected_paths))
+        if not r.entry.expected_paths:
+            continue  # out_of_corpus: scored by abstention, not rank
         by_slice.setdefault(r.entry.slice, []).append(pair)
-        if r.entry.expected_paths:  # out_of_corpus excluded from recall aggregates
-            all_pairs.append(pair)
-    for name, pairs in by_slice.items():
-        slices[name] = aggregate(pairs)
+        all_pairs.append(pair)
+    slices = {name: aggregate(pairs) for name, pairs in by_slice.items()}
     slices["all"] = aggregate(all_pairs)
     traces = [r.trace for r in results]
     latency = latency_from_traces(traces)

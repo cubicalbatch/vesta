@@ -387,6 +387,14 @@ def aggregate_source_metrics(results: Sequence[ScoredQuestion]) -> SourceMetrics
 
 RUBRIC_PROMPT_VERSION = "16.1"
 
+#: Bound on the model answer embedded verbatim in the judge prompt. Legit
+#: answers are generated at ``max_tokens=1024`` (~4k chars); a pathological
+#: answer (degenerate repetition) would otherwise inflate the rendered rubric
+#: past the gateway's context window and turn the verdict into an opaque
+#: UNJUDGED with a gateway error as its reason.
+_MAX_MODEL_ANSWER_CHARS = 6000
+
+
 _SUB_FACT_HINT = (
     "For each SUB-FACT, report whether the model answer contains that specific "
     "fact (true/false), in declaration order."
@@ -408,6 +416,11 @@ def _render_rubric(
         if abstained or not model_answer.strip()
         else model_answer
     )
+    if len(answer_for_prompt) > _MAX_MODEL_ANSWER_CHARS:
+        answer_for_prompt = (
+            answer_for_prompt[:_MAX_MODEL_ANSWER_CHARS]
+            + f"\n[...answer truncated to {_MAX_MODEL_ANSWER_CHARS} characters for grading]"
+        )
     detail_line = f"\n(ground-truth detail: {known_detail})" if known_detail else ""
     if sub_facts:
         sub_block = "\nSUB-FACTS (each must be present for a complete answer):\n" + "\n".join(
@@ -953,7 +966,12 @@ def reference_points(results: Sequence[ScoredQuestion], *, answer_model: str) ->
     if not oracle_models:
         suppressed_reason = "no oracle reference points recorded"
         headroom = None
-    elif answer_model and oracle_models != {answer_model}:
+    elif not answer_model:
+        # Retrieval-only runs record no answer model: the oracle was verified
+        # against some other model, so any headroom number would be bogus.
+        suppressed_reason = "no answer model recorded for this run"
+        headroom = None
+    elif oracle_models != {answer_model}:
         suppressed_reason = (
             f"oracle model(s) {sorted(oracle_models)} != answer model {answer_model!r}"
         )

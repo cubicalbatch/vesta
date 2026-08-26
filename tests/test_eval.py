@@ -262,6 +262,25 @@ class TestRunner:
         assert metrics.query_count == 2
 
     @pytest.mark.asyncio
+    async def test_out_of_corpus_gets_no_recall_slice_row(self) -> None:
+        """AUDIT_0824 N38: an out_of_corpus query has no gold source, so a
+        recall slice row for it is a fabricated all-zero — it must not be
+        persisted. The query still counts toward latency/abstention metrics."""
+        gs = _golden(
+            [
+                _entry("e1", "einstein", ["Albert_Einstein"]),
+                _entry("o1", "quantum", [], slice_="out_of_corpus"),
+            ]
+        )
+        runner = FakeRunner({"einstein": ["Albert_Einstein"], "quantum": ["Junk"]})
+        profile = load_profile("lexical") or _any_profile()
+        metrics, results = await evaluate_profile(profile, runner, gs)  # type: ignore[arg-type]
+        assert len(results) == 2
+        assert metrics.query_count == 2
+        assert "out_of_corpus" not in dict(metrics.slices)
+        assert metrics.slice("all").recall_at_10 == 1.0  # 'all' excludes it as before
+
+    @pytest.mark.asyncio
     async def test_persist_run_round_trips_through_store(self) -> None:
         gs = _golden([_entry("e1", "q", ["A"])])
         runner = FakeRunner({"q": ["A"]})

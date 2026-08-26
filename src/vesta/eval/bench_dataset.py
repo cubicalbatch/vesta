@@ -284,6 +284,27 @@ def _parse_source(s: object, slug: str, idx: int) -> BenchSource:
     )
 
 
+def _parse_sub_facts(raw: object, ctx: str) -> tuple[SubFact, ...]:
+    """Parse ``sub_facts``; malformed entries RAISE like every sibling field —
+    silently dropping one would grade a compositional question as a plain
+    one (AUDIT_0824 N38)."""
+    if not isinstance(raw, list):
+        raise ValueError(f"{ctx}: 'sub_facts' must be a list")
+    out: list[SubFact] = []
+    for i, sf in enumerate(raw):
+        sctx = f"{ctx} sub_facts[{i}]"
+        if not isinstance(sf, Mapping):
+            raise ValueError(f"{sctx} must be an object")
+        fact = _src(sf, "fact", sctx)
+        if not fact:
+            raise ValueError(f"{sctx}: field 'fact' must be a non-empty string")
+        raw_index = sf.get("source_index", 0)
+        if isinstance(raw_index, bool) or not isinstance(raw_index, int):
+            raise ValueError(f"{sctx}: source_index must be an int, got {raw_index!r}")
+        out.append(SubFact(fact=fact, source_index=raw_index))
+    return tuple(out)
+
+
 def _parse_question(q: object) -> BenchQuestion:
     if not isinstance(q, Mapping):
         raise ValueError("question entries must be objects")
@@ -317,16 +338,7 @@ def _parse_question(q: object) -> BenchQuestion:
     if fields["expected_behavior"] == "answer" and not sources:
         raise ValueError(f"{ctx}: expected_behavior 'answer' requires >=1 source")
 
-    sub_facts_raw = q.get("sub_facts") or []
-    if not isinstance(sub_facts_raw, list):
-        raise ValueError(f"{ctx}: 'sub_facts' must be a list")
-    sub_facts: list[SubFact] = []
-    for sf in sub_facts_raw:
-        if not isinstance(sf, Mapping) or not sf.get("fact"):
-            continue
-        sub_facts.append(
-            SubFact(fact=str(sf["fact"]), source_index=int(sf.get("source_index") or 0))
-        )
+    sub_facts = _parse_sub_facts(q.get("sub_facts") or [], ctx)
 
     tags_raw = q.get("tags") or []
     tags = tuple(str(t) for t in tags_raw) if isinstance(tags_raw, list) else ()

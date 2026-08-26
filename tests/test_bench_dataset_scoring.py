@@ -29,6 +29,7 @@ from vesta.eval.bench_dataset import (
     subset_hash,
 )
 from vesta.eval.bench_scoring import (
+    _MAX_MODEL_ANSWER_CHARS,
     RUBRIC_PROMPT_VERSION,
     JudgeOutcome,
     ScoredQuestion,
@@ -46,6 +47,7 @@ from vesta.eval.bench_scoring import (
     judge_verdict,
     measure_bench_calibration,
     reference_points,
+    render_rubric,
     retrieved_precision,
     rubric_prompt_hash,
     score_question,
@@ -211,6 +213,26 @@ def test_loader_rejects_answer_question_with_no_sources(tmp_path: Path) -> None:
     bad["sources"] = []
     p = _dataset_json(tmp_path, [bad])
     with pytest.raises(ValueError, match="wiki-0009"):
+        load_bench_dataset(str(p))
+
+
+def test_loader_rejects_sub_fact_without_fact_text(tmp_path: Path) -> None:
+    """AUDIT_0824 N38: a sub-fact entry missing its ``fact`` text is a dataset
+    typo and must raise like every sibling field — silently dropping it would
+    grade a compositional question as if it had no sub-facts."""
+    bad = _min_question("wiki-0043")
+    bad["sub_facts"] = [{"source_index": 0}, {"fact": "1879", "source_index": 0}]
+    p = _dataset_json(tmp_path, [bad])
+    with pytest.raises(ValueError, match="wiki-0043"):
+        load_bench_dataset(str(p))
+
+
+def test_loader_rejects_non_object_sub_fact(tmp_path: Path) -> None:
+    """A non-object sub-fact entry raises naming the question and index."""
+    bad = _min_question("wiki-0044")
+    bad["sub_facts"] = ["1879"]
+    p = _dataset_json(tmp_path, [bad])
+    with pytest.raises(ValueError, match=r"wiki-0044.*sub_facts\[0\]"):
         load_bench_dataset(str(p))
 
 
@@ -532,6 +554,20 @@ def test_rubric_prompt_version_and_hash() -> None:
     h = rubric_prompt_hash()
     assert len(h) == 16
     assert rubric_prompt_hash() == h  # stable
+
+
+def test_render_rubric_bounds_pathological_model_answer() -> None:
+    """AUDIT_0824 N38: a pathological answer must not inflate the judge prompt
+    unbounded (4xx at the gateway → opaque UNJUDGED). It is truncated with an
+    explicit marker; short answers pass through untouched."""
+    q = _q("a")
+    big = "x" * (_MAX_MODEL_ANSWER_CHARS + 5000)
+    rubric = render_rubric(question=q, model_answer=big, abstained=False)
+    assert "truncated to" in rubric
+    assert len(rubric) < len(big)
+    short = render_rubric(question=q, model_answer="42", abstained=False)
+    assert "truncated to" not in short
+    assert "MODEL ANSWER TO GRADE: 42\n" in short
 
 
 @pytest.mark.asyncio
@@ -882,6 +918,16 @@ def test_reference_points_suppressed_when_no_oracle() -> None:
     rp = reference_points([_scored(q, verdict=Verdict.CORRECT)], answer_model="m")
     assert rp.headroom_realised is None
     assert "no oracle" in rp.suppressed_reason
+
+
+def test_reference_points_suppressed_when_answer_model_empty() -> None:
+    """AUDIT_0824 N38: retrieval-only runs record no answer model, so the
+    oracle was necessarily verified against some other model — the model-match
+    suppression must apply and headroom must stay suppressed."""
+    q = _q("a", oracle={"model": "other-model", "verdict": "correct"})
+    rp = reference_points([_scored(q, verdict=Verdict.CORRECT)], answer_model="")
+    assert rp.headroom_realised is None
+    assert rp.suppressed_reason == "no answer model recorded for this run"
 
 
 # ── Failure attribution 2x2 ─────────────────────────────────────────────────
