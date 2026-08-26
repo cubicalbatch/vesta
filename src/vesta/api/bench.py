@@ -1389,6 +1389,10 @@ async def import_answer_runs(db: Any) -> int:
     store = SqliteBenchStore(db)
     imported = 0
     async with db.read() as conn:
+        cur = await conn.execute(
+            "SELECT label FROM bench_runs WHERE run_group = 'imported_answer_runs'"
+        )
+        existing_labels = {str(r[0]) for r in await cur.fetchall() if r[0] is not None}
         cur = await conn.execute("SELECT * FROM answer_runs ORDER BY id")
         rows = await cur.fetchall()
     for row in rows:
@@ -1403,9 +1407,12 @@ async def import_answer_runs(db: Any) -> int:
             strat_name = str(strat.get("name", "")) if isinstance(strat, dict) else ""
             if not strat_name:
                 continue
+            label = f"imported:{row['id']}:{strat_name}"
+            if label in existing_labels:
+                break
             record = BenchRunRecord(
                 run_group="imported_answer_runs",
-                label=f"imported:{row['id']}:{strat_name}",
+                label=label,
                 started_at=str(row["started_at"]),
                 finished_at=str(row["finished_at"]) if row["finished_at"] else None,
                 status="complete",
@@ -1452,6 +1459,7 @@ async def import_answer_runs(db: Any) -> int:
                     error=str(entry["error"]) if entry.get("error") else None,
                 )
                 await store.insert_question_result(run_id, result_row)
+            existing_labels.add(label)
             imported += 1
             break  # one bench_runs row per answer_runs row (first strategy)
     return imported

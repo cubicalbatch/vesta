@@ -1277,3 +1277,162 @@ def test_to_summary_carries_score_chips() -> None:
     assert summary.headroom == 1.0
     assert summary.source_recall_at_10 == 1.0
     assert summary.trusted is True
+
+
+# ── import_answer_runs (AUDIT_0824 L4) ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_import_answer_runs_idempotent(app_with_db: tuple[httpx.AsyncClient, Any]) -> None:
+    _, app = app_with_db
+    db = app.state.vesta.db
+
+    # 1. Empty answer_runs -> returns 0
+    assert await bench.import_answer_runs(db) == 0
+
+    # 2. Seed 2 historical answer_runs rows
+    config1 = {"profile": "dense", "model": "model-1", "scope": "scope-1", "trusted": True}
+    results1 = {
+        "dataset_name": "gap_questions",
+        "strategies": [{"name": "agentic", "strict_accuracy": 1.0}],
+        "per_question": [
+            {
+                "id": "q1",
+                "capability": "lookup",
+                "difficulty": "easy",
+                "question": "What is A?",
+                "answer": "A",
+                "model_answer": "A",
+                "verdict": "correct",
+                "retrieval_hit_rank": 1,
+                "source_coverage": 1.0,
+                "retrieved_paths": ["A"],
+                "rounds": 1,
+                "latency_ms": 50.0,
+            },
+            {
+                "id": "q2",
+                "capability": "lookup",
+                "difficulty": "medium",
+                "question": "What is B?",
+                "answer": "B",
+                "model_answer": "B",
+                "verdict": "correct",
+                "retrieval_hit_rank": 2,
+                "source_coverage": 1.0,
+                "retrieved_paths": ["B"],
+                "rounds": 2,
+                "latency_ms": 100.0,
+            },
+        ],
+    }
+    config2 = {"profile": "lexical", "model": "model-2", "scope": "scope-2", "trusted": False}
+    results2 = {
+        "dataset_name": "gap_questions",
+        "strategies": [{"name": "sources_only", "strict_accuracy": 0.5}],
+        "per_question": [
+            {
+                "id": "q1",
+                "capability": "lookup",
+                "difficulty": "easy",
+                "question": "What is A?",
+                "answer": "A",
+                "model_answer": "wrong",
+                "verdict": "incorrect",
+                "retrieval_hit_rank": None,
+                "source_coverage": 0.0,
+                "retrieved_paths": [],
+                "rounds": 1,
+                "latency_ms": 30.0,
+            }
+        ],
+    }
+
+    async with db.write() as conn:
+        await conn.execute(
+            "INSERT INTO answer_runs(id, started_at, finished_at, dataset_hash, judge_model, "
+            "config_json, results_json) VALUES(?, ?, ?, ?, ?, ?, ?)",
+            (
+                1,
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:01:00+00:00",
+                "hash1",
+                "judge1",
+                json.dumps(config1),
+                json.dumps(results1),
+            ),
+        )
+        await conn.execute(
+            "INSERT INTO answer_runs(id, started_at, finished_at, dataset_hash, judge_model, "
+            "config_json, results_json) VALUES(?, ?, ?, ?, ?, ?, ?)",
+            (
+                2,
+                "2026-01-01T00:02:00+00:00",
+                "2026-01-01T00:03:00+00:00",
+                "hash2",
+                "judge2",
+                json.dumps(config2),
+                json.dumps(results2),
+            ),
+        )
+
+    # First import -> 2 runs imported
+    imported = await bench.import_answer_runs(db)
+    assert imported == 2
+
+    store = bench.SqliteBenchStore(db)
+    runs = await store.list_runs()
+    imported_runs = [r for r in runs if r.run_group == "imported_answer_runs"]
+    assert len(imported_runs) == 2
+    assert {r.label for r in imported_runs} == {"imported:1:agentic", "imported:2:sources_only"}
+
+    # Verify per-question results were stored
+    run1 = next(r for r in imported_runs if r.label == "imported:1:agentic")
+    q_results1 = await store.list_question_results(run1.id)
+    assert len(q_results1) == 2
+    assert {q.question_id for q in q_results1} == {"q1", "q2"}
+
+    # Second import -> 0 runs imported (idempotent, no duplicates created)
+    imported_again = await bench.import_answer_runs(db)
+    assert imported_again == 0
+
+    runs_after = await store.list_runs()
+    imported_runs_after = [r for r in runs_after if r.run_group == "imported_answer_runs"]
+    assert len(imported_runs_after) == 2
+
+    q_results1_after = await store.list_question_results(run1.id)
+    assert len(q_results1_after) == 2
+
+    # Add a 3rd historical run
+    config3 = {"profile": "hybrid", "model": "model-3"}
+    results3 = {
+        "strategies": [{"name": "agentic"}],
+        "per_question": [{"id": "q3", "question": "Q3", "answer": "A3", "model_answer": "A3"}],
+    }
+    async with db.write() as conn:
+        await conn.execute(
+            "INSERT INTO answer_runs(id, started_at, finished_at, dataset_hash, judge_model, "
+            "config_json, results_json) VALUES(?, ?, ?, ?, ?, ?, ?)",
+            (
+                3,
+                "2026-01-01T00:04:00+00:00",
+                None,
+                "hash3",
+                "",
+                json.dumps(config3),
+                json.dumps(results3),
+            ),
+        )
+
+    # Third import -> only imports the 3rd run
+    imported_third = await bench.import_answer_runs(db)
+    assert imported_third == 1
+
+    runs_third = await store.list_runs()
+    imported_runs_third = [r for r in runs_third if r.run_group == "imported_answer_runs"]
+    assert len(imported_runs_third) == 3
+    assert {r.label for r in imported_runs_third} == {
+        "imported:1:agentic",
+        "imported:2:sources_only",
+        "imported:3:agentic",
+    }
