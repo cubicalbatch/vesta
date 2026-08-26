@@ -358,3 +358,52 @@ async def test_warmup_emits_reading_status_before_first_token(
     # Turn completed → the runtime's last_used was stamped (D4).
     assert fake.used >= 1
     assert isinstance(events[-1], DoneEvent)
+
+
+# ── (g) UsageLimitExceeded keeps the main run's tokens in the trace ─────────
+
+
+@pytest.mark.asyncio
+async def test_usage_limit_crash_keeps_main_run_tokens(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The streaming driver threads a ``RunUsage`` accumulator into
+    ``run_stream`` (like ``run_one_turn``), so a mid-run
+    ``UsageLimitExceeded`` keeps whatever tokens the main run already burned.
+    The trace then reports main-run + recovery tokens, not recovery alone."""
+
+    async def burn_stream(messages: list[ModelMessage], info: Any) -> AsyncIterator[Any]:
+        has_return = any(
+            isinstance(m, ModelRequest)
+            and any(getattr(p, "part_kind", None) == "tool-return" for p in m.parts)
+            for m in messages
+        )
+        if not has_return:
+            # Round 0 completes as a real billed request: a search tool call.
+            yield {0: DeltaToolCall(name="search", json_args='{"query": "Einstein"}')}
+            return
+        if False:  # make this an async generator so function.py can peek it
+            yield None
+        raise UsageLimitExceeded("request limit hit")
+
+    burn = FunctionModel(function=_dummy_request, stream_function=burn_stream)
+    monkeypatch.setattr(agent_chat, "_make_model", lambda *a, **k: burn)
+    events = await _collect(state, "Einstein")
+
+    # The crash recovered via the no-tool fallback (answer_reset → token).
+    resets = [e for e in events if isinstance(e, AnswerResetEvent)]
+    assert len(resets) == 1 and resets[0].reason == "fallback"
+
+    trace = dict(next(e for e in events if isinstance(e, TraceEvent)).trace)
+
+    # Control: identical recovery path, but the main run crashes before any
+    # request completes — its trace holds recovery tokens only. The burn run
+    # must report strictly more, proving the main-run usage was retained.
+    instant = _stub_model(crash_stream=True)
+    monkeypatch.setattr(agent_chat, "_make_model", lambda *a, **k: instant)
+    ctrl_events = await _collect(state, "Einstein")
+    ctrl_trace = dict(next(e for e in ctrl_events if isinstance(e, TraceEvent)).trace)
+
+    assert trace["total_tokens"] > ctrl_trace["total_tokens"]
+    assert trace["input_tokens"] > 0
+    assert trace["output_tokens"] > 0

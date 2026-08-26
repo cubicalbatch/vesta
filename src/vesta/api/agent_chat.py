@@ -2619,6 +2619,10 @@ async def iter_agent_turn_events(  # noqa: PLR0912, PLR0915
                 ctx.user_message,
                 message_history=message_history or None,
                 usage_limits=UsageLimits(request_limit=_REQUEST_LIMIT),
+                # Threaded like run_one_turn so a UsageLimitExceeded /
+                # overflow mid-stream keeps whatever tokens the main run
+                # burned before crashing; recovery folds on top of it.
+                usage=usage,
             ) as result:
                 # Tool-round statuses were collected into ctx.status_buf during
                 # __aenter__ (the search/read_article closures append there).
