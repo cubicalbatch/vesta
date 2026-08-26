@@ -273,6 +273,15 @@
 		heroInputEl?.focus();
 	}
 
+	/** Deleting the currently-open conversation from history must drop the
+	 *  session's id — a follow-up would POST it and 404 (the row is gone).
+	 *  Mirrors "New question": abort, blank state, c= out of the URL. Only in
+	 *  AI mode: sources mode never shows this conversation, and resetting
+	 *  there would wipe results the user is looking at. */
+	function conversationDeleted(id: number) {
+		if (mode === 'ai' && id === session.conversationId) newQuestion();
+	}
+
 	// ── Re-seed from an external navigation ──────────────────────────────────
 	/** Re-seed mode/query/scope/conversation from the URL and run whatever it
 	 *  implies. Called for genuine external navigations only (the self-write
@@ -394,7 +403,7 @@
 	</button>
 </div>
 
-<AskHistory bind:open={historyOpen} />
+<AskHistory bind:open={historyOpen} onDeleted={conversationDeleted} />
 
 <!-- Hidden once a conversation is live: AskTurn's own per-turn follow-up
      form takes over continuing it, and "New question" above brings this

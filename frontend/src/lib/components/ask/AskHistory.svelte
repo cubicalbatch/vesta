@@ -7,7 +7,10 @@
 	import { lockBodyScroll } from '$lib/scroll-lock';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 
-	let { open = $bindable(false) }: { open: boolean } = $props();
+	let {
+		open = $bindable(false),
+		onDeleted
+	}: { open: boolean; onDeleted?: (id: number) => void } = $props();
 
 	let items = $state<ConversationSummary[]>([]);
 	let loading = $state(false);
@@ -30,6 +33,10 @@
 		try {
 			await conversationsApi.remove(id);
 			items = items.filter((c) => c.id !== id);
+			// The orchestrator must drop its live session if THIS conversation
+			// is the one on screen — otherwise every follow-up 404s on the
+			// deleted id.
+			onDeleted?.(id);
 		} catch {
 			// leave the row — the user can retry
 		}

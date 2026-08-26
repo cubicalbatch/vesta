@@ -71,6 +71,25 @@ export function transportErrorEvent(message: string): WireEvent {
 	};
 }
 
+/** Non-2xx: fold the response body's reason into the synthetic error message
+ *  so the UI shows e.g. "HTTP 404: conversation 17 not found" instead of a
+ *  bare status. FastAPI errors are `{"detail": "..."}`; anything else is
+ *  surfaced trimmed and raw. */
+async function describeHttpError(response: Response): Promise<string> {
+	let reason = '';
+	try {
+		const text = (await response.text()).trim();
+		try {
+			reason = (JSON.parse(text) as { detail?: string }).detail ?? text;
+		} catch {
+			reason = text;
+		}
+	} catch {
+		// body unreadable — the bare status is all we have
+	}
+	return reason ? `HTTP ${response.status}: ${reason}` : `HTTP ${response.status}`;
+}
+
 /** Fetches an SSE endpoint and yields parsed wire events, GET or POST alike. */
 export async function* fetchEventStream(
 	url: string,
@@ -97,7 +116,7 @@ export async function* fetchEventStream(
 	options.onResponse?.(response);
 
 	if (!response.ok || !response.body) {
-		yield transportErrorEvent(`HTTP ${response.status}`);
+		yield transportErrorEvent(await describeHttpError(response));
 		return;
 	}
 
