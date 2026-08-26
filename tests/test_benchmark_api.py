@@ -355,6 +355,37 @@ async def test_run_invalid_system_400(
     assert resp.status_code == 400
 
 
+@pytest.mark.asyncio
+async def test_run_unknown_profile_404(
+    app_with_db: tuple[httpx.AsyncClient, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AUDIT_0824 B5: an explicit unknown profile is a 404, never a silent
+    lexical run pinned with the wrong hash."""
+    client, _ = app_with_db
+    monkeypatch.setattr("vesta.api.bench.make_judge_llm", lambda _s, _m: (None, None))
+    resp = await client.post(
+        "/api/bench/run",
+        json={"systems": ["retrieval_only"], "profiles": ["no_such_profile"], "models": ["m"]},
+    )
+    assert resp.status_code == 404
+    assert "no_such_profile" in resp.json()["detail"]
+
+
+def test_profile_hash_matches_loader_and_rejects_unknown() -> None:
+    """``_profile_hash`` pins the loader's content hash for known profiles and
+    errors (404) on unknown ones — empty stays the unset-axis sentinel."""
+    from fastapi import HTTPException
+
+    from vesta.retrieval.profiles import BUILTIN_PROFILES
+
+    assert bench._profile_hash("") == ""
+    assert bench._profile_hash("lexical") == BUILTIN_PROFILES["lexical"].hash
+    assert bench._profile_hash("hybrid") == BUILTIN_PROFILES["hybrid"].hash
+    with pytest.raises(HTTPException) as excinfo:
+        bench._profile_hash("no_such_profile")
+    assert excinfo.value.status_code == 404
+
+
 # ── GET /runs/{id} detail ──────────────────────────────────────────────────
 
 

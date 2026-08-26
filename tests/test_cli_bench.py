@@ -880,3 +880,13 @@ async def test_verify_support_respects_bound_and_short_circuit(
     # Same extraction set+count as the serial implementation: second sources of
     # q2/q3 skipped by the short-circuit.
     assert sorted(extracted) == [("q0", "a"), ("q1", "b"), ("q2", "c1"), ("q3", "d1")]
+
+
+def test_resolve_profile_unknown_exits_cleanly(cli_db: Database) -> None:
+    """AUDIT_0824 B5: an explicit unknown --profile exits with a clean message
+    instead of silently running the lexical profile; known names resolve."""
+    state = _fake_state(cli_db)
+    p = cli._resolve_profile(state, "lexical")
+    assert p.name == "lexical"
+    with pytest.raises(SystemExit, match="no_such_profile"):
+        cli._resolve_profile(state, "no_such_profile")

@@ -301,7 +301,12 @@ async def get_run(request: Request, run_id: int) -> EvalRunDetail:
 
 
 def _resolve_profile(state: AppState, name: str) -> RetrievalProfile | None:
-    """Resolve a profile name against user-saved + built-in profiles."""
+    """Resolve a profile name against user-saved + built-in profiles.
+
+    Returns ``None`` for an unknown explicit name — the caller turns that
+    into a 404; there is no silent fallback (an unset name is defaulted by
+    the caller before this is reached).
+    """
     try:
         blob = str(app_config.get(RETRIEVAL_PROFILES))
         from vesta.retrieval.profiles import load_user_profiles
@@ -309,12 +314,7 @@ def _resolve_profile(state: AppState, name: str) -> RetrievalProfile | None:
         users = load_user_profiles(blob)
     except Exception:
         users = {}
-    resolved = resolve_profile(name, users)
-    if resolved is not None:
-        return resolved
-    from vesta.retrieval.profiles import load_profile
-
-    return load_profile("lexical")
+    return resolve_profile(name, users)
 
 
 def _placeholder_record(

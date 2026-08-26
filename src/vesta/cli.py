@@ -84,7 +84,12 @@ from vesta.eval.runner import (
 )
 from vesta.index import INDEX_EMBEDDER, reseed_indexed_state, set_indexed_state
 from vesta.index import bind_runtime as bind_index_runtime
-from vesta.retrieval.profiles import RetrievalProfile, load_profile, resolve_profile
+from vesta.retrieval.profiles import (
+    BUILTIN_PROFILES,
+    RetrievalProfile,
+    load_profile,
+    resolve_profile,
+)
 from vesta.vectors import VECTORS_OVERSAMPLE, VECTORS_QUANTIZER, bind_store
 from vesta.vectors.sqlite_vec_store import SqliteVecStore
 from vesta.zim import bind_registry
@@ -1670,12 +1675,13 @@ async def _open_runtime(  # noqa: PLR0915
 
 
 def _resolve_profile(state: AppState, name: str) -> RetrievalProfile:
-    """Resolve a profile name (user-saved shadow builtins), fall back to lexical."""
+    """Resolve a profile name (user-saved shadow builtins); unknown → clean exit."""
     del state  # registry not needed for profile resolution
     p = resolve_profile(name)
-    if p is not None:
-        return p
-    return load_profile("lexical")  # type: ignore[return-value]
+    if p is None:
+        known = ", ".join(sorted(BUILTIN_PROFILES))
+        raise SystemExit(f"profile {name!r} not found; known profiles: {known}")
+    return p
 
 
 # The API runner is the single pipeline-runner implementation (the CLI's

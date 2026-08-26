@@ -16,8 +16,9 @@ Three behaviors, each previously broken:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
+import httpx
 import pytest
 
 from vesta import config as app_config
@@ -194,3 +195,28 @@ async def test_legacy_row_without_status_reads_done(db: Database) -> None:
     runs = await store.list_runs()
     assert len(runs) == 1
     assert runs[0].status == "done"
+
+
+# ── AUDIT_0824 B5: unknown profile errors instead of silent lexical ────────
+
+
+@pytest.mark.usefixtures("_settings")
+def test_resolve_profile_returns_none_for_unknown() -> None:
+    """The resolver returns ``None`` for an unknown explicit name (the route
+    turns that into a 404) and still resolves built-ins."""
+    known = eval_api._resolve_profile(cast(Any, None), "lexical")
+    assert known is not None
+    assert known.name == "lexical"
+    assert eval_api._resolve_profile(cast(Any, None), "no_such_profile") is None
+
+
+@pytest.mark.asyncio
+async def test_run_unknown_profile_is_404(app_client: httpx.AsyncClient) -> None:
+    """POST /api/eval/run with a bogus profile must 404 — pre-fix it silently
+    ran the lexical profile and reported it as the requested one."""
+    resp = await app_client.post(
+        "/api/eval/run",
+        json={"profile": "no_such_profile", "golden_set": "fixture_subset"},
+    )
+    assert resp.status_code == 404
+    assert "no_such_profile" in resp.json()["detail"]

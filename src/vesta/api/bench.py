@@ -82,7 +82,7 @@ from vesta.inference import (
     INFERENCE_LLM_ENDPOINT_URL,
     INFERENCE_LLM_MODEL,
 )
-from vesta.retrieval.profiles import load_profile, resolve_profile
+from vesta.retrieval.profiles import resolve_profile
 
 
 async def _find_archive_by_name(state: AppState, zim: str) -> Any:
@@ -1772,10 +1772,16 @@ def _resolve_matrix(body: BenchRunRequest) -> tuple[list[str], list[str], list[s
 
 
 def _profile_hash(name: str) -> str:
-    """Resolve a profile name to its content hash (empty when unresolvable)."""
+    """Resolve a profile name to its content hash (empty for the unset axis).
+
+    An explicit unknown profile is an error (404) — never silently pinned to
+    the lexical hash.
+    """
     if not name:
         return ""
-    p = resolve_profile(name) or load_profile("lexical")
+    p = resolve_profile(name)
+    if p is None:
+        raise HTTPException(status_code=404, detail=f"profile {name!r} not found")
     return str(getattr(p, "hash", "") or "")
 
 
