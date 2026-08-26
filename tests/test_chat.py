@@ -710,6 +710,33 @@ class TestErrorTerminalStream:
         turns = [(m["role"], m["content"]) for m in detail.json()["messages"]]
         assert turns == [("user", "test"), ("assistant", "half an answer")]
 
+    @pytest.mark.asyncio
+    async def test_setup_failure_before_first_event_persists_assistant_row(
+        self, app_client_with_zim: tuple[httpx.AsyncClient, int], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-LLM exception raised while setting the stream up (capability
+        probe, history reconstruction) — after the user row is written but
+        before a single event streams — must still persist the assistant turn
+        (empty content: nothing had accumulated) and end the wire on ``error``.
+        Without this the question dangles with no answer row at all."""
+        import vesta.api.chat as chat_module
+
+        def boom() -> frozenset:
+            raise RuntimeError("capability probe exploded")
+
+        monkeypatch.setattr(chat_module, "compute_capabilities", boom)
+
+        client, _ = app_client_with_zim
+        resp = await client.post("/api/chat", json={"query": "test"})
+        assert resp.status_code == 200
+        names = [name for name, _ in _parse_sse(resp.text)]
+        assert names[-1] == "error"
+        assert "done" not in names
+
+        detail = await client.get(f"/api/conversations/{int(resp.headers['X-Conversation-Id'])}")
+        turns = [(m["role"], m["content"]) for m in detail.json()["messages"]]
+        assert turns == [("user", "test"), ("assistant", "")]
+
 
 # ── The local runtime in the answer path ─────────────────────────────────────
 

@@ -96,8 +96,9 @@ async def chat(request: Request, body: ChatRequest) -> StreamingResponse:
 
     ``X-Conversation-Id`` is available immediately. History is loaded, the user
     turn is persisted, the answer is streamed, and the assistant turn is
-    persisted once the stream ends — including a failed turn, which records
-    the question plus whatever partial answer accumulated.
+    persisted once the stream ends — including a failed turn (even one that
+    dies before the first token), which records the question plus whatever
+    partial answer accumulated.
     """
     if not body.query or not body.query.strip():
         raise HTTPException(status_code=400, detail="query must not be empty")
@@ -218,45 +219,55 @@ async def _run_chat_turn(
     trace_dict: dict[str, object] | None = None
     started = time.monotonic()
 
-    capabilities = compute_capabilities()
-    try:
-        sn = app_config.snapshot()
-    except RuntimeError:
-        sn = None
-
-    if Capability.LLM in capabilities:
-        model_history = _to_model_history(history)
-        event_gen = iter_agent_turn_events(
-            state,
-            sn,
-            body.query,
-            message_history=model_history or None,
-            profile_override=body.profile,
-            scope=body.scope,
-        )
-    else:
-        # No LLM: keep the sources_only degradation (test app + offline first-run).
-        event_gen = iter_answer_events(
-            state, body.query, body.scope, body.profile, None, history=history
-        )
     stream_failure: Exception | None = None
-    async with contextlib.aclosing(cast(AsyncGenerator[object], event_gen)) as events:
+    event_gen: AsyncIterator[object] | None = None
+    try:
+        capabilities = compute_capabilities()
         try:
-            async for event in events:
-                yield _serialize_event(event)
-                if isinstance(event, ErrorEvent):
-                    # Ordering rule 8 (docs/sse-protocol.md): an error event
-                    # terminates the stream. Stop consuming upstream (a
-                    # well-behaved emitter returns here anyway) so nothing can
-                    # follow it on this layer's wire.
-                    break
-                answer_parts, final_answer, source_cards, trace_dict = _absorb_turn_event(
-                    event, answer_parts, final_answer, source_cards, trace_dict
-                )
-        except Exception as exc:
-            # The turn died mid-stream. Remember why, persist whatever exists
-            # below, then re-raise so the wrapper emits the terminal error.
-            stream_failure = exc
+            sn = app_config.snapshot()
+        except RuntimeError:
+            sn = None
+
+        if Capability.LLM in capabilities:
+            model_history = _to_model_history(history)
+            event_gen = iter_agent_turn_events(
+                state,
+                sn,
+                body.query,
+                message_history=model_history or None,
+                profile_override=body.profile,
+                scope=body.scope,
+            )
+        else:
+            # No LLM: keep the sources_only degradation (test app + offline first-run).
+            event_gen = iter_answer_events(
+                state, body.query, body.scope, body.profile, None, history=history
+            )
+    except Exception as exc:
+        # Setup died before a single event streamed (capability probe, history
+        # reconstruction). Same contract as a mid-stream death: remember why,
+        # let the persistence below write the (empty) assistant turn so the
+        # question is not left dangling without an answer row, then re-raise.
+        stream_failure = exc
+
+    if event_gen is not None:
+        async with contextlib.aclosing(cast(AsyncGenerator[object], event_gen)) as events:
+            try:
+                async for event in events:
+                    yield _serialize_event(event)
+                    if isinstance(event, ErrorEvent):
+                        # Ordering rule 8 (docs/sse-protocol.md): an error event
+                        # terminates the stream. Stop consuming upstream (a
+                        # well-behaved emitter returns here anyway) so nothing can
+                        # follow it on this layer's wire.
+                        break
+                    answer_parts, final_answer, source_cards, trace_dict = _absorb_turn_event(
+                        event, answer_parts, final_answer, source_cards, trace_dict
+                    )
+            except Exception as exc:
+                # The turn died mid-stream. Remember why, persist whatever exists
+                # below, then re-raise so the wrapper emits the terminal error.
+                stream_failure = exc
 
     # 4. Persist the assistant turn. tokens_in/out stay null — no tokenizer runs
     #    in the request path; the trace carries the full detail for analysis.
