@@ -17,6 +17,7 @@ from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 
 from vesta import config as app_config
+from vesta.api.answer import _parse_scope
 from vesta.api.state import AppState, app_state
 from vesta.config.capabilities import compute_capabilities
 from vesta.retrieval import (
@@ -25,7 +26,6 @@ from vesta.retrieval import (
     RETRIEVAL_MAX_ARCHIVES_CONCURRENT,
     RETRIEVAL_PROFILES,
 )
-from vesta.retrieval.contracts import Scope as RetScope
 from vesta.retrieval.pipeline import Deps, NoCandidatesError, run_pipeline
 from vesta.retrieval.profiles import (
     RetrievalProfile,
@@ -82,7 +82,11 @@ class SearchResponse(BaseModel):
 async def search(
     request: Request,
     q: str = Query(..., description="Query string (question or bare search term)"),
-    scope: str | None = Query(None, description='Comma-separated zim_ids, e.g. "1,3"'),
+    scope: str | None = Query(
+        None,
+        description='Comma-separated zim_ids or archive names/filenames, e.g. "1,3" '
+        'or "wikipedia_en_top"',
+    ),
     profile: str | None = Query(None, description="Profile name override"),
 ) -> SearchResponse:
     """Run the retrieval pipeline and return source cards + trace."""
@@ -98,17 +102,11 @@ async def search(
     if retrieval_profile is None:
         raise RuntimeError(f"profile {profile_name!r} not found; no profiles loaded")
 
-    # Parse scope (explicit zim_ids only; corpus_labels are not exposed on the
-    # wire yet — they resolve through the registry when set on a retrieval Scope).
-    from contextlib import suppress
-
-    zim_ids: frozenset[int] | None = None
-    if scope:
-        with suppress(ValueError):
-            zim_ids = frozenset(int(s.strip()) for s in scope.split(",") if s.strip())
-
-    ret_scope = RetScope(zim_ids=zim_ids)
-
+    # Parse scope via the shared parser (same contract as /api/answer): bare
+    # integer zim_ids or archive name/filename tokens resolved against the
+    # registry. An unresolvable token degrades to a matches-nothing scope —
+    # never silently to the whole corpus.
+    ret_scope = _parse_scope(scope, state.registry)
     # Build deps. The fan-out semaphore is sized from retrieval.max_archives_concurrent
     # ("async fan-out needs a bound") — NOT the libzim read pool, which is
     # a separate concern (blocking-read threads vs concurrent archive searches).

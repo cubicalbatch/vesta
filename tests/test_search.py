@@ -88,3 +88,56 @@ async def test_search_no_candidates_returns_empty_not_500(
     # Trace is still present and well-formed even on the empty path.
     assert body["trace"]["version"] == 1
     assert body["profile_hash"]
+
+
+@pytest.mark.asyncio
+async def test_search_name_form_scope_resolves_archive(
+    app_client_with_zim: tuple[httpx.AsyncClient, int],
+) -> None:
+    """The documented archive-name/filename scope form works on /api/search
+    exactly as on /api/answer: ``?scope=tiny.zim`` resolves through the
+    registry instead of silently unscoping."""
+    client, _zim_id = app_client_with_zim
+    resp = await client.get(
+        "/api/search", params={"q": "Einstein", "profile": "lexical", "scope": "tiny.zim"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["cards"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_search_mixed_name_and_id_scope(
+    app_client_with_zim: tuple[httpx.AsyncClient, int],
+) -> None:
+    """A mixed name + bare-id scope parses fully — neither token may poison
+    the parse into dropping the whole scope."""
+    client, zim_id = app_client_with_zim
+    resp = await client.get(
+        "/api/search",
+        params={"q": "Einstein", "profile": "lexical", "scope": f"tiny,{zim_id}"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["cards"]) >= 1
+    assert {c["zim_id"] for c in body["cards"]} == {zim_id}
+
+
+@pytest.mark.asyncio
+async def test_search_malformed_scope_matches_nothing_not_everything(
+    app_client_with_zim: tuple[httpx.AsyncClient, int],
+) -> None:
+    """An unresolvable scope token must degrade to a matches-nothing scope
+    (the NoCandidatesError empty outcome) — never silently widen to an
+    unscoped search over every enabled archive, which is what the retired
+    ``suppress(ValueError)`` parse did."""
+    client, _zim_id = app_client_with_zim
+    resp = await client.get(
+        "/api/search",
+        params={"q": "Einstein", "profile": "lexical", "scope": "not_a_real_archive"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["cards"] == []
+    # The explainable-empty path preserves a well-formed trace.
+    assert body["trace"]["version"] == 1
