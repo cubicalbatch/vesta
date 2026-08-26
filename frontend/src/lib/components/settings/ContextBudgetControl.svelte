@@ -1,6 +1,5 @@
 <script lang="ts">
-	// Composite control writing the context pair atomically
-	// — the HowThoroughControl/THOROUGH_KEYS pattern applied to
+	// Composite control writing the context pair atomically —
 	// answer.agent.context_profile + inference.local.context_size. There is
 	// no separate "mode" field: the selected preset is *derived* from the
 	// shared draft pair, so editing either key anywhere (here, the AI
@@ -66,7 +65,7 @@
 		matchContextPreset(profileValue, values[CONTEXT_SIZE_KEY] ?? '', isLocal)
 	);
 
-	// Same Custom reveal semantics as HowThoroughControl.
+	// "Custom" reveals the sub-controls even before any edit happens.
 	let manuallyExpanded = $state(false);
 	const showSubcontrols = $derived(manuallyExpanded || currentPresetId === 'custom');
 	const displayedId = $derived(manuallyExpanded ? 'custom' : currentPresetId);

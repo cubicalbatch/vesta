@@ -54,32 +54,7 @@ RETRIEVAL_MAX_ARCHIVES_CONCURRENT = setting(
     max=64,
     hot=True,
 )
-RETRIEVAL_CANDIDATES_MAX_ARTICLES = setting(
-    "retrieval.candidates.max_articles",
-    int,
-    20,
-    group="Retrieval / Candidates",
-    help="Maximum articles read and split for passage generation. Caps the "
-    "dominant Stage B latency cost.",
-    min=1,
-    max=100,
-    hot=True,
-)
-RETRIEVAL_CONTEXT_BUDGET_TOKENS = setting(
-    "retrieval.context.budget_tokens",
-    int,
-    12000,
-    group="Retrieval / Context",
-    help="Evidence-token budget for the answer prompt. This is a latency "
-    "budget on CPU: ~4 s of prefill per 1000 tokens. "
-    "Raised from 2400: at 2400, a strongly-matching but long "
-    "article (multiple candidate passages) could only ever contribute 2 "
-    "passages total, which is not enough headroom for the article's actual "
-    "answer to reliably be among them.",
-    min=256,
-    max=32000,
-    hot=True,
-)
+
 API_ALLOW_PROFILE_OVERRIDE = setting(
     "api.allow_profile_override",
     bool,
@@ -87,86 +62,6 @@ API_ALLOW_PROFILE_OVERRIDE = setting(
     group="API",
     help="Allow ?profile= query param to override the active retrieval profile "
     "(dev console and eval harness use this; disable for production).",
-    hot=True,
-)
-RETRIEVAL_STAGE_B_CANDIDATES_MAX = setting(
-    "retrieval.stage_b.candidates_max",
-    int,
-    200,
-    group="Retrieval / Stage B",
-    help="Defensive cap on passages entering Stage B1's static-embedder pass. "
-    "Mirrored as static_pass.Params.candidates_max in the standard profile.",
-    min=1,
-    max=2000,
-    hot=True,
-)
-RETRIEVAL_STAGE_B_SHORTLIST = setting(
-    "retrieval.stage_b.shortlist",
-    int,
-    20,
-    group="Retrieval / Stage B",
-    help="Stage B1's output shortlist size, fed to Stage B2. Mirrored "
-    "as static_pass.Params.shortlist in the standard profile.",
-    min=1,
-    max=200,
-    hot=True,
-)
-RETRIEVAL_RERANK_ENABLED = setting(
-    "retrieval.rerank.enabled",
-    bool,
-    True,
-    group="Retrieval / Stage B",
-    help="Stage B2 cross-encoder rerank A/B toggle. "
-    "Ships on by default; if "
-    "the golden-set A/B measures negative, a rerank-disabled profile becomes "
-    "the default and this flips. Mirrored as cross_encoder.Params.enabled.",
-    hot=True,
-)
-RETRIEVAL_CONTEXT_MAX_PER_ARTICLE = setting(
-    "retrieval.context.max_per_article",
-    int,
-    4,
-    group="Retrieval / Context",
-    help="Default per-article passage cap for context assembly. Mirrored as "
-    "each assembler's Params.max_per_article in the built-in profiles. "
-    "Raised from 2 alongside the budget_tokens increase — see "
-    "that setting's help text.",
-    min=1,
-    max=50,
-    hot=True,
-)
-RETRIEVAL_CONTEXT_ORDERING = setting(
-    "retrieval.context.ordering",
-    str,
-    "score_desc",
-    group="Retrieval / Context",
-    help="Where the strongest evidence lands in the assembled prompt. "
-    "'score_desc': rank order. 'edges': strongest "
-    "passages at both ends, weakest in the middle. Mirrored as every "
-    "assembler's Params.ordering.",
-    choices=("score_desc", "edges"),
-    hot=True,
-)
-RETRIEVAL_DENSE_K = setting(
-    "retrieval.dense.k",
-    int,
-    40,
-    group="Retrieval / Dense",
-    help="Top-k dense (vector kNN) candidates the Stage A3 ``vector_knn`` source "
-    "returns per query. Same order of magnitude as the lexical "
-    "sources' limit so RRF fusion is balanced. Mirrored as vector_knn.Params.k.",
-    min=1,
-    max=200,
-    hot=True,
-)
-RETRIEVAL_DENSE_ENABLED = setting(
-    "retrieval.dense.enabled",
-    bool,
-    True,
-    group="Retrieval / Dense",
-    help="Stage A3 dense source A/B toggle (mirrors retrieval.rerank.enabled's "
-    "shape). Ships on by default; on a depth-0 box the VECTORS capability is "
-    "unmet so the profile drops vector_knn regardless (degrade-don't-fail).",
     hot=True,
 )
 
@@ -190,17 +85,7 @@ for _module_name in (
 __all__ = [
     "API_ALLOW_PROFILE_OVERRIDE",
     "RETRIEVAL_ACTIVE_PROFILE",
-    "RETRIEVAL_CANDIDATES_MAX_ARTICLES",
-    "RETRIEVAL_CONTEXT_BUDGET_TOKENS",
-    "RETRIEVAL_CONTEXT_MAX_PER_ARTICLE",
-    "RETRIEVAL_CONTEXT_ORDERING",
-    "RETRIEVAL_DENSE_ENABLED",
-    "RETRIEVAL_DENSE_K",
     "RETRIEVAL_MAX_ARCHIVES_CONCURRENT",
-    "RETRIEVAL_PROFILES",
-    "RETRIEVAL_RERANK_ENABLED",
-    "RETRIEVAL_STAGE_B_CANDIDATES_MAX",
-    "RETRIEVAL_STAGE_B_SHORTLIST",
     "TRACE_VERSION",
     "DegradationRecord",
     "StageCtx",

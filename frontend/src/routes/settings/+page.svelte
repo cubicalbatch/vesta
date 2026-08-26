@@ -16,11 +16,10 @@
 	import { settingsApi } from '$lib/api/settings';
 	import { ApiError } from '$lib/api/client';
 	import { healthStore } from '$lib/stores/health.svelte';
-	import { BASIC, THOROUGH_KEYS } from '$lib/settings-basic';
+	import { BASIC } from '$lib/settings-basic';
 	import { CONTEXT_KEYS } from '$lib/context-profile';
 	import { groupSettings } from '$lib/settings-groups';
 	import { buildSaveMessage } from '$lib/settings-copy';
-	import HowThoroughControl from '$lib/components/settings/HowThoroughControl.svelte';
 	import type { SettingSchemaItem } from '$lib/types';
 	import ContextBudgetControl from '$lib/components/settings/ContextBudgetControl.svelte';
 	import SettingSectionView from '$lib/components/settings/SettingSectionView.svelte';
@@ -43,10 +42,10 @@
 	let saving = $state(false);
 	let saveError = $state<string | null>(null);
 	let saveMessage = $state<string | null>(null);
-	// Bumped on Discard and after a successful Save to force-remount
-	// HowThoroughControl — it keeps one piece of UI-only local state (whether
-	// "Custom" was manually revealed) that a value reset should also clear,
-	// not just the draft values themselves.
+	// Bumped on Discard and after a successful Save to force-remount the
+	// composite controls — ContextBudgetControl keeps one piece of UI-only
+	// local state (whether "Custom" was manually revealed) that a value reset
+	// should also clear, not just the draft values themselves.
 	let formVersion = $state(0);
 
 	$effect(() => {
@@ -70,14 +69,10 @@
 	const originalValues = $derived(normalizeValues(settingsValuesStore.values));
 	const dirtyKeys = $derived(Object.keys(draft).filter((k) => draft[k] !== (originalValues[k] ?? '')));
 
-	const thoroughItems = $derived(
-		THOROUGH_KEYS.map((k) => schemaByKey[k]).filter((i): i is SettingSchemaItem => Boolean(i))
-	);
 	const contextItems = $derived(
 		CONTEXT_KEYS.map((k) => schemaByKey[k]).filter((i): i is SettingSchemaItem => Boolean(i))
 	);
 	const contextValues = $derived(Object.fromEntries(CONTEXT_KEYS.map((k) => [k, draft[k] ?? ''])));
-	const thoroughValues = $derived(Object.fromEntries(THOROUGH_KEYS.map((k) => [k, draft[k] ?? ''])));
 
 	function isBasicField(key: string): boolean {
 		return BASIC.includes(key);
@@ -323,16 +318,6 @@
 					to plain settings — every underlying key is also listed, and editable directly, under "All settings".
 				</p>
 				<div class="mt-2">
-					{#if thoroughItems.length === THOROUGH_KEYS.length}
-						{#key formVersion}
-							<HowThoroughControl
-								items={thoroughItems}
-								values={thoroughValues}
-								{errors}
-								onChange={handleChange}
-							/>
-						{/key}
-					{/if}
 					{#if contextItems.length === CONTEXT_KEYS.length}
 						{#key formVersion}
 							<ContextBudgetControl

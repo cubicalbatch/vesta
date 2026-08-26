@@ -39,7 +39,7 @@ original sqlite-vec-only harness, so both backends see the identical corpus):
       the other 24 — this directly targets the switch trigger's literal
       wording ("a single archive exceeding ~5M vectors"), rather than diluting
       the worst case by spreading evenly. Searches are scoped to that single big
-      zim_id (k=40, matching ``retrieval.dense.k``'s default), which is exactly
+      zim_id (k=40, matching vector_knn.Params.k's default), which is exactly
       "can it scan the largest single archive". Because
       every search in this harness is scoped to exactly one archive, the vec0
       "k is applied per PARTITION KEY" semantics
@@ -111,7 +111,7 @@ DIM = 384  # onnx-community/granite-embedding-small-english-r2-ONNX (default `em
 NUM_ZIMS = 25
 BIG_ZIM_ID = 1  # holds ~90% of the corpus — the "single large archive" case
 UPSERT_BATCH = 10_000
-SEARCH_K = 40  # retrieval.dense.k default
+SEARCH_K = 40  # vector_knn.Params.k default
 NUM_SEARCH_QUERIES = 100
 NUM_COLD_QUERIES = 5  # each preceded by an explicit page-cache drop — expensive, keep small
 RECALL_SAMPLE_QUERIES = 20  # first N of the query sequence, checked against brute-force exact

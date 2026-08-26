@@ -41,8 +41,8 @@ export interface ContextPreset {
 	sizeTokens: number;
 }
 
-/** Lightest → heaviest, the same left-to-right convention as
- *  HowThoroughControl's Fast/Balanced/Thorough pills. */
+/** Lightest → heaviest, the same left-to-right convention as the
+ *  ContextBudgetControl pills below the settings form. */
 export const CONTEXT_PRESETS: ContextPreset[] = [
 	{ id: 'lean', label: 'Lean', profile: '8k', sizeTokens: 8192 },
 	{ id: 'balanced', label: 'Balanced', profile: '16k', sizeTokens: 16384 },

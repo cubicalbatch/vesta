@@ -44,8 +44,8 @@ class VectorKnn:
     requires: ClassVar[frozenset[Capability]] = frozenset({Capability.VECTORS})
 
     class Params(BaseModel):
-        k: int = 40
-        enabled: bool = True  # mirrors retrieval.dense.enabled for a quick A/B toggle
+        #: A/B toggle: False drops this source without removing it from the profile.
+        enabled: bool = True
 
     def __init__(
         self,

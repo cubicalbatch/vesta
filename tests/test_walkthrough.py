@@ -503,10 +503,9 @@ class _CaptureBudgetAssembler:
 
     Proves the pipeline's ``token_total`` is a non-binding ceiling — matching
     ``max_per_article``'s established pattern — so a profile's own
-    ``Params.budget_tokens`` is always authoritative. A prior bug read the live
-    ``retrieval.context.budget_tokens`` setting (default 12000, was 2400) as a real
-    ceiling, silently clamping every profile's larger budget (e.g.
-    ``standard``'s 12 000 tokens) back down to 2400.
+    ``Params.budget_tokens`` is always authoritative. A prior bug bound the
+    pipeline's ceiling to a global default (2400), silently clamping every
+    profile's larger budget (e.g. ``standard``'s 12 000 tokens) back down.
     """
 
     requires = frozenset()
@@ -538,8 +537,8 @@ class TestBudgetCeiling:
         profile = make_profile(assembler=ProfileComponent(impl="capture_budget", params={}))
         await run_pipeline(profile=profile, query="test query", scope=Scope(), deps=_deps())
         assert len(_captured_budgets) == 1
-        # far above any plausible retrieval.context.budget_tokens value
-        # (default 12000, was 2400) — the pipeline must not bind the assembler to it.
+        # far above any plausible pipeline-side ceiling — the pipeline must
+        # not bind the assembler to it.
         assert _captured_budgets[0].token_total >= 100_000
 
 

@@ -54,11 +54,11 @@ class StaticPass:
 
     class Params(BaseModel):
         #: Defensive bound on the incoming passage count before embedding
-        #: (``retrieval.stage_b.candidates_max`` — Traps: "an unbounded pool
-        #: will hurt"; the passage builder already caps at ~200, this is a
-        #: second, cheap bound in case a future builder does not).
+        #: (Traps: "an unbounded pool will hurt"; the passage builder already
+        #: caps at ~200, this is a second, cheap bound in case a future
+        #: builder does not).
         candidates_max: int = 200
-        #: Output shortlist size fed to Stage B2 (``retrieval.stage_b.shortlist``).
+        #: Output shortlist size fed to Stage B2.
         shortlist: int = 20
         #: Guarantee the lead passage of an article whose title exactly
         #: matches the query text (case/whitespace-insensitive) a seat in the

@@ -11,7 +11,7 @@
 // (not fails) the live assertion when nothing answers — CI-without-a-backend
 // is a normal context for this suite, not an error state.
 import { describe, expect, it } from 'vitest';
-import { BASIC, CONTEXT_KEYS, THOROUGH_KEYS } from './settings-basic';
+import { BASIC, CONTEXT_KEYS } from './settings-basic';
 
 const BACKEND = process.env.VESTA_TEST_BACKEND ?? 'http://127.0.0.1:5586';
 
@@ -45,15 +45,6 @@ describe.skipIf(!reachable)('BASIC allowlist vs. live GET /api/settings/schema',
 		const liveKeys = new Set(data.settings.map((s) => s.key));
 
 		const missing = BASIC.filter((k) => !liveKeys.has(k));
-		expect(missing).toEqual([]);
-	});
-
-	it('the "How thorough" composite\'s backing keys also exist live', async () => {
-		const res = await fetch(`${BACKEND}/api/settings/schema`);
-		const data = (await res.json()) as { settings: { key: string }[] };
-		const liveKeys = new Set(data.settings.map((s) => s.key));
-
-		const missing = THOROUGH_KEYS.filter((k) => !liveKeys.has(k));
 		expect(missing).toEqual([]);
 	});
 

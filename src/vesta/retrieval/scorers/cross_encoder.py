@@ -34,8 +34,7 @@ class CrossEncoderScorer:
     requires: ClassVar[frozenset[Capability]] = frozenset({Capability.CROSS_ENCODER})
 
     class Params(BaseModel):
-        #: The A/B toggle: default mirrors the global
-        #: ``retrieval.rerank.enabled`` setting. False makes this scorer a
+        #: The A/B toggle. False makes this scorer a
         #: passthrough without removing it from the profile — a quick way to
         #: disable reranking from a saved profile's param form without hand-
         #: editing YAML. The DoD's actual A/B is a profile edit

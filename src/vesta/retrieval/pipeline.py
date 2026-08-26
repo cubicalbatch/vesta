@@ -45,17 +45,13 @@ if TYPE_CHECKING:
     from vesta.zim.registry import ArchiveRegistry
     from vesta.zim.types import Passage
 
-#: ``retrieval.context.max_per_article``/``retrieval.context.budget_tokens``
-#: are *mirrored* defaults for the dev console's
-#: generated profile-editor form, not pipeline-enforced ceilings — the
-#: assembler's own ``Params.max_per_article``/``Params.budget_tokens``
+#: The assembler's own ``Params.max_per_article``/``Params.budget_tokens``
 #: (profile-level) is the real control (matching ``ordering``/``dedup``, which
 #: are entirely profile-owned already). The pipeline supplies non-binding
 #: ceilings here so the assembler's ``min(budget, params)`` always defers to
-#: the profile value — otherwise a profile requesting a bigger budget than
-#: whatever the global setting happens to hold (default 2400) would be
-#: silently clamped back down, defeating e.g. ``wide_context``'s 10 000-token
-#: budget out of the box.
+#: the profile value — otherwise any pipeline-side cap would silently clamp a
+#: profile requesting a bigger budget, defeating e.g. ``wide_context``'s
+#: 10 000-token budget out of the box.
 _MAX_PER_ARTICLE_UNCAPPED = 1_000
 _TOKEN_BUDGET_UNCAPPED = 1_000_000
 

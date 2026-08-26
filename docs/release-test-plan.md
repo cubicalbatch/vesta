@@ -408,12 +408,9 @@ representative sample.
 ### P8.1 Basic view and composites
 
 1. `/settings` → Basic view shows a handful of fields plus: the **AI** section
-   (top), **How thorough** (Fast/Balanced/Thorough pills → writes
-   `retrieval.stage_b.shortlist` + `retrieval.context.max_per_article`; Custom
-   reveals the raw fields), and **Answer speed & memory** (already exercised in
-   P5.3).
-2. Toggle **How thorough** to Thorough → save → `GET /api/settings` reflects
-   the two keys. Toggle back to Balanced.
+   (top) and **Answer speed & memory** (already exercised in P5.3).
+2. Toggle **Answer speed & memory** to another preset → save → `GET /api/settings`
+   reflects both keys. Toggle back.
 3. **Evidence**: `GET /api/settings` diff.
 
 ### P8.2 All-settings view, groups, validation
