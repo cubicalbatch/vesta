@@ -227,3 +227,23 @@ async def test_empty_upsert_is_noop(store: tuple[Database, SqliteVecStore]) -> N
     _db, s = store
     await s.upsert([])
     assert (await s.stats()).total_rows == 0
+
+
+@pytest.mark.asyncio
+async def test_upsert_raises_when_ddl_rejected(
+    store: tuple[Database, SqliteVecStore], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AUDIT_0824 N25: if this sqlite-vec build rejects every dim-table DDL
+    variant, upsert must fail the build loudly — never silently drop the batch
+    and let the index finish 'complete' with zero vectors."""
+    db, s = store
+    await _seed_zims_articles(db, [1], [(10, 1)])
+    monkeypatch.setattr(
+        s,
+        "_ddl_candidates",
+        lambda dim: (
+            f"CREATE VIRTUAL TABLE IF NOT EXISTS vectors_d{dim} USING vec0(not_an_option)",
+        ),
+    )
+    with pytest.raises(RuntimeError, match="rejected all DDL variants"):
+        await s.upsert([_row(1, 1, 10, [1.0] * 8)])

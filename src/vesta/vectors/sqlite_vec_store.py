@@ -127,7 +127,14 @@ class SqliteVecStore:
             by_dim.setdefault(dim, []).append(r)
         for dim, group in by_dim.items():
             if not await self._ensure_dim_table(dim):
-                continue
+                # AUDIT_0824 N25: vec0 is loaded (checked above), so False here
+                # means this build rejected every DDL variant. Fabricating a
+                # vectorless 'complete' index would be worse than failing the
+                # build loudly.
+                raise RuntimeError(
+                    f"vectors: cannot create {_table_for(dim)} — "
+                    "sqlite-vec build rejected all DDL variants"
+                )
             table = _table_for(dim)
             async with self._db.write() as conn:
                 for r in group:
