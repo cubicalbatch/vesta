@@ -56,6 +56,11 @@ class SearchToolResult:
     ``confidence`` lets a recovery round re-check confidence against what
     the query actually found. ``trace`` carries the retrieval pipeline trace
     (per-stage ``duration_ms``) so the answer trace can show where time went.
+    ``candidates_text`` holds any extra candidate-article blocks (term-surfaced
+    titles, reformulated-article visibility) that were appended to ``text`` —
+    a harness that re-renders ``passages`` instead of using ``text`` verbatim
+    (the agent's search driver) re-attaches this so surfaced articles still
+    reach the model. Empty when no recovery block fired.
 
     A composition root's ``search`` callable MAY return a bare ``str`` instead
     (see :data:`SearchFn`) — every test fake does, and the agent's search driver
@@ -68,6 +73,7 @@ class SearchToolResult:
     cards: tuple[SourceCard, ...] = ()
     confidence: ConfidenceSignals | None = None
     trace: dict[str, object] | None = None
+    candidates_text: str = ""
 
 
 #: Type aliases for the injected callables. Both are async. ``search`` returns

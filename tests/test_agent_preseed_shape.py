@@ -83,11 +83,19 @@ def _card(i: int, snippet: str) -> SourceCard:
 class FakeToolRuntime:
     """The tool-runtime surface _do_search/read_article dispatch to."""
 
-    def __init__(self, passages: list[ScoredPassage], cards: list[SourceCard]):
+    def __init__(
+        self,
+        passages: list[ScoredPassage],
+        cards: list[SourceCard],
+        candidates_text: str = "",
+    ):
         from vesta.answer.tools import SearchToolResult
 
         self._result = SearchToolResult(
-            text="formatted", passages=tuple(passages), cards=tuple(cards)
+            text="formatted",
+            passages=tuple(passages),
+            cards=tuple(cards),
+            candidates_text=candidates_text,
         )
         self.search_calls: list[str] = []
         self.search_exact_calls: list[str] = []
@@ -504,3 +512,37 @@ async def test_evidence_directive_strong_8k_turn1_still_fits(
     assert estimate_tokens_for_chars(len(ctx.sys_prompt) + len(ctx.user_message)) <= (
         ctx.budget.window_tokens - ctx.budget.output_reserve
     )
+
+
+# ── N10: candidate-block re-attach on the agent's search branch ─────────────
+
+
+_CANDIDATE_BLOCK = (
+    "\n\nArticles found by searching individual terms (use read_article to "
+    'open any that look relevant):\n- "Habenula" (a/x)'
+)
+
+
+async def test_candidate_blocks_re_attached_to_agent_search_text(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The composition root's search spends real latency on term-surfacing /
+    Round-0 reformulation rungs that append candidate-article titles ONLY to
+    ``SearchToolResult.text``. The agent's ``_do_search`` re-renders passages
+    instead of using that text, so it must re-attach ``candidates_text``
+    (AUDIT_0824 N10) — and an empty ``candidates_text`` must leave the
+    rendered text byte-identical to the pre-fix path."""
+    monkeypatch.setattr(agent_chat, "_make_model", lambda *a, **k: _stub_model())
+
+    _patch_runtime(monkeypatch, FakeToolRuntime(_passages(), _cards()))
+    ctx = await agent_chat._build_turn(state, make_snapshot(), _QUESTION)
+    baseline = await ctx._do_search(_QUESTION, compact=True)
+
+    _patch_runtime(
+        monkeypatch,
+        FakeToolRuntime(_passages(), _cards(), candidates_text=_CANDIDATE_BLOCK),
+    )
+    ctx_surfaced = await agent_chat._build_turn(state, make_snapshot(), _QUESTION)
+    text = await ctx_surfaced._do_search(_QUESTION, compact=True)
+
+    assert text == baseline + _CANDIDATE_BLOCK

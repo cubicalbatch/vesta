@@ -896,13 +896,14 @@ def _build_tool_runtime(
                 )
 
             text = format_search_result(result, archive_labels=archive_labels)
+            candidates_text = ""
             if appended_cards:
                 # Model visibility for the appended articles: the pre-seed
                 # text renders only the top passages, so union-appended cards
                 # would be invisible to the model without this block. Same
                 # shape as the tool-path term candidates (iter 10) — titles +
                 # read_article calls, never score-merged passages.
-                text += _format_term_candidates(
+                block = _format_term_candidates(
                     [
                         _TermCandidate(title=c.title, zim_id=c.zim_id, path=str(c.path))
                         for c in appended_cards
@@ -913,6 +914,8 @@ def _build_tool_runtime(
                         "look relevant):"
                     ),
                 )
+                text += block
+                candidates_text += block
 
             if shorten:
                 # Surface individual-term candidates when the result is still
@@ -938,7 +941,9 @@ def _build_tool_runtime(
                         scope=tool_scope,
                         deps=tool_deps,
                     )
-                    text += _format_term_candidates(term_candidates)
+                    block = _format_term_candidates(term_candidates)
+                    text += block
+                    candidates_text += block
 
             # Return the structured result too (not just the formatted
             # string) so the agentic loop can merge tool-round evidence into
@@ -950,6 +955,7 @@ def _build_tool_runtime(
                 cards=result.cards,
                 confidence=result.confidence,
                 trace=result.trace.to_dict(),
+                candidates_text=candidates_text,
             )
         except Exception as exc:
             return SearchToolResult(text=f"[search failed: {exc}]")

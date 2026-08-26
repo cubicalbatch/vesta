@@ -1443,6 +1443,13 @@ class _TurnContext:
                 dropped += 1
                 text = _render(shown)
             self.preseed_dropped = dropped
+        # The recovery rungs inside the composition root's search callable
+        # (term-surfacing, Round-0 reformulation visibility) append their
+        # candidate-article titles only to ``result.text``. This branch
+        # re-renders from passages instead of using that text, so without
+        # this re-attach the surfaced articles never reach the model while
+        # their retrieval latency is still paid.
+        text += result.candidates_text
         self.calls.append(ToolCallLog(query=query, result_preview=text[:300]))
         return text
 
