@@ -12,7 +12,7 @@ const STOPWORDS = new Set([
 	'are', 'was', 'were', 'what', 'who', 'when', 'where', 'why', 'how'
 ]);
 
-export function contentWords(query: string): string[] {
+function contentWords(query: string): string[] {
 	return query
 		.toLowerCase()
 		.split(/[^a-z0-9]+/)

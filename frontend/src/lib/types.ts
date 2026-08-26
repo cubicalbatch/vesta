@@ -146,12 +146,6 @@ export interface JobRecord {
 	finished_at: string | null;
 }
 
-export type JobProgressDelta = Pick<JobRecord, 'id' | 'progress' | 'total' | 'message' | 'status'>;
-
-export type JobStreamEvent =
-	| { event: 'snapshot'; data: JobRecord }
-	| { event: 'progress'; data: JobProgressDelta }
-	| { event: 'status'; data: JobRecord };
 
 // Mirrors ArchiveOut in src/vesta/api/zims.py.
 export type IndexStatus = 'none' | 'running' | 'paused' | 'complete' | 'stale' | 'error';
@@ -257,17 +251,6 @@ export interface CatalogState {
 	available: boolean;
 }
 
-export interface IndexEstimate {
-	depth: number;
-	articles: number;
-	seconds_low: number;
-	seconds_expected: number;
-	seconds_high: number;
-	disk_bytes_low: number;
-	disk_bytes_expected: number;
-	disk_bytes_high: number;
-	calibrated: boolean;
-}
 
 export interface ScanResult {
 	added: number[];
