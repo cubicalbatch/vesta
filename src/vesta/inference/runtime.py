@@ -25,7 +25,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 
@@ -71,6 +71,40 @@ _ROUTER_STATES = frozenset({"unloaded", "loading", "loaded", "sleeping"})
 
 class LlmRuntimeError(RuntimeError):
     """The runtime cannot reach a ready local model (D2 no-match, load failure)."""
+
+
+class InFlightContext:
+    """Context manager guarding in-flight generations against idle-unload (I5).
+
+    Usable as both a synchronous and asynchronous context manager. Holds fire
+    on the idle watchdog while active, and stamps ``last_used`` on entry and exit.
+    """
+
+    def __init__(self, runtime: Any) -> None:
+        self._runtime = runtime
+
+    def __enter__(self) -> InFlightContext:
+        self._runtime.acquire_generation()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
+        self._runtime.release_generation()
+
+    async def __aenter__(self) -> InFlightContext:
+        return self.__enter__()
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
+        self.__exit__(exc_type, exc_val, exc_tb)
 
 
 @dataclass(frozen=True)
@@ -167,6 +201,8 @@ class LlmRuntime:
         #: NEVER by status polling, or the UI's poll loop would keep the model
         #: alive forever (D4, upstream issue #23096's failure mode).
         self._last_used: float | None = None
+        #: Count of active in-flight generations (I5).
+        self._in_flight: int = 0
 
     # ── Resolution ───────────────────────────────────────────────────────────
 
@@ -329,6 +365,29 @@ class LlmRuntime:
         completed turn, never from status polling (D4)."""
         self._last_used = time.monotonic()
 
+    @property
+    def in_flight_count(self) -> int:
+        """The number of generations currently in flight (I5)."""
+        return self._in_flight
+
+    def acquire_generation(self) -> None:
+        """Track the start of an LLM generation call (I5)."""
+        self._in_flight += 1
+        self.mark_used()
+
+    def release_generation(self) -> None:
+        """Track the completion of an LLM generation call (I5)."""
+        self._in_flight = max(0, self._in_flight - 1)
+        self.mark_used()
+
+    def in_flight(self) -> InFlightContext:
+        """Context manager guarding a generation from idle-unload (I5).
+
+        Safe under sync and async contexts. Holds fire on the idle watchdog
+        while active, and updates ``last_used`` on entry and exit.
+        """
+        return InFlightContext(self)
+
     async def rebuild(self, snapshot: SettingsSnapshot, *, force_restart: bool = False) -> None:
         """Settings changed — take the cheapest correct action (D7).
 
@@ -481,12 +540,11 @@ class LlmRuntime:
     async def _tick(self) -> None:
         if self._last_used is None or self._source() == "remote":
             return
-        # Never idle-collect while a load is in flight (D4's "next question
-        # transparently respawns it"): ``ensure_ready`` holds ``_load_lock``
-        # from spawn to ``mark_used``, and ``last_used`` is stale until then —
-        # a tick in that window would SIGTERM the freshly spawned child with
-        # the *pre-respawn* idle age.
-        if self._load_lock.locked() or self._state == "loading":
+        # Never idle-collect while a load or generation is in flight (D4/I5):
+        # ``ensure_ready`` holds ``_load_lock`` from spawn to ``mark_used``,
+        # and active generations are tracked via ``_in_flight`` — an idle
+        # tick during generation would unload or SIGTERM the child mid-answer.
+        if self._load_lock.locked() or self._state == "loading" or self._in_flight > 0:
             return
         idle = time.monotonic() - self._last_used
         unload_after = int(self._snapshot.get(INFERENCE_LOCAL_IDLE_UNLOAD_SECONDS))
@@ -557,6 +615,7 @@ class LlmRuntime:
 
 
 __all__ = [
+    "InFlightContext",
     "LlmRuntime",
     "LlmRuntimeError",
     "LlmStatus",

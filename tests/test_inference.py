@@ -448,6 +448,61 @@ class TestOpenAIGateway:
         assert result.output_tokens == 0
         assert result.total_tokens == 0
 
+    @pytest.mark.asyncio
+    async def test_chat_stream_guards_in_flight_and_marks_used(self) -> None:
+        """AUDIT_0824 I5: chat_stream tracks in-flight generation and stamps mark_used."""
+        from fixtures.llm_runtime import FakeLlmRuntime
+
+        runtime = FakeLlmRuntime()
+        gw = OpenAIGateway(base_url="http://localhost:8081/v1", api_key="test", runtime=runtime)  # type: ignore[arg-type]
+
+        mock_chunks = [
+            _mock_chunk("Hello", None),
+            _mock_chunk(" world", "stop"),
+        ]
+        mock_stream = MockAsyncIterator(mock_chunks)
+
+        in_flight_seen: list[int] = []
+        with patch.object(
+            gw._client.chat.completions, "create", new_callable=AsyncMock
+        ) as mock_create:
+            mock_create.return_value = mock_stream
+            async for _ in gw.chat_stream(
+                [ChatMessage(role="user", content="hi")], model="test-model"
+            ):
+                in_flight_seen.append(runtime.in_flight_count)
+
+        assert in_flight_seen == [1, 1]
+        assert runtime.in_flight_count == 0
+        # mark_used stamped on entry, chunks, exit
+        assert runtime.used >= 3
+
+    @pytest.mark.asyncio
+    async def test_chat_once_guards_in_flight_and_marks_used(self) -> None:
+        """AUDIT_0824 I5: chat_once tracks in-flight generation and stamps mark_used."""
+        from fixtures.llm_runtime import FakeLlmRuntime
+
+        runtime = FakeLlmRuntime()
+        gw = OpenAIGateway(base_url="http://localhost:8081/v1", api_key="test", runtime=runtime)  # type: ignore[arg-type]
+
+        mock_resp = MagicMock()
+        mock_resp.choices = [MagicMock()]
+        mock_resp.choices[0].message.content = "answer"
+        mock_resp.choices[0].finish_reason = "stop"
+        mock_resp.usage = None
+
+        with patch.object(
+            gw._client.chat.completions, "create", new_callable=AsyncMock
+        ) as mock_create:
+            mock_create.return_value = mock_resp
+            result = await gw.chat_once(
+                [ChatMessage(role="user", content="hi")], model="test-model"
+            )
+
+        assert result.text == "answer"
+        assert runtime.in_flight_count == 0
+        assert runtime.used >= 2
+
 
 class TestExtractUsage:
     def test_extract_usage_from_object(self) -> None:

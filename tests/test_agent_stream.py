@@ -360,6 +360,40 @@ async def test_warmup_emits_reading_status_before_first_token(
     assert isinstance(events[-1], DoneEvent)
 
 
+@pytest.mark.asyncio
+async def test_streaming_turn_guards_in_flight_and_updates_used(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AUDIT_0824 I5: streaming agent turn tracks in-flight generation and stamps mark_used."""
+    from fixtures.llm_runtime import FakeLlmRuntime
+
+    fake = FakeLlmRuntime()
+    monkeypatch.setattr("vesta.inference.get_runtime", lambda: fake)
+
+    in_flight_during_stream: list[int] = []
+
+    def _make_tracking_model(*args: Any, **kwargs: Any) -> Any:
+        async def _stream(messages: list[ModelMessage], info: Any) -> AsyncIterator[str]:
+            in_flight_during_stream.append(fake.in_flight_count)
+            yield "Albert Einstein was a physicist [1]."
+
+        return FunctionModel(
+            function=lambda *a, **k: ModelResponse(
+                parts=[TextPart(content="Albert Einstein was a physicist [1].")]
+            ),
+            stream_function=_stream,
+        )
+
+    monkeypatch.setattr(agent_chat, "_make_model", _make_tracking_model)
+
+    events = await _collect(state, "Einstein")
+
+    assert in_flight_during_stream == [1]
+    assert fake.in_flight_count == 0
+    assert fake.used >= 2
+    assert isinstance(events[-1], DoneEvent)
+
+
 # ── (g) UsageLimitExceeded keeps the main run's tokens in the trace ─────────
 
 

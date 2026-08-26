@@ -16,6 +16,7 @@ faster for encoder work and the embedder must be pinned for index integrity).
 
 from __future__ import annotations
 
+import contextlib
 import time
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ from openai import AsyncOpenAI
 
 if TYPE_CHECKING:
     from vesta.inference.local import LlamaServerSupervisor
+    from vesta.inference.runtime import LlmRuntime
 
 
 @dataclass(frozen=True)
@@ -205,11 +207,13 @@ class OpenAIGateway:
         base_url: str,
         api_key: str,
         supervisor: LlamaServerSupervisor | None = None,
+        runtime: LlmRuntime | None = None,
         timeout: float = 120.0,
     ) -> None:
         self._base_url = base_url
         self._api_key = api_key
         self._supervisor = supervisor
+        self._runtime = runtime
         self._timeout = timeout
         self._client = AsyncOpenAI(
             base_url=base_url,
@@ -251,15 +255,30 @@ class OpenAIGateway:
         """
         self._supervisor = supervisor
 
+    def attach_runtime(self, runtime: LlmRuntime | None) -> None:
+        """Attach or swap the bound LLM runtime for in-flight tracking (I5)."""
+        self._runtime = runtime
+
+    def _resolve_runtime(self) -> Any:
+        if self._runtime is not None:
+            return self._runtime
+        try:
+            from vesta.inference import get_runtime
+
+            return get_runtime()
+        except Exception:
+            return None
+
     def reconfigure(
         self,
         *,
         base_url: str,
         api_key: str,
         supervisor: LlamaServerSupervisor | None = None,
+        runtime: LlmRuntime | None = None,
         timeout: float | None = None,
     ) -> None:
-        """Update gateway configuration (base URL, API key, supervisor).
+        """Update gateway configuration (base URL, API key, supervisor, runtime).
 
         Rebuilds the underlying ``AsyncOpenAI`` client so requests route to
         the new endpoint with the new authentication.
@@ -269,6 +288,8 @@ class OpenAIGateway:
         self._base_url = base_url
         self._api_key = api_key
         self._supervisor = supervisor
+        if runtime is not None:
+            self._runtime = runtime
         self._client = AsyncOpenAI(
             base_url=base_url,
             api_key=api_key or "not-set",
@@ -298,53 +319,64 @@ class OpenAIGateway:
         it entirely.
         """
         await self._ensure_ready()
-        openai_messages = [{"role": m.role, "content": m.content} for m in messages]
-        kwargs: dict[str, Any] = {"stream_options": {"include_usage": True}}
-        if enable_thinking is not None:
-            kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": enable_thinking}}
-        if timeout is not None:
-            kwargs["timeout"] = timeout
-        stream = await self._client.chat.completions.create(
-            model=model,
-            messages=cast("Any", openai_messages),
-            temperature=temperature,
-            max_tokens=max_tokens,
-            stream=True,
-            **kwargs,
+        rt = self._resolve_runtime()
+        ctx = (
+            rt.in_flight()
+            if (rt is not None and hasattr(rt, "in_flight"))
+            else contextlib.nullcontext()
         )
-        # The final chunk (choices empty, usage populated) carries the token
-        # counts when include_usage is honoured; yield it so downstream token
-        # accounting sees it. Endpoints that ignore stream_options simply never
-        # populate usage — all deltas stay at 0, which is correct.
-        # ``last_finish`` is carried onto the usage delta: answer strategies
-        # read ``.finish_reason`` from the last delta to detect a
-        # ``length``-truncated answer, and the usage chunk (empty choices,
-        # finish None) must not overwrite the content chunk's real finish.
-        last_finish: str | None = None
-        async for chunk in stream:
-            usage = _extract_usage(chunk)
-            if not chunk.choices:
-                if usage[2] > 0:
-                    yield ChatDelta(
-                        text="",
-                        finish_reason=last_finish,
-                        input_tokens=usage[0],
-                        output_tokens=usage[1],
-                        total_tokens=usage[2],
-                    )
-                continue
-            choice = chunk.choices[0]
-            delta = choice.delta
-            text = delta.content if delta and delta.content else ""
-            finish = choice.finish_reason
-            last_finish = finish
-            yield ChatDelta(
-                text=text,
-                finish_reason=finish,
-                input_tokens=usage[0],
-                output_tokens=usage[1],
-                total_tokens=usage[2],
+        with ctx:
+            openai_messages = [{"role": m.role, "content": m.content} for m in messages]
+            kwargs: dict[str, Any] = {"stream_options": {"include_usage": True}}
+            if enable_thinking is not None:
+                kwargs["extra_body"] = {
+                    "chat_template_kwargs": {"enable_thinking": enable_thinking}
+                }
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            stream = await self._client.chat.completions.create(
+                model=model,
+                messages=cast("Any", openai_messages),
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=True,
+                **kwargs,
             )
+            # The final chunk (choices empty, usage populated) carries the token
+            # counts when include_usage is honoured; yield it so downstream token
+            # accounting sees it. Endpoints that ignore stream_options simply never
+            # populate usage — all deltas stay at 0, which is correct.
+            # ``last_finish`` is carried onto the usage delta: answer strategies
+            # read ``.finish_reason`` from the last delta to detect a
+            # ``length``-truncated answer, and the usage chunk (empty choices,
+            # finish None) must not overwrite the content chunk's real finish.
+            last_finish: str | None = None
+            async for chunk in stream:
+                if rt is not None and hasattr(rt, "mark_used"):
+                    rt.mark_used()
+                usage = _extract_usage(chunk)
+                if not chunk.choices:
+                    if usage[2] > 0:
+                        yield ChatDelta(
+                            text="",
+                            finish_reason=last_finish,
+                            input_tokens=usage[0],
+                            output_tokens=usage[1],
+                            total_tokens=usage[2],
+                        )
+                    continue
+                choice = chunk.choices[0]
+                delta = choice.delta
+                text = delta.content if delta and delta.content else ""
+                finish = choice.finish_reason
+                last_finish = finish
+                yield ChatDelta(
+                    text=text,
+                    finish_reason=finish,
+                    input_tokens=usage[0],
+                    output_tokens=usage[1],
+                    total_tokens=usage[2],
+                )
 
     async def chat_once(
         self,
@@ -362,43 +394,54 @@ class OpenAIGateway:
         as ``chat_template_kwargs``; ``None`` omits it).
         """
         await self._ensure_ready()
-        openai_messages = [{"role": m.role, "content": m.content} for m in messages]
-        kwargs: dict[str, Any] = {}
-        if enable_thinking is not None:
-            kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": enable_thinking}}
-        if timeout is not None:
-            kwargs["timeout"] = timeout
-        t0 = time.perf_counter()
-        resp = await self._client.chat.completions.create(
-            model=model,
-            messages=cast("Any", openai_messages),
-            temperature=temperature,
-            max_tokens=max_tokens,
-            stream=False,
-            **kwargs,
+        rt = self._resolve_runtime()
+        ctx = (
+            rt.in_flight()
+            if (rt is not None and hasattr(rt, "in_flight"))
+            else contextlib.nullcontext()
         )
-        latency_ms = (time.perf_counter() - t0) * 1000.0
-        text = ""
-        finish: str | None = None
-        choices = _extract_choices(resp)
-        if choices:
-            first = choices[0]
-            if isinstance(first, dict):
-                msg = first.get("message") or {}
-                text = str(msg.get("content") or "")
-                finish = first.get("finish_reason")
-            else:
-                text = str(first.message.content or "")
-                finish = first.finish_reason
-        in_tok, out_tok, total_tok = _extract_usage(resp)
-        return ChatResult(
-            text=text,
-            finish_reason=finish,
-            latency_ms=latency_ms,
-            input_tokens=in_tok,
-            output_tokens=out_tok,
-            total_tokens=total_tok,
-        )
+        with ctx:
+            openai_messages = [{"role": m.role, "content": m.content} for m in messages]
+            kwargs: dict[str, Any] = {}
+            if enable_thinking is not None:
+                kwargs["extra_body"] = {
+                    "chat_template_kwargs": {"enable_thinking": enable_thinking}
+                }
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            t0 = time.perf_counter()
+            resp = await self._client.chat.completions.create(
+                model=model,
+                messages=cast("Any", openai_messages),
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=False,
+                **kwargs,
+            )
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            if rt is not None and hasattr(rt, "mark_used"):
+                rt.mark_used()
+            text = ""
+            finish: str | None = None
+            choices = _extract_choices(resp)
+            if choices:
+                first = choices[0]
+                if isinstance(first, dict):
+                    msg = first.get("message") or {}
+                    text = str(msg.get("content") or "")
+                    finish = first.get("finish_reason")
+                else:
+                    text = str(first.message.content or "")
+                    finish = first.finish_reason
+            in_tok, out_tok, total_tok = _extract_usage(resp)
+            return ChatResult(
+                text=text,
+                finish_reason=finish,
+                latency_ms=latency_ms,
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+                total_tokens=total_tok,
+            )
 
     async def aclose(self) -> None:
         """Close the underlying ``AsyncOpenAI`` (httpx) client.

@@ -451,6 +451,111 @@ async def test_watchdog_tick_unloads_deterministically(
     assert runtime._state == "unloaded"
 
 
+async def test_watchdog_never_unloads_while_generation_in_flight(
+    router_server: tuple[FakeRouter, str],
+) -> None:
+    """AUDIT_0824 I5: idle-unload must hold fire while a generation is in flight."""
+    router, url = router_server
+    runtime, sup = make_runtime(
+        url,
+        local_snapshot(
+            **{
+                "inference.local.idle_unload_seconds": 1,
+                "inference.local.stop_server_after_idle_seconds": 3600,
+            }
+        ),
+    )
+    await runtime.ensure_ready()
+    assert runtime._state == "loaded"
+
+    # Idle time past threshold, but generation in flight
+    runtime._last_used = time.monotonic() - 100.0
+    with runtime.in_flight():
+        assert runtime.in_flight_count == 1
+        # Tick should not unload or stop
+        await runtime._tick()
+        assert router.unload_calls == []
+        assert sup.stop_calls == 0
+        assert runtime._state == "loaded"
+
+    # After exit, in_flight_count is 0 and last_used is stamped fresh
+    assert runtime.in_flight_count == 0
+    # Next tick immediately after exit is safe (fresh idle)
+    await runtime._tick()
+    assert router.unload_calls == []
+    assert runtime._state == "loaded"
+
+    # Once idle time passes again with no generation in flight, it unloads
+    runtime._last_used = time.monotonic() - 100.0
+    await runtime._tick()
+    assert router.unload_calls == [QWEN_ID]
+    assert runtime._state == "unloaded"
+
+
+async def test_watchdog_never_stops_server_while_generation_in_flight(
+    router_server: tuple[FakeRouter, str],
+) -> None:
+    """AUDIT_0824 I5: stop-server watchdog must hold fire while an async generation is in flight."""
+    _router, url = router_server
+    runtime, sup = make_runtime(
+        url,
+        local_snapshot(
+            **{
+                "inference.local.idle_unload_seconds": 3600,
+                "inference.local.stop_server_after_idle_seconds": 1,
+            }
+        ),
+    )
+    await runtime.ensure_ready()
+    assert sup.is_running()
+
+    runtime._last_used = time.monotonic() - 100.0
+    async with runtime.in_flight():
+        assert runtime.in_flight_count == 1
+        await runtime._tick()
+        assert sup.stop_calls == 0
+        assert runtime._state == "loaded"
+
+    assert runtime.in_flight_count == 0
+    await runtime._tick()
+    assert sup.stop_calls == 0
+
+    runtime._last_used = time.monotonic() - 100.0
+    await runtime._tick()
+    assert sup.stop_calls == 1
+    assert runtime._state == "stopped"
+
+
+async def test_in_flight_context_sync_and_async_and_concurrency(
+    router_server: tuple[FakeRouter, str],
+) -> None:
+    """InFlightContext works sync/async and handles concurrent overlapping generations."""
+    _router, url = router_server
+    runtime, _sup = make_runtime(url, local_snapshot())
+    await runtime.ensure_ready()
+
+    t_before = runtime._last_used
+    assert t_before is not None
+
+    # Sync context
+    with runtime.in_flight():
+        assert runtime.in_flight_count == 1
+        t_during = runtime._last_used
+        assert t_during is not None and t_during >= t_before
+
+    assert runtime.in_flight_count == 0
+    t_after = runtime._last_used
+    assert t_after is not None and t_after >= t_during
+
+    # Concurrent overlapping generations
+    with runtime.in_flight():
+        assert runtime.in_flight_count == 1
+        with runtime.in_flight():
+            assert runtime.in_flight_count == 2
+        assert runtime.in_flight_count == 1
+    assert runtime.in_flight_count == 0
+
+
 async def test_idle_unload_failure_does_not_latch_error_state(
     router_server: tuple[FakeRouter, str],
     tmp_path: Path,

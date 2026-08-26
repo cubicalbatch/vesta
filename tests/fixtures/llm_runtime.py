@@ -57,6 +57,8 @@ class FakeLlmRuntime:
     ready_calls: int = 0
     #: Returned by ``status()`` (a default local status when ``None``).
     status_value: LlmStatus | None = None
+    #: Count of active in-flight generations (I5).
+    in_flight_count: int = 0
 
     def target(self) -> LlmTarget:
         return LlmTarget(
@@ -90,6 +92,19 @@ class FakeLlmRuntime:
 
     def mark_used(self) -> None:
         self.used += 1
+
+    def acquire_generation(self) -> None:
+        self.in_flight_count += 1
+        self.mark_used()
+
+    def release_generation(self) -> None:
+        self.in_flight_count = max(0, self.in_flight_count - 1)
+        self.mark_used()
+
+    def in_flight(self) -> Any:
+        from vesta.inference.runtime import InFlightContext
+
+        return InFlightContext(self)
 
     async def rebuild(self, snapshot: Any, *, force_restart: bool = False) -> None:
         self.rebuild_snapshots.append(snapshot)

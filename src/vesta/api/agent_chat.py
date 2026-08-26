@@ -14,9 +14,10 @@ turn runner (``run_one_turn`` / ``iter_agent_turn_events``) remains importable.
 
 from __future__ import annotations
 
+import contextlib
 import re
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
@@ -668,6 +669,19 @@ def _mark_llm_used() -> None:
         runtime.mark_used()
 
 
+@contextlib.contextmanager
+def _in_flight_generation() -> Iterator[None]:
+    """Guard a turn against idle-unload in the bound LLM runtime (I5)."""
+    from vesta.inference import get_runtime
+
+    runtime = get_runtime()
+    if runtime is not None and hasattr(runtime, "in_flight"):
+        with runtime.in_flight():
+            yield
+    else:
+        yield
+
+
 class ToolCallLog(BaseModel):
     query: str
     result_preview: str
@@ -979,6 +993,7 @@ class _MeteredModel(Model[Any]):
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
         response = await self._inner.request(messages, model_settings, model_request_parameters)
+        _mark_llm_used()
         self._meter.record(_wire_chars(messages), response.usage)
         return response
 
@@ -994,6 +1009,7 @@ class _MeteredModel(Model[Any]):
             messages, model_settings, model_request_parameters, run_context
         ) as stream:
             yield stream
+        _mark_llm_used()
         # The consumer has finished the stream → its usage is final.
         self._meter.record(_wire_chars(messages), stream.usage)
 
@@ -2453,130 +2469,131 @@ async def run_one_turn(
     # The benchmark path warms the runtime too — no status callback
     # (there is no SSE stream here).
     await _ensure_llm_ready()
-    try:
-        ctx = await _build_turn(
-            state,
-            sn,
-            question,
-            model_id=model_id,
-            endpoint=endpoint,
-            api_key=api_key,
-            enable_thinking=enable_thinking,
-            system_prompt=system_prompt,
-            message_history=message_history,
-            profile_override=profile_override,
-            # The scope was accepted and documented but never
-            # forwarded — every bench pre-seed searched ALL enabled archives
-            # (9 on the dev box: cross-archive kNN fanout + cold cluster
-            # reads = the measured 7-14 s pre_seed vs ~2 s scoped, plus
-            # foreign-archive cards in 6/50 run-90 questions). The streaming
-            # path always passed it; only this driver omitted it.
-            scope=scope,
-        )
-        agent = ctx.build_agent(with_tools=True)
-
-        run_usage = RunUsage()
-        answer: str = ""
-        final_messages: list[ModelMessage] = message_history or []
-        crashed = False
-        # Count every context-overflow recovery (main run →
-        # no-tool fallback; fallback re-ask itself overflowing; abstention
-        # retry overflowing). Any nonzero value is a window-fit failure —
-        # an invariant that must drive to zero.
-        overflow_fallbacks = 0
+    with _in_flight_generation():
         try:
-            result = await agent.run(
-                ctx.user_message,
-                message_history=message_history or None,
-                usage_limits=UsageLimits(request_limit=_REQUEST_LIMIT),
-                usage=run_usage,
+            ctx = await _build_turn(
+                state,
+                sn,
+                question,
+                model_id=model_id,
+                endpoint=endpoint,
+                api_key=api_key,
+                enable_thinking=enable_thinking,
+                system_prompt=system_prompt,
+                message_history=message_history,
+                profile_override=profile_override,
+                # The scope was accepted and documented but never
+                # forwarded — every bench pre-seed searched ALL enabled archives
+                # (9 on the dev box: cross-archive kNN fanout + cold cluster
+                # reads = the measured 7-14 s pre_seed vs ~2 s scoped, plus
+                # foreign-archive cards in 6/50 run-90 questions). The streaming
+                # path always passed it; only this driver omitted it.
+                scope=scope,
             )
-            answer = result.output
-            final_messages = result.all_messages()
-        except UsageLimitExceeded:
-            # The model looped to the request cap without converging (a greedy 4b can
-            # repeat already-capped tool calls). Rather than crash with an empty answer,
-            # fall through to a forced single-shot answer from the pre-seed evidence.
-            # turn_cards (the initial sources) are preserved regardless of the crash.
-            crashed = True
-        except ModelHTTPError as exc:
-            if not _is_context_overflow_error(exc):
-                raise  # a real bug (bad request, auth, provider 500) — stay loud
-            # The accumulated message history exceeded the model's context window (a hard
-            # 400 from the endpoint, not a pydantic-ai-side limit). Same recovery as
-            # UsageLimitExceeded: fall through to a forced no-tool fallback against just
-            # the Round-0 pre-seed, which is far smaller than the blown-up history.
-            crashed = True
-            overflow_fallbacks += 1
+            agent = ctx.build_agent(with_tools=True)
 
-        st = _TurnRecoveryState(
-            crashed=crashed,
-            answer=answer,
-            usage=run_usage,
-            final_messages=final_messages,
-            overflow_fallbacks=overflow_fallbacks,
-        )
-        async for _event in _iter_recovery_events(
-            ctx,
-            st,
-            agent=agent,
-            message_history=message_history,
-            stream_events=False,
-        ):
-            pass  # pragma: no cover — the silent mode never yields
+            run_usage = RunUsage()
+            answer: str = ""
+            final_messages: list[ModelMessage] = message_history or []
+            crashed = False
+            # Count every context-overflow recovery (main run →
+            # no-tool fallback; fallback re-ask itself overflowing; abstention
+            # retry overflowing). Any nonzero value is a window-fit failure —
+            # an invariant that must drive to zero.
+            overflow_fallbacks = 0
+            try:
+                result = await agent.run(
+                    ctx.user_message,
+                    message_history=message_history or None,
+                    usage_limits=UsageLimits(request_limit=_REQUEST_LIMIT),
+                    usage=run_usage,
+                )
+                answer = result.output
+                final_messages = result.all_messages()
+            except UsageLimitExceeded:
+                # The model looped to the request cap without converging (a greedy 4b can
+                # repeat already-capped tool calls). Rather than crash with an empty answer,
+                # fall through to a forced single-shot answer from the pre-seed evidence.
+                # turn_cards (the initial sources) are preserved regardless of the crash.
+                crashed = True
+            except ModelHTTPError as exc:
+                if not _is_context_overflow_error(exc):
+                    raise  # a real bug (bad request, auth, provider 500) — stay loud
+                # The accumulated message history exceeded the model's context window (a hard
+                # 400 from the endpoint, not a pydantic-ai-side limit). Same recovery as
+                # UsageLimitExceeded: fall through to a forced no-tool fallback against just
+                # the Round-0 pre-seed, which is far smaller than the blown-up history.
+                crashed = True
+                overflow_fallbacks += 1
 
-        # Mirror the recovery core's mutations of st.answer unconditionally —
-        # the no-tool fallback / compact re-ask / abstention retry all write
-        # st.answer, and with cleanup off the pre-recovery binding would
-        # otherwise be returned (empty after a crash). Same rebind the
-        # streaming driver performs at its recovery boundary.
-        answer = _cleanup_answer(st.answer) if ctx.answer_cleanup else st.answer
+            st = _TurnRecoveryState(
+                crashed=crashed,
+                answer=answer,
+                usage=run_usage,
+                final_messages=final_messages,
+                overflow_fallbacks=overflow_fallbacks,
+            )
+            async for _event in _iter_recovery_events(
+                ctx,
+                st,
+                agent=agent,
+                message_history=message_history,
+                stream_events=False,
+            ):
+                pass  # pragma: no cover — the silent mode never yields
 
-        elapsed_ms = int((time.monotonic() - ctx.started) * 1000)
-        cards = sorted(ctx.turn_cards.values(), key=lambda c: c.n)
-        return TurnResult(
-            answer=answer,
-            cards=cards,
-            tool_calls=ctx.calls,
-            total_tokens=st.usage.total_tokens or 0,
-            input_tokens=st.usage.input_tokens or 0,
-            output_tokens=st.usage.output_tokens or 0,
-            elapsed_ms=elapsed_ms,
-            all_messages=st.final_messages,
-            trace={
-                # Non-streaming analogue of the streaming path's TraceEvent
-                # payload, so benchmark drivers can merge budget/steps into
-                # their per-question trace_json.
-                "system": "agentic_pydantic",
-                "followup": ctx.follow_up,
-                "budget": _budget_audit(ctx),
-                "stages": ctx.steps,
-                # Per-request accounting (measurement only).
-                # ``peak_input_tokens`` is the largest single request the
-                # endpoint actually prefilled — the quantity a context window
-                # constrains, unlike the cumulative ``input_tokens`` above.
-                "peak_input_tokens": ctx.meter.peak_input_tokens,
-                "requests": ctx.meter.requests,
-                "overflow_fallbacks": st.overflow_fallbacks,
-                "request_log": ctx.meter.request_log,
-                # The compact-reask record — fired/trigger plus
-                # the per-firing token cost (a stage entry carries the same
-                # numbers with duration).
-                "compact_reask": st.reask,
-                # How many tool calls the round cap steered
-                # away (0 when no cap / nothing blocked).
-                "round_cap_fires": ctx.round_cap_fires,
-                # What the aging wrapper actually trimmed
-                # (0/0 when aging is off or never bit).
-                "aged_requests": ctx.aging.requests,
-                "age_saved_chars": ctx.aging.saved_chars,
-                # Whether the must-state clause fired.
-                "evidence_directive": ctx.evidence_directive_trace,
-            },
-        )
-    finally:
-        # Stamp last_used on turn completion, success or failure.
-        _mark_llm_used()
+            # Mirror the recovery core's mutations of st.answer unconditionally —
+            # the no-tool fallback / compact re-ask / abstention retry all write
+            # st.answer, and with cleanup off the pre-recovery binding would
+            # otherwise be returned (empty after a crash). Same rebind the
+            # streaming driver performs at its recovery boundary.
+            answer = _cleanup_answer(st.answer) if ctx.answer_cleanup else st.answer
+
+            elapsed_ms = int((time.monotonic() - ctx.started) * 1000)
+            cards = sorted(ctx.turn_cards.values(), key=lambda c: c.n)
+            return TurnResult(
+                answer=answer,
+                cards=cards,
+                tool_calls=ctx.calls,
+                total_tokens=st.usage.total_tokens or 0,
+                input_tokens=st.usage.input_tokens or 0,
+                output_tokens=st.usage.output_tokens or 0,
+                elapsed_ms=elapsed_ms,
+                all_messages=st.final_messages,
+                trace={
+                    # Non-streaming analogue of the streaming path's TraceEvent
+                    # payload, so benchmark drivers can merge budget/steps into
+                    # their per-question trace_json.
+                    "system": "agentic_pydantic",
+                    "followup": ctx.follow_up,
+                    "budget": _budget_audit(ctx),
+                    "stages": ctx.steps,
+                    # Per-request accounting (measurement only).
+                    # ``peak_input_tokens`` is the largest single request the
+                    # endpoint actually prefilled — the quantity a context window
+                    # constrains, unlike the cumulative ``input_tokens`` above.
+                    "peak_input_tokens": ctx.meter.peak_input_tokens,
+                    "requests": ctx.meter.requests,
+                    "overflow_fallbacks": st.overflow_fallbacks,
+                    "request_log": ctx.meter.request_log,
+                    # The compact-reask record — fired/trigger plus
+                    # the per-firing token cost (a stage entry carries the same
+                    # numbers with duration).
+                    "compact_reask": st.reask,
+                    # How many tool calls the round cap steered
+                    # away (0 when no cap / nothing blocked).
+                    "round_cap_fires": ctx.round_cap_fires,
+                    # What the aging wrapper actually trimmed
+                    # (0/0 when aging is off or never bit).
+                    "aged_requests": ctx.aging.requests,
+                    "age_saved_chars": ctx.aging.saved_chars,
+                    # Whether the must-state clause fired.
+                    "evidence_directive": ctx.evidence_directive_trace,
+                },
+            )
+        finally:
+            # Stamp last_used on turn completion, success or failure.
+            _mark_llm_used()
 
 
 async def iter_agent_turn_events(  # noqa: PLR0912, PLR0915
@@ -2663,172 +2680,174 @@ async def iter_agent_turn_events(  # noqa: PLR0912, PLR0915
             model_inst = _AgedContextModel(model_inst, ctx.budget.age_tool_chars, ctx.aging)
         ctx.model = _MeteredModel(model_inst, ctx.meter)
 
-    try:
-        agent = ctx.build_agent(with_tools=True)
-
-        answer = ""
-        usage = RunUsage()
-        crashed = False
-        #: Whether the ``status_buf`` drain below ran. A crash inside
-        #: ``run_stream``'s ``__aenter__`` (a tool-round model request, e.g.
-        #: UsageLimitExceeded / context overflow on a later round) skips the
-        #: whole ``async with`` body — including that drain — so anything the
-        #: tool closures buffered (notably a follow-up turn's latched first
-        #: ``sources`` event) is still pending and must be emitted before the
-        #: fallback answer cites those cards.
-        buf_drained = False
-        # Same overflow-recovery counter as run_one_turn.
-        overflow_fallbacks = 0
-        llm_started = time.monotonic()
+    with _in_flight_generation():
         try:
-            async with agent.run_stream(
-                ctx.user_message,
-                message_history=message_history or None,
-                usage_limits=UsageLimits(request_limit=_REQUEST_LIMIT),
-                # Threaded like run_one_turn so a UsageLimitExceeded /
-                # overflow mid-stream keeps whatever tokens the main run
-                # burned before crashing; recovery folds on top of it.
-                usage=usage,
-            ) as result:
-                buf_drained = True
-                for s in ctx.status_buf:
-                    yield s
-                yield StatusEvent("generating", "Thinking…")
-                async for delta in result.stream_text(delta=True, debounce_by=None):
-                    answer += delta
-                    yield TokenEvent(delta)
-                usage = result.usage
-        except UsageLimitExceeded:
-            crashed = True
-        except ModelHTTPError as exc:
-            if _is_context_overflow_error(exc):
+            agent = ctx.build_agent(with_tools=True)
+
+            answer = ""
+            usage = RunUsage()
+            crashed = False
+            #: Whether the ``status_buf`` drain below ran. A crash inside
+            #: ``run_stream``'s ``__aenter__`` (a tool-round model request, e.g.
+            #: UsageLimitExceeded / context overflow on a later round) skips the
+            #: whole ``async with`` body — including that drain — so anything the
+            #: tool closures buffered (notably a follow-up turn's latched first
+            #: ``sources`` event) is still pending and must be emitted before the
+            #: fallback answer cites those cards.
+            buf_drained = False
+            # Same overflow-recovery counter as run_one_turn.
+            overflow_fallbacks = 0
+            llm_started = time.monotonic()
+            try:
+                async with agent.run_stream(
+                    ctx.user_message,
+                    message_history=message_history or None,
+                    usage_limits=UsageLimits(request_limit=_REQUEST_LIMIT),
+                    # Threaded like run_one_turn so a UsageLimitExceeded /
+                    # overflow mid-stream keeps whatever tokens the main run
+                    # burned before crashing; recovery folds on top of it.
+                    usage=usage,
+                ) as result:
+                    buf_drained = True
+                    for s in ctx.status_buf:
+                        yield s
+                    yield StatusEvent("generating", "Thinking…")
+                    async for delta in result.stream_text(delta=True, debounce_by=None):
+                        answer += delta
+                        _mark_llm_used()
+                        yield TokenEvent(delta)
+                    usage = result.usage
+            except UsageLimitExceeded:
                 crashed = True
-                overflow_fallbacks += 1
-            else:
-                raise  # a real bug (bad request, auth, provider 500) — stay loud
-        if crashed and not buf_drained:
-            # The crash happened inside ``run_stream``'s ``__aenter__``, so the
-            # buffered statuses — and, on a follow-up, the latched first
-            # ``sources(merge=False)`` event — never reached the client (the
-            # in-body drain above was skipped). Emit them now: the fallback
-            # answer cites these cards, and the trailing merge delta excludes
-            # exactly ``first_sources_keys``, so this is the client's only
-            # copy. Ordering stays protocol-valid (statuses + sources before
-            # any token).
-            for event in ctx.status_buf:
+            except ModelHTTPError as exc:
+                if _is_context_overflow_error(exc):
+                    crashed = True
+                    overflow_fallbacks += 1
+                else:
+                    raise  # a real bug (bad request, auth, provider 500) — stay loud
+            if crashed and not buf_drained:
+                # The crash happened inside ``run_stream``'s ``__aenter__``, so the
+                # buffered statuses — and, on a follow-up, the latched first
+                # ``sources(merge=False)`` event — never reached the client (the
+                # in-body drain above was skipped). Emit them now: the fallback
+                # answer cites these cards, and the trailing merge delta excludes
+                # exactly ``first_sources_keys``, so this is the client's only
+                # copy. Ordering stays protocol-valid (statuses + sources before
+                # any token).
+                for event in ctx.status_buf:
+                    yield event
+
+            st = _TurnRecoveryState(
+                crashed=crashed,
+                answer=answer,
+                usage=usage,
+                final_messages=[],
+                overflow_fallbacks=overflow_fallbacks,
+            )
+            async for event in _iter_recovery_events(
+                ctx,
+                st,
+                agent=agent,
+                message_history=message_history,
+                stream_events=True,
+            ):
                 yield event
+            answer = st.answer
+            usage = st.usage
+            overflow_fallbacks = st.overflow_fallbacks
 
-        st = _TurnRecoveryState(
-            crashed=crashed,
-            answer=answer,
-            usage=usage,
-            final_messages=[],
-            overflow_fallbacks=overflow_fallbacks,
-        )
-        async for event in _iter_recovery_events(
-            ctx,
-            st,
-            agent=agent,
-            message_history=message_history,
-            stream_events=True,
-        ):
-            yield event
-        answer = st.answer
-        usage = st.usage
-        overflow_fallbacks = st.overflow_fallbacks
+            if ctx.answer_cleanup:
+                cleaned_answer = _cleanup_answer(answer)
+                if cleaned_answer != answer:
+                    yield AnswerResetEvent(reason="cleanup")
+                    yield TokenEvent(cleaned_answer)
+                answer = cleaned_answer
 
-        if ctx.answer_cleanup:
-            cleaned_answer = _cleanup_answer(answer)
-            if cleaned_answer != answer:
-                yield AnswerResetEvent(reason="cleanup")
-                yield TokenEvent(cleaned_answer)
-            answer = cleaned_answer
-
-        # The model's inference wall time (thinking + tool rounds + token
-        # generation), inserted right after the pre-seed step so the breakdown
-        # reads pre_seed → agent_llm → tool calls. ``at`` places it before any
-        # search/read_article steps already recorded during ``run_stream``'s
-        # ``__aenter__`` (those tool rounds happen *inside* this window).
-        llm_ms = (time.monotonic() - llm_started) * 1000.0
-        pos = 1 if ctx.steps and ctx.steps[0]["name"] == "pre_seed" else 0
-        ctx.add_step(
-            "agent_llm",
-            "pydantic_ai",
-            llm_ms,
-            inputs={"input_tokens": usage.input_tokens or 0},
-            outputs={"output_tokens": usage.output_tokens or 0, "answer_chars": len(answer)},
-            at=pos,
-        )
-
-        # Merge event: cards discovered AFTER the first ``sources`` event, delta-only,
-        # with continuing 0-based numbering (docs/sse-protocol.md "Sources merge").
-        # ``first_sources_keys`` is the set already streamed (pre-seed on turn 1, or
-        # the first live discovery on a follow-up); everything else is a delta. On a
-        # from-context follow-up that never searched, it stays ``None`` and no cards
-        # exist anyway, so the delta is empty.
-        already_sent = ctx.first_sources_keys or set()
-        delta_cards = sorted(
-            [c for k, c in ctx.turn_cards.items() if k not in already_sent],
-            key=lambda c: c.n,
-        )
-        if delta_cards:
-            yield SourcesEvent(
-                cards=cast(tuple[SourceCard, ...], tuple(delta_cards)),
-                merge=True,
+            # The model's inference wall time (thinking + tool rounds + token
+            # generation), inserted right after the pre-seed step so the breakdown
+            # reads pre_seed → agent_llm → tool calls. ``at`` places it before any
+            # search/read_article steps already recorded during ``run_stream``'s
+            # ``__aenter__`` (those tool rounds happen *inside* this window).
+            llm_ms = (time.monotonic() - llm_started) * 1000.0
+            pos = 1 if ctx.steps and ctx.steps[0]["name"] == "pre_seed" else 0
+            ctx.add_step(
+                "agent_llm",
+                "pydantic_ai",
+                llm_ms,
+                inputs={"input_tokens": usage.input_tokens or 0},
+                outputs={"output_tokens": usage.output_tokens or 0, "answer_chars": len(answer)},
+                at=pos,
             )
 
-        if answer:
-            spans = synthesize_citation_spans(answer, len(ctx.turn_cards))
-            yield CitationsEvent(spans=tuple(spans), answer_text=answer or None)
-        else:
-            # Protocol ordering rule 8: an error event terminates the stream.
-            # No trace/done may follow a terminal error.
-            yield ErrorEvent(
-                code="budget_exhausted",
-                message="agent produced no answer",
-                recoverable=True,
+            # Merge event: cards discovered AFTER the first ``sources`` event, delta-only,
+            # with continuing 0-based numbering (docs/sse-protocol.md "Sources merge").
+            # ``first_sources_keys`` is the set already streamed (pre-seed on turn 1, or
+            # the first live discovery on a follow-up); everything else is a delta. On a
+            # from-context follow-up that never searched, it stays ``None`` and no cards
+            # exist anyway, so the delta is empty.
+            already_sent = ctx.first_sources_keys or set()
+            delta_cards = sorted(
+                [c for k, c in ctx.turn_cards.items() if k not in already_sent],
+                key=lambda c: c.n,
             )
-            return
+            if delta_cards:
+                yield SourcesEvent(
+                    cards=cast(tuple[SourceCard, ...], tuple(delta_cards)),
+                    merge=True,
+                )
 
-        trace: dict[str, object] = {
-            "system": "agentic_pydantic",
-            "followup": ctx.follow_up,
-            "elapsed_ms": int((time.monotonic() - ctx.started) * 1000),
-            "total_tokens": usage.total_tokens or 0,
-            "input_tokens": usage.input_tokens or 0,
-            "output_tokens": usage.output_tokens or 0,
-            "search_calls": ctx.search_count,
-            "read_calls": ctx.read_count,
-            "card_count": len(ctx.turn_cards),
-            "stages": ctx.steps,
-            # Per-request accounting (measurement only) — same
-            # fields as run_one_turn's trace. ``peak_input_tokens`` is the
-            # largest single prefilled request, not the cumulative total.
-            "peak_input_tokens": ctx.meter.peak_input_tokens,
-            "requests": ctx.meter.requests,
-            "overflow_fallbacks": overflow_fallbacks,
-            "request_log": ctx.meter.request_log,
-            # The compact-reask record (same fields as
-            # run_one_turn's trace).
-            "compact_reask": st.reask,
-            # Round-cap firings (same field as run_one_turn).
-            "round_cap_fires": ctx.round_cap_fires,
-            # What the aging wrapper actually trimmed (same
-            # fields as run_one_turn's trace).
-            "aged_requests": ctx.aging.requests,
-            "age_saved_chars": ctx.aging.saved_chars,
-            # Whether the must-state clause fired.
-            "evidence_directive": ctx.evidence_directive_trace,
-            # The resolved token-economy budget for this turn, so before/after
-            # comparisons are observable per run (bench --economy A/B).
-            "budget": _budget_audit(ctx),
-        }
-        yield TraceEvent(trace=trace)
-        yield DoneEvent()
-    finally:
-        # Stamp last_used on turn completion, success or failure —
-        # including a consumer abandoning the stream mid-answer.
-        _mark_llm_used()
+            if answer:
+                spans = synthesize_citation_spans(answer, len(ctx.turn_cards))
+                yield CitationsEvent(spans=tuple(spans), answer_text=answer or None)
+            else:
+                # Protocol ordering rule 8: an error event terminates the stream.
+                # No trace/done may follow a terminal error.
+                yield ErrorEvent(
+                    code="budget_exhausted",
+                    message="agent produced no answer",
+                    recoverable=True,
+                )
+                return
+
+            trace: dict[str, object] = {
+                "system": "agentic_pydantic",
+                "followup": ctx.follow_up,
+                "elapsed_ms": int((time.monotonic() - ctx.started) * 1000),
+                "total_tokens": usage.total_tokens or 0,
+                "input_tokens": usage.input_tokens or 0,
+                "output_tokens": usage.output_tokens or 0,
+                "search_calls": ctx.search_count,
+                "read_calls": ctx.read_count,
+                "card_count": len(ctx.turn_cards),
+                "stages": ctx.steps,
+                # Per-request accounting (measurement only) — same
+                # fields as run_one_turn's trace. ``peak_input_tokens`` is the
+                # largest single prefilled request, not the cumulative total.
+                "peak_input_tokens": ctx.meter.peak_input_tokens,
+                "requests": ctx.meter.requests,
+                "overflow_fallbacks": overflow_fallbacks,
+                "request_log": ctx.meter.request_log,
+                # The compact-reask record (same fields as
+                # run_one_turn's trace).
+                "compact_reask": st.reask,
+                # Round-cap firings (same field as run_one_turn).
+                "round_cap_fires": ctx.round_cap_fires,
+                # What the aging wrapper actually trimmed (same
+                # fields as run_one_turn's trace).
+                "aged_requests": ctx.aging.requests,
+                "age_saved_chars": ctx.aging.saved_chars,
+                # Whether the must-state clause fired.
+                "evidence_directive": ctx.evidence_directive_trace,
+                # The resolved token-economy budget for this turn, so before/after
+                # comparisons are observable per run (bench --economy A/B).
+                "budget": _budget_audit(ctx),
+            }
+            yield TraceEvent(trace=trace)
+            yield DoneEvent()
+        finally:
+            # Stamp last_used on turn completion, success or failure —
+            # including a consumer abandoning the stream mid-answer.
+            _mark_llm_used()
 
 
 __all__ = [
