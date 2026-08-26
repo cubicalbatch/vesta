@@ -8,6 +8,7 @@
 	// ≠ degraded first-run").
 	import type { CatalogEntry, CuratedEntry } from '$lib/types';
 	import { formatBytes, formatCount } from '$lib/format';
+	import { humanizeName } from './curated-helpers';
 	import Check from '@lucide/svelte/icons/check';
 
 	let {
@@ -32,23 +33,6 @@
 	const title = $derived(entry?.title || humanizeName(curated.name));
 	const sizeLabel = $derived(entry ? formatBytes(entry.size_bytes) : curated.size_note);
 	const count = $derived(entry?.article_count ?? curated.article_count);
-
-	const KNOWN: Record<string, string> = {
-		wikipedia: 'Wikipedia',
-		wikivoyage: 'Wikivoyage',
-		mdwiki: 'MDWiki',
-		appropedia: 'Appropedia'
-	};
-	const FLAVOURS = new Set(['nopic', 'maxi', 'mini', 'all', 'medicines']);
-
-	function humanizeName(key: string): string {
-		const parts = key.split('_').filter(Boolean);
-		if (parts.length > 1 && FLAVOURS.has(parts[parts.length - 1])) parts.pop();
-		return parts
-			.filter((p) => !/^[a-z]{2}$/.test(p)) // drop 2-letter language codes
-			.map((p) => KNOWN[p] ?? (p.charAt(0).toUpperCase() + p.slice(1)))
-			.join(' ');
-	}
 </script>
 
 <button

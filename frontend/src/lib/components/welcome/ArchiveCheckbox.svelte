@@ -7,6 +7,7 @@
 	import type { CatalogEntry, CuratedEntry } from '$lib/types';
 	import { formatBytes, formatCount } from '$lib/format';
 	import FlavourPill from '$lib/components/catalog/FlavourPill.svelte';
+	import { humanizeName, flavourFromKey } from './curated-helpers';
 
 	let {
 		curated,
@@ -24,31 +25,6 @@
 	const sizeLabel = $derived(entry ? formatBytes(entry.size_bytes) : curated.size_note);
 	const count = $derived(entry?.article_count ?? curated.article_count);
 	const flavour = $derived(entry?.flavour ?? flavourFromKey(curated.name));
-
-	const FLAVOURS = new Set(['nopic', 'maxi', 'mini', 'all']);
-
-	function flavourFromKey(key: string): string {
-		const parts = key.split('_');
-		const last = parts[parts.length - 1];
-		return FLAVOURS.has(last) ? last : '';
-	}
-
-	const KNOWN: Record<string, string> = {
-		wikipedia: 'Wikipedia',
-		wikivoyage: 'Wikivoyage',
-		mdwiki: 'MDWiki',
-		appropedia: 'Appropedia'
-	};
-	function humanizeName(key: string): string {
-		const parts = key.split('_').filter(Boolean);
-		if (parts.length > 1 && new Set([...FLAVOURS, 'medicines']).has(parts[parts.length - 1])) {
-			parts.pop();
-		}
-		return parts
-			.filter((p) => !/^[a-z]{2}$/.test(p))
-			.map((p) => KNOWN[p] ?? (p.charAt(0).toUpperCase() + p.slice(1)))
-			.join(' ');
-	}
 </script>
 
 <label
