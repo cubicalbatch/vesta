@@ -93,7 +93,7 @@ def main() -> int:
         return 0
 
     dataset_path.write_text(
-        json.dumps(dataset, indent=1, ensure_ascii=False) + "\n", encoding="utf-8"
+        json.dumps(dataset, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
     print(f"wrote {dataset_path}")
     return 0
