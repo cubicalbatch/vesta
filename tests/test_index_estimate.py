@@ -59,7 +59,23 @@ def test_uncalibrated_band_sits_above_naive_extrapolation() -> None:
     # early-short-article sample can't read as a 3x-optimistic promise.
     assert est.seconds_low > naive
     assert est.seconds_high > est.seconds_low
-    assert est.seconds_low <= est.seconds_expected <= est.seconds_high
+    # Expected time is the running per-article cost times remaining articles,
+    # NOT inflated by the pessimistic band's midpoint (AUDIT_0824 S5).
+    assert est.seconds_expected == naive
+
+
+def test_uncalibrated_expected_not_inflated_by_band_midpoint() -> None:
+    # 500 articles in 50 s -> 10 articles/s. Remaining 1500 articles -> expected = 150 s.
+    t = ThroughputTracker(total_articles=2000, depth=1)
+    t.record(500, 50.0)
+    assert not t.calibrated
+    est = t.estimate()
+    expected = 1500 / 10.0  # 150.0 s
+    assert est.seconds_expected == expected
+    # The band midpoint would have been (low + high) / 2 = (300 + 480) / 2 = 390.0 s (2.6x inflated)
+    band_midpoint = (est.seconds_low + est.seconds_high) / 2.0
+    assert est.seconds_expected != band_midpoint
+    assert est.seconds_expected == expected
 
 
 def test_calibrated_band_narrows_to_plus_minus_25pct() -> None:

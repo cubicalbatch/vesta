@@ -217,7 +217,7 @@ class ThroughputTracker:
         disk_low, disk_expected, disk_high = disk_band(self.total_articles, self.depth)
         return Estimate(
             seconds_low=low,
-            seconds_expected=(low + high) / 2,
+            seconds_expected=expected,
             seconds_high=high,
             disk_bytes_low=disk_low,
             disk_bytes_expected=disk_expected,
