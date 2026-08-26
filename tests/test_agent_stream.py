@@ -746,3 +746,55 @@ async def test_failed_abstention_retry_emits_no_dangling_reset(
     trace = dict(next(e for e in events if isinstance(e, TraceEvent)).trace)
     assert trace["overflow_fallbacks"] == 1
     _assert_no_dangling_reset(events)
+
+
+@pytest.mark.asyncio
+async def test_agent_llm_step_timing_excludes_recovery_wall_time(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The agent_llm stage records inference time of the main stream only;
+    recovery wall time (e.g. abstention retry or compact reask) is not
+    double-counted into agent_llm."""
+    import time
+
+    def slow_retry_fn(messages: list[ModelMessage], info: Any) -> ModelResponse:
+        time.sleep(0.06)  # 60ms in retry
+        return ModelResponse(parts=[TextPart(content="The answer is 42 [1].")])
+
+    monkeypatch.setattr(
+        agent_chat, "_make_model", lambda *a, **k: _abstain_model(retry_fn=slow_retry_fn)
+    )
+    events = await _collect(state, "Einstein")
+    trace = dict(next(e for e in events if isinstance(e, TraceEvent)).trace)
+    stages = trace["stages"]
+    llm_step = next(s for s in stages if s["name"] == "agent_llm")
+    # Main stream is instant (< 45ms), while retry added 60ms.
+    # If retry was included, llm_step["duration_ms"] would be >= 60ms.
+    assert llm_step["duration_ms"] < 50.0
+    assert llm_step["outputs"]["answer_chars"] == len(
+        "I cannot find the answer in the provided sources."
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_one_turn_records_agent_llm_step(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run_one_turn records the agent_llm step in ctx.steps with accurate
+    inputs/outputs, aligning batch and streaming traces."""
+    monkeypatch.setattr(agent_chat, "_make_model", lambda *a, **k: _stub_model())
+    result = await agent_chat.run_one_turn(
+        state,
+        None,
+        "Einstein",
+        model_id="test",
+        endpoint="http://test",
+    )
+    stages = result.trace["stages"]
+    stage_names = [s["name"] for s in stages]
+    assert "agent_llm" in stage_names
+    llm_step = next(s for s in stages if s["name"] == "agent_llm")
+    assert llm_step["component"] == "pydantic_ai"
+    assert "input_tokens" in llm_step["inputs"]
+    assert "output_tokens" in llm_step["outputs"]
+    assert "answer_chars" in llm_step["outputs"]

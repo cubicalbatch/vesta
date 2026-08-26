@@ -2487,6 +2487,7 @@ async def run_one_turn(
             # retry overflowing). Any nonzero value is a window-fit failure —
             # an invariant that must drive to zero.
             overflow_fallbacks = 0
+            llm_started = time.monotonic()
             try:
                 result = await agent.run(
                     ctx.user_message,
@@ -2510,6 +2511,25 @@ async def run_one_turn(
                 # the Round-0 pre-seed, which is far smaller than the blown-up history.
                 crashed = True
                 overflow_fallbacks += 1
+
+            # The model's inference wall time (thinking + tool rounds + token
+            # generation), inserted right after the pre-seed step so the breakdown
+            # reads pre_seed → agent_llm → tool calls. ``at`` places it before any
+            # search/read_article steps already recorded during ``agent.run``
+            # (those tool rounds happen *inside* this window).
+            llm_ms = (time.monotonic() - llm_started) * 1000.0
+            pos = 1 if ctx.steps and ctx.steps[0]["name"] == "pre_seed" else 0
+            ctx.add_step(
+                "agent_llm",
+                "pydantic_ai",
+                llm_ms,
+                inputs={"input_tokens": run_usage.input_tokens or 0},
+                outputs={
+                    "output_tokens": run_usage.output_tokens or 0,
+                    "answer_chars": len(answer),
+                },
+                at=pos,
+            )
 
             st = _TurnRecoveryState(
                 crashed=crashed,
@@ -2720,6 +2740,22 @@ async def iter_agent_turn_events(  # noqa: PLR0912, PLR0915
                 for event in ctx.status_buf:
                     yield event
 
+            # The model's inference wall time (thinking + tool rounds + token
+            # generation), inserted right after the pre-seed step so the breakdown
+            # reads pre_seed → agent_llm → tool calls. ``at`` places it before any
+            # search/read_article steps already recorded during ``run_stream``'s
+            # ``__aenter__`` (those tool rounds happen *inside* this window).
+            llm_ms = (time.monotonic() - llm_started) * 1000.0
+            pos = 1 if ctx.steps and ctx.steps[0]["name"] == "pre_seed" else 0
+            ctx.add_step(
+                "agent_llm",
+                "pydantic_ai",
+                llm_ms,
+                inputs={"input_tokens": usage.input_tokens or 0},
+                outputs={"output_tokens": usage.output_tokens or 0, "answer_chars": len(answer)},
+                at=pos,
+            )
+
             st = _TurnRecoveryState(
                 crashed=crashed,
                 answer=answer,
@@ -2744,22 +2780,6 @@ async def iter_agent_turn_events(  # noqa: PLR0912, PLR0915
                     yield AnswerResetEvent(reason="cleanup")
                     yield TokenEvent(cleaned_answer)
                 answer = cleaned_answer
-
-            # The model's inference wall time (thinking + tool rounds + token
-            # generation), inserted right after the pre-seed step so the breakdown
-            # reads pre_seed → agent_llm → tool calls. ``at`` places it before any
-            # search/read_article steps already recorded during ``run_stream``'s
-            # ``__aenter__`` (those tool rounds happen *inside* this window).
-            llm_ms = (time.monotonic() - llm_started) * 1000.0
-            pos = 1 if ctx.steps and ctx.steps[0]["name"] == "pre_seed" else 0
-            ctx.add_step(
-                "agent_llm",
-                "pydantic_ai",
-                llm_ms,
-                inputs={"input_tokens": usage.input_tokens or 0},
-                outputs={"output_tokens": usage.output_tokens or 0, "answer_chars": len(answer)},
-                at=pos,
-            )
 
             # Merge event: cards discovered AFTER the first ``sources`` event, delta-only,
             # with continuing 0-based numbering (docs/sse-protocol.md "Sources merge").

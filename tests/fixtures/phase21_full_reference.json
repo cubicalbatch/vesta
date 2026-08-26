@@ -62,7 +62,8 @@
   ],
   "requests_count": 1,
   "stage_names": [
-   "pre_seed"
+   "pre_seed",
+   "agent_llm"
   ],
   "tool_calls": [
    [
@@ -188,6 +189,7 @@
   "requests_count": 2,
   "stage_names": [
    "pre_seed",
+   "agent_llm",
    "read_article"
   ],
   "tool_calls": [
@@ -264,7 +266,8 @@
   ],
   "requests_count": 1,
   "stage_names": [
-   "pre_seed"
+   "pre_seed",
+   "agent_llm"
   ],
   "tool_calls": [
    [

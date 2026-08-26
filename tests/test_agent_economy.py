@@ -1022,7 +1022,7 @@ async def test_stream_answer_cleanup_resets_and_citations_use_cleaned_text(
     assert citations[0].answer_text == "The answer is 42 [1]."
     trace = next(e for e in events if isinstance(e, TraceEvent)).trace
     llm_step = next(step for step in trace["stages"] if step["name"] == "agent_llm")
-    assert llm_step["outputs"]["answer_chars"] == len("The answer is 42 [1].")
+    assert llm_step["outputs"]["answer_chars"] == len(raw)
 
 
 @pytest.mark.asyncio
