@@ -332,9 +332,11 @@ class LlmRuntime:
         if self._supervisor is not None and self._resolved_id is not None:
             try:
                 await self._post_router("/models/unload", {"model": self._resolved_id})
+                self._state = "unloaded"
             except Exception as exc:
                 _log.warning("llm.unload_failed", extra={"error": str(exc)})
-        self._state = "unloaded"
+        else:
+            self._state = "unloaded"
 
     @property
     def supervisor(self) -> LlamaServerSupervisor | None:
@@ -465,11 +467,12 @@ class LlmRuntime:
             mode, bool(self._snapshot.get(INFERENCE_LLM_ENABLE_THINKING))
         )
         context_size = int(self._snapshot.get(INFERENCE_LOCAL_CONTEXT_SIZE))
+        state = await self._live_state(installed)
         return LlmStatus(
             source="local",
             configured=bool(model),
             installed=installed,
-            state=self._live_state(installed),
+            state=state,
             model_file=model or None,
             display_name=display_name_for(model) if model else None,
             model_id=self._resolved_id,
@@ -500,17 +503,45 @@ class LlmRuntime:
             return await self._supervisor.hw_class()
         return None
 
-    def _live_state(self, installed: bool) -> str:
+    async def _live_state(self, installed: bool) -> str:
         """Best-known local state: error/absent short-circuit, then cached router
         state. An observed error outranks a missing file — the mismatch is what
-        the UI needs to explain (D2)."""
+        the UI needs to explain (D2). Probes the live router when running (I6)."""
         if self._error is not None:
             return "error"
         if not installed:
             return "absent"
         if self._supervisor is None or not self._supervisor.is_running():
             return "stopped"
+        await self._probe_router_state()
         return self._state if self._state in _ROUTER_STATES else "unloaded"
+
+    async def _probe_router_state(self) -> None:
+        """Probe ``GET /models`` to update ``_state`` and ``_resolved_id`` from the
+        live router (e.g. detecting ``sleeping`` or live transitions).
+
+        Any failure or timeout is suppressed and non-blocking — status polling
+        degrades to cached ``_state`` and never raises or hangs (I6).
+        """
+        try:
+            resp = await self._client().get("/models")
+            resp.raise_for_status()
+            data = resp.json()["data"]
+            states = {str(entry["id"]): str(entry["status"]["value"]) for entry in data}
+        except Exception:
+            return
+
+        model = self._model_file()
+        if self._resolved_id is not None and self._resolved_id not in states:
+            self._resolved_id = None
+
+        if self._resolved_id is None and model:
+            self._resolved_id = _match_model_id(model, list(states))
+
+        if self._resolved_id is not None and self._resolved_id in states:
+            router_state = states[self._resolved_id]
+            if router_state in _ROUTER_STATES:
+                self._state = router_state
 
     # ── Idle watchdog (D4) ───────────────────────────────────────────────────
 

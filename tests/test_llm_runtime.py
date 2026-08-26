@@ -659,6 +659,74 @@ async def test_status_local_never_thinking_model(
     assert target.enable_thinking is None  # send no kwargs at all
 
 
+async def test_status_probes_router_and_detects_sleeping(
+    router_server: tuple[FakeRouter, str], tmp_path: Path
+) -> None:
+    """I6: status() queries live router and reflects transitions including sleeping."""
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / f"{QWEN_ID}.gguf").touch()
+    router, url = router_server
+    runtime, _sup = make_runtime(url, local_snapshot(), models_dir=models_dir)
+    await runtime.ensure_ready()
+    status = await runtime.status()
+    assert status.state == "loaded"
+
+    # Router transitions to "sleeping" (e.g. via --sleep-idle-seconds)
+    router._statuses[QWEN_ID] = "sleeping"
+    status = await runtime.status()
+    assert status.state == "sleeping"
+    assert runtime._state == "sleeping"
+
+    # Router transitions back to "loaded" (e.g. after wake-up)
+    router._statuses[QWEN_ID] = "loaded"
+    status = await runtime.status()
+    assert status.state == "loaded"
+    assert runtime._state == "loaded"
+
+
+async def test_status_probes_router_and_resolves_id_when_unloaded(
+    router_server: tuple[FakeRouter, str], tmp_path: Path
+) -> None:
+    """status() probe resolves model_id and reflects router state before ensure_ready."""
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / f"{QWEN_ID}.gguf").touch()
+    _router, url = router_server
+    runtime, sup = make_runtime(url, local_snapshot(), models_dir=models_dir)
+    sup._running = True  # supervisor running, ensure_ready not called
+    assert runtime._resolved_id is None
+
+    status = await runtime.status()
+    assert status.state == "unloaded"
+    assert status.model_id == QWEN_ID
+    assert runtime._resolved_id == QWEN_ID
+
+
+async def test_status_router_probe_failure_falls_back_to_cached_state(
+    router_server: tuple[FakeRouter, str], tmp_path: Path
+) -> None:
+    """I6: router probe failure/timeout during status() degrades gracefully without error latch."""
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / f"{QWEN_ID}.gguf").touch()
+    _router, url = router_server
+    runtime, _sup = make_runtime(url, local_snapshot(), models_dir=models_dir)
+    await runtime.ensure_ready()
+    assert runtime._state == "loaded"
+
+    # Router URL becomes unreachable (simulate router crash / network drop)
+    runtime._router_url = "http://127.0.0.1:1"
+    if runtime._http is not None:
+        await runtime._http.aclose()
+        runtime._http = None
+
+    status = await runtime.status()  # must not raise
+    assert status.state == "loaded"  # degrades to cached state
+    assert status.error is None
+    assert runtime._error is None
+
+
 # ── rebuild (D7) ─────────────────────────────────────────────────────────────
 
 
@@ -820,7 +888,7 @@ async def test_explicit_unload_failure_does_not_latch_error_state(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Explicit unload router failure logs a warning and marks unloaded without latching error."""
+    """Explicit unload router failure logs a warning without latching error."""
     models_dir = tmp_path / "models"
     models_dir.mkdir()
     (models_dir / f"{QWEN_ID}.gguf").touch()
@@ -838,6 +906,15 @@ async def test_explicit_unload_failure_does_not_latch_error_state(
 
     assert any("llm.unload_failed" in r.getMessage() for r in caplog.records)
     assert runtime._error is None
+    assert runtime._state == "loaded"
+    status = await runtime.status()
+    assert status.state == "loaded"
+    assert status.error is None
+
+    # Next unload after router recovers successfully unloads:
+    router.fail_unload = False
+    await runtime.unload()
+    assert router.unload_calls == [QWEN_ID]
     assert runtime._state == "unloaded"
     status = await runtime.status()
     assert status.state == "unloaded"
