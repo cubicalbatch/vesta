@@ -45,6 +45,10 @@ export class AnswerSession {
 	loadingHistory = $state(false);
 
 	private controller: AbortController | null = null;
+	// Sequence token for history loads (AUDIT_0824 F4): only the newest
+	// started load (and nothing reset since) may assign priorTurns — a stale
+	// resolution must not merge another conversation into this thread.
+	private seq = 0;
 	private rootDispose: (() => void) | null = null;
 
 	/** Called when a brand-new conversation gets its id, so the orchestrator
@@ -82,9 +86,14 @@ export class AnswerSession {
 	}
 
 	async loadHistory(id: number) {
+		const token = ++this.seq;
 		this.loadingHistory = true;
 		try {
 			const detail = await conversationsApi.get(id);
+			// A newer load started or the session was reset while we were in
+			// flight: drop everything including the finally — the newer run
+			// owns loadingHistory now.
+			if (token !== this.seq) return;
 			const built: PriorTurn[] = [];
 			for (let i = 0; i < detail.messages.length; i++) {
 				const m = detail.messages[i];
@@ -97,9 +106,10 @@ export class AnswerSession {
 			}
 			this.priorTurns = built;
 		} catch {
+			if (token !== this.seq) return;
 			this.priorTurns = [];
 		} finally {
-			this.loadingHistory = false;
+			if (token === this.seq) this.loadingHistory = false;
 		}
 	}
 
@@ -136,6 +146,7 @@ export class AnswerSession {
 	 *  any in-flight stream and drops all conversation state. */
 	reset() {
 		this.controller?.abort();
+		this.seq++;
 		this.conversationId = null;
 		this.priorTurns = [];
 		this.liveTurn = null;
