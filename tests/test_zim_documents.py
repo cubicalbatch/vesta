@@ -198,6 +198,29 @@ def test_mine_documents_skips_record_whose_path_is_absent() -> None:
     assert {r.doc_path for r in records} == {"files/Water (1).pdf"}
 
 
+def test_mine_documents_with_bom_and_non_utf8_manifest() -> None:
+    """UTF-8 BOM or Windows-1252 manifests decode cleanly and preserve titles."""
+    js_bom = b"\xef\xbb\xbfvar DATABASE = [{'ti': 'Caf\xc3\xa9 Water', 'fp': ['files/a.pdf']}];"
+    items_bom = [
+        _Item("database.js", "application/javascript", js_bom),
+        _Item("files/a.pdf", "application/pdf", b"%PDF"),
+    ]
+    recs_bom = _mine_documents_sync(_FakeArchive(items_bom))
+    assert len(recs_bom) == 1
+    assert recs_bom[0].title == "Café Water"
+
+    js_cp1252 = "var DATABASE = [{'ti': 'Café “Water” — Special', 'fp': ['files/b.pdf']}];".encode(
+        "windows-1252"
+    )
+    items_cp1252 = [
+        _Item("database.js", "application/javascript", js_cp1252),
+        _Item("files/b.pdf", "application/pdf", b"%PDF"),
+    ]
+    recs_cp1252 = _mine_documents_sync(_FakeArchive(items_cp1252))
+    assert len(recs_cp1252) == 1
+    assert recs_cp1252[0].title == "Café “Water” — Special"
+
+
 async def test_build_documents_manifest_persists_and_fetch_round_trips(
     db: Database,
 ) -> None:

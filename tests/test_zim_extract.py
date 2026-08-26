@@ -10,7 +10,7 @@ from itertools import pairwise
 
 import pytest
 
-from vesta.zim.extract import _extract_pdf, extract_article, extract_entry
+from vesta.zim.extract import _extract_pdf, decode_text, extract_article, extract_entry
 from vesta.zim.types import RawEntry
 
 _SAMPLE_HTML = """<html><body>
@@ -196,3 +196,156 @@ def test_extract_pdf_garbage_or_empty_returns_empty_no_crash() -> None:
     return ``""`` so the entry drops out of the index at the keep-filter."""
     assert _extract_pdf(b"not a pdf at all") == ""
     assert _extract_pdf(b"") == ""
+
+
+# ── Charset sniffing & decoding (AUDIT_0824 Z2) ──────────────────────────────
+
+
+def test_decode_text_empty() -> None:
+    assert decode_text(b"") == ""
+
+
+def test_decode_text_utf8() -> None:
+    text = "Hello world! café ñ 日本語 中文"
+    assert decode_text(text.encode("utf-8")) == text
+
+
+def test_decode_text_utf8_with_bom() -> None:
+    content = b"\xef\xbb\xbfHello with UTF-8 BOM"
+    assert decode_text(content) == "Hello with UTF-8 BOM"
+
+
+def test_decode_text_utf16_le_and_be_with_bom() -> None:
+    text = "Hello UTF-16"
+    le_bom = b"\xff\xfe" + text.encode("utf-16-le")
+    assert decode_text(le_bom) == text
+
+    be_bom = b"\xfe\xff" + text.encode("utf-16-be")
+    assert decode_text(be_bom) == text
+
+
+def test_decode_text_utf32_le_and_be_with_bom() -> None:
+    text = "Hello UTF-32"
+    le_32_bom = b"\xff\xfe\x00\x00" + text.encode("utf-32-le")
+    assert decode_text(le_32_bom) == text
+
+    be_32_bom = b"\x00\x00\xfe\xff" + text.encode("utf-32-be")
+    assert decode_text(be_32_bom) == text
+
+
+def test_decode_text_html_meta_charset_iso8859_1() -> None:
+    html_iso = b'<html><head><meta charset="iso-8859-1"></head><body><h1>Caf\xe9</h1></body></html>'
+    assert "Café" in decode_text(html_iso, is_html=True)
+
+
+def test_decode_text_html_meta_charset_windows_1252() -> None:
+    html_cp1252 = (
+        b'<html><head><meta charset="windows-1252"></head>'
+        b"<body><p>\x93Curly quotes\x94 and \x97 dash</p></body></html>"
+    )
+    res = decode_text(html_cp1252, is_html=True)
+    assert "“Curly quotes”" in res
+    assert "—" in res
+
+
+def test_decode_text_html_http_equiv_content_type() -> None:
+    html1 = (
+        b"<html><head><meta http-equiv='Content-Type' "
+        b"content='text/html; charset=windows-1252'></head><body>\x93Test\x94</body></html>"
+    )
+    assert "“Test”" in decode_text(html1, is_html=True)
+
+    html2 = (
+        b'<html><head><meta http-equiv="Content-Type" '
+        b'content="text/html; charset=iso-8859-1"/></head><body>Caf\xe9</body></html>'
+    )
+    assert "Café" in decode_text(html2, is_html=True)
+
+
+def test_decode_text_html_xml_declaration() -> None:
+    xml = (
+        b'<?xml version="1.0" encoding="iso-8859-1"?><html><body><h1>M\xfcnchen</h1></body></html>'
+    )
+    assert "München" in decode_text(xml, is_html=True)
+
+
+def test_decode_text_html_asian_encodings() -> None:
+    # Shift_JIS
+    sjis_text = "日本語テスト".encode("shift_jis")
+    sjis_html = (
+        b'<html><head><meta charset="shift_jis"></head><body><p>'
+        + sjis_text
+        + b"</p></body></html>"
+    )
+    assert "日本語テスト" in decode_text(sjis_html, is_html=True)
+
+    # GBK
+    gbk_text = "中文测试".encode("gbk")
+    gbk_html = (
+        b'<html><head><meta content="text/html; charset=gbk" http-equiv="Content-Type"></head>'
+        b"<body><p>" + gbk_text + b"</p></body></html>"
+    )
+    assert "中文测试" in decode_text(gbk_html, is_html=True)
+
+
+def test_decode_text_plain_and_markdown_fallback() -> None:
+    # Non-HTML text in Windows-1252 (UTF-8 strict fails -> falls back to windows-1252)
+    plain_bytes = "Café résumé — naïve".encode("windows-1252")
+    assert decode_text(plain_bytes, is_html=False) == "Café résumé — naïve"
+
+
+def test_decode_text_invalid_charset_falls_back() -> None:
+    # Unknown charset falls back to windows-1252 / latin-1
+    html_invalid = (
+        b'<html><head><meta charset="invalid-codec-123"></head><body><p>Caf\xe9</p></body></html>'
+    )
+    assert "Café" in decode_text(html_invalid, is_html=True)
+
+
+def test_extract_article_with_non_utf8_encodings() -> None:
+    html_iso = (
+        b'<html><head><meta charset="iso-8859-1"></head>'
+        b"<body><h1>Caf\xe9 de Flore</h1><p>Situ\xe9 \xe0 Paris.</p></body></html>"
+    )
+    art = extract_article(html_iso, path="A/Cafe", title="Café")
+    assert "Café de Flore" in art.text
+    assert "Situé à Paris" in art.text
+    assert "\ufffd" not in art.text
+    assert any("Café de Flore" in p for s in art.sections for p in s.heading_path)
+
+
+def test_extract_article_utf8_with_bom() -> None:
+    html_bom = b"\xef\xbb\xbf<html><body><h1>BOM Heading</h1><p>BOM Body</p></body></html>"
+    art = extract_article(html_bom, path="A/BOM", title="BOM")
+    assert "BOM Heading" in art.text
+    assert "\ufeff" not in art.text
+
+
+def test_extract_vtt_with_bom_and_encodings() -> None:
+    # UTF-8 with BOM
+    vtt_bom = b"\xef\xbb\xbfWEBVTT\n\n00:00:00.000 --> 00:01:00.000\nHello from BOM\n"
+    assert extract_entry(_raw("text/vtt", vtt_bom)).text == "Hello from BOM"
+
+    # UTF-16 with BOM
+    vtt_u16 = b"\xff\xfe" + "WEBVTT\n\n00:00:00.000 --> 00:01:00.000\nHello UTF-16\n".encode(
+        "utf-16-le"
+    )
+    assert extract_entry(_raw("text/vtt", vtt_u16)).text == "Hello UTF-16"
+
+    # Windows-1252
+    vtt_cp1252 = "WEBVTT\n\n00:00:00.000 --> 00:01:00.000\nCafé — intro\n".encode("windows-1252")
+    assert extract_entry(_raw("text/vtt", vtt_cp1252)).text == "Café — intro"
+
+
+def test_extract_plain_and_markdown_non_utf8() -> None:
+    plain_iso = "Café au lait\n  Deuxième ligne  \n".encode("iso-8859-1")
+    art_plain = extract_entry(_raw("text/plain", plain_iso))
+    assert "Café au lait" in art_plain.text
+    assert "Deuxième ligne" in art_plain.text
+    assert "\ufffd" not in art_plain.text
+
+    md_cp1252 = "# Café\n**“Spécial”**\n".encode("windows-1252")
+    art_md = extract_entry(_raw("text/markdown", md_cp1252))
+    assert "Café" in art_md.text
+    assert "“Spécial”" in art_md.text
+    assert "\ufffd" not in art_md.text

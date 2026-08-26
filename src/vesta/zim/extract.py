@@ -24,6 +24,7 @@ query-time reads use the inline ``extract_article``.
 
 from __future__ import annotations
 
+import codecs
 import logging
 import multiprocessing as mp
 import re
@@ -83,6 +84,107 @@ _STRIP_SELECTORS = (
     ".external-links",
     ".external-Links",
 )
+
+#: Regexes for sniffing charset declarations from HTML/XML byte prefixes.
+_META_CHARSET_RE = re.compile(
+    rb"""<meta\s+[^>]*?\bcharset\s*=\s*['"]?\s*([a-zA-Z0-9_\-]+)""",
+    re.IGNORECASE,
+)
+_XML_ENCODING_RE = re.compile(
+    rb"""<\?xml\s+[^>]*?\bencoding\s*=\s*['"]\s*([a-zA-Z0-9_\-]+)""",
+    re.IGNORECASE,
+)
+
+
+def _normalize_encoding(enc_name: str) -> str | None:
+    """Normalize and validate an encoding name against Python's codec registry.
+
+    Returns the canonical codec name if recognized, or ``None`` if unknown.
+    """
+    enc = enc_name.strip().strip("'\"").strip()
+    if ";" in enc:
+        enc = enc.split(";")[0].strip()
+    if not enc:
+        return None
+    try:
+        info = codecs.lookup(enc)
+        return info.name
+    except (LookupError, ValueError):
+        return None
+
+
+def _sniff_html_charset(prefix: bytes) -> str | None:
+    """Sniff charset declaration from the leading byte prefix of an HTML/XML document."""
+    for m in _META_CHARSET_RE.finditer(prefix):
+        raw_enc = m.group(1).decode("ascii", "ignore")
+        norm = _normalize_encoding(raw_enc)
+        if norm:
+            return norm
+
+    for m in _XML_ENCODING_RE.finditer(prefix):
+        raw_enc = m.group(1).decode("ascii", "ignore")
+        norm = _normalize_encoding(raw_enc)
+        if norm:
+            return norm
+
+    return None
+
+
+#: Byte Order Marks mapped to their Python codec names (UTF-32 before UTF-16).
+_BOM_MAP: tuple[tuple[bytes, str], ...] = (
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
+
+
+def _sniff_bom(content: bytes) -> str | None:
+    """Sniff BOM and decode, returning None if no recognized BOM or decode failed."""
+    for bom, encoding in _BOM_MAP:
+        if content.startswith(bom):
+            try:
+                return content.decode(encoding)
+            except UnicodeDecodeError:
+                return None
+    return None
+
+
+def decode_text(content: bytes, *, is_html: bool = False) -> str:
+    """Robustly decode raw bytes to text using BOM sniffing, HTML meta charset,
+    strict UTF-8, and 8-bit fallback encodings.
+
+    Order of evaluation:
+    1. Byte Order Mark (BOM): UTF-8 (utf-8-sig), UTF-32 (LE/BE), UTF-16 (LE/BE).
+    2. For HTML, declared encoding from ``<meta ... charset=...>`` or XML declaration.
+    3. Strict UTF-8 decode.
+    4. Fallback to ``windows-1252`` (superset of ISO-8859-1 for Western European text).
+    5. Fallback to ``latin-1`` (maps all 0x00-0xFF single-byte codes).
+    6. Final safeguard: ``utf-8`` with replacement characters.
+    """
+    if not content:
+        return ""
+
+    bom_decoded = _sniff_bom(content)
+    if bom_decoded is not None:
+        return bom_decoded
+
+    encodings: list[str] = []
+    if is_html:
+        declared = _sniff_html_charset(content[:4096])
+        if declared:
+            encodings.append(declared)
+    encodings.extend(["utf-8", "windows-1252", "latin-1"])
+
+    for enc in encodings:
+        try:
+            return content.decode(enc)
+        except UnicodeDecodeError:
+            continue
+
+    return content.decode("utf-8", "replace")
+
 
 _HEADINGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 
@@ -173,7 +275,7 @@ def extract_article(html_bytes: bytes, *, path: EntryPath, title: str) -> Extrac
     *HTML* path — see :func:`_extract_pdf` for the one that is three orders
     of magnitude slower.
     """
-    html = html_bytes.decode("utf-8", "replace")
+    html = decode_text(html_bytes, is_html=True)
     tree = HTMLTree.parse(html)
     _strip_boilerplate(tree)
     cleaned_html = tree.body.html
@@ -214,7 +316,7 @@ def _extract_vtt(content: bytes) -> str:
     emit. Format: ``WEBVTT`` header, then repeated ``[cue-id]\\n<time> --> <time>
     \\n<text>`` blocks. The cue-id line is optional and not always present; we
     keep every line that isn't structurally a timestamp/header/note."""
-    text = content.decode("utf-8", "replace")
+    text = decode_text(content, is_html=False)
     kept: list[str] = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -236,7 +338,8 @@ def _extract_vtt(content: bytes) -> str:
 def _extract_plain(content: bytes) -> str:
     """``text/plain`` → text with per-line whitespace normalised."""
     lines = [
-        re.sub(r"[ \t]+", " ", ln).strip() for ln in content.decode("utf-8", "replace").splitlines()
+        re.sub(r"[ \t]+", " ", ln).strip()
+        for ln in decode_text(content, is_html=False).splitlines()
     ]
     return "\n".join(ln for ln in lines if ln)
 
@@ -246,7 +349,7 @@ def _extract_markdown(content: bytes) -> str:
     emphasis, inline-code, link URLs). One passage per format — heading-aware
     section splitting is not attempted, so depth 2 collapses to the lead."""
     out: list[str] = []
-    for raw_line in content.decode("utf-8", "replace").splitlines():
+    for raw_line in decode_text(content, is_html=False).splitlines():
         line = raw_line.strip()
         if not line:
             out.append("")
@@ -401,4 +504,4 @@ def extract_many(
         return pool.map(_mp_extract, list(paths))
 
 
-__all__ = ["extract_article", "extract_entry", "extract_many"]
+__all__ = ["decode_text", "extract_article", "extract_entry", "extract_many"]

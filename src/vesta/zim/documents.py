@@ -49,6 +49,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from vesta.zim.extract import decode_text
 from vesta.zim.types import DocumentRef, EntryPath, strip_entry_prefix
 
 if TYPE_CHECKING:
@@ -162,7 +163,7 @@ def _read_manifest_text(archive: LibzimArchive) -> str | None:
         entry = archive.get_entry_by_path("database.js")
         if entry.is_redirect:
             return None
-        return bytes(entry.get_item().content).decode("utf-8", "replace")
+        return decode_text(bytes(entry.get_item().content), is_html=False)
     except Exception:  # a corrupt/unreadable manifest never aborts detection
         return None
 
