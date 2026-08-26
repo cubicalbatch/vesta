@@ -21,7 +21,16 @@ export async function* parseEventStream(
 	try {
 		for (;;) {
 			const { done, value } = await reader.read();
-			if (done) break;
+			if (done) {
+				// A frame cut off by EOF still counts (SSE spec): dispatch it rather
+				// than dropping the tail of a stream that died mid-frame.
+				buffer += decoder.decode();
+				if (buffer.trim()) {
+					const parsed = parseBlock(buffer);
+					if (parsed) yield parsed;
+				}
+				break;
+			}
 			buffer += decoder.decode(value, { stream: true });
 			let sep: number;
 			// SSE frames are separated by a blank line ("\n\n"); tolerate "\r\n\r\n".
@@ -121,7 +130,18 @@ export async function* fetchEventStream(
 	}
 
 	try {
-		yield* parseEventStream(response.body);
+		let finished = false;
+		for await (const wire of parseEventStream(response.body)) {
+			if (wire.event === 'done' || wire.event === 'error') finished = true;
+			yield wire;
+		}
+		if (!finished) {
+			// Silent EOF: the connection closed without a `done` or terminal
+			// `error`. Surface it so callers see one error path instead of a
+			// stream that just stops mid-answer; anything left in the parser's
+			// buffer was dispatched above, right before this.
+			yield transportErrorEvent('connection closed before the stream finished');
+		}
 	} catch (err) {
 		if ((err as Error)?.name === 'AbortError') return;
 		yield transportErrorEvent(err instanceof Error ? err.message : 'stream interrupted');
