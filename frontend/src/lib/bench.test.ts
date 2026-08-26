@@ -124,13 +124,40 @@ describe('computeCompareBuckets (mirrors eval/bench_runner.py compare_runs)', ()
 		expect(buckets.onlyB).toEqual(['y']);
 	});
 
-	it('excludes unjudged rows from correctness (never counted correct)', () => {
-		const aRow = row('q', 'unjudged', 1);
-		const bRow = row('q', 'correct', 1);
-		const buckets = computeCompareBuckets([aRow], [bRow]);
-		// unjudged is not correct in A, so B fixing it is a `fixed`.
-		expect(buckets.fixed.map((r) => r.question_id)).toEqual(['q']);
+	it('pending/unjudged on either side → unjudged bucket, never fixed/broken', () => {
+		for (const v of ['unjudged', 'pending']) {
+			// would-be fix: A unjudged, B correct
+			let buckets = computeCompareBuckets([row('q', v, 1)], [row('q', 'correct', 1)]);
+			expect(buckets.unjudged.map((r) => r.question_id)).toEqual(['q']);
+			expect(buckets.fixed).toEqual([]);
+			expect(buckets.bothCorrect).toEqual([]);
+			// would-be regression: A correct, B unjudged
+			buckets = computeCompareBuckets([row('q', 'correct', 1)], [row('q', v, 1)]);
+			expect(buckets.unjudged.map((r) => r.question_id)).toEqual(['q']);
+			expect(buckets.broken).toEqual([]);
+			expect(buckets.bothWrong).toEqual([]);
+		}
+	});
+
+	it('both sides unjudged → unjudged bucket', () => {
+		const buckets = computeCompareBuckets(
+			[row('q', 'unjudged', null)],
+			[row('q', 'pending', 1)]
+		);
+		expect(buckets.unjudged.map((r) => r.question_id)).toEqual(['q']);
+		expect(buckets.fixed).toEqual([]);
+		expect(buckets.broken).toEqual([]);
 		expect(buckets.bothCorrect).toEqual([]);
+		expect(buckets.bothWrong).toEqual([]);
+	});
+
+	it('unjudged stays in the shared denominator but out of scored buckets', () => {
+		const a = [row('ok', 'correct', 1), row('uj', 'correct', 1)];
+		const b = [row('ok', 'incorrect', null), row('uj', 'unjudged', 1)];
+		const buckets = computeCompareBuckets(a, b);
+		expect(buckets.sharedDenominator).toBe(2);
+		expect(buckets.broken.map((r) => r.question_id)).toEqual(['ok']);
+		expect(buckets.unjudged.map((r) => r.question_id)).toEqual(['uj']);
 	});
 });
 

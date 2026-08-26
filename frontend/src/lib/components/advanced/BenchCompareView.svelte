@@ -4,9 +4,9 @@
 	// plus each run's full results, and renders:
 	//   - an aggregate delta table (one row per pair: strict accuracy + source
 	//     recall deltas over the shared set),
-	//   - the four buckets (fixed / broken / both correct / both wrong) with
-	//     per-question rows for the active pair. `broken` is the regression
-	//     catcher (trap 9).
+	//   - the buckets (fixed / broken / both correct / both wrong / unjudged)
+	//     with per-question rows for the active pair. `broken` is the regression
+	//     catcher (trap 9); unjudged pairs never read as fixed/broken.
 	//
 	// Buckets are computed client-side from the two runs' verdicts via
 	// computeCompareBuckets (mirrors the backend), so every bucket row carries
@@ -94,7 +94,7 @@
 	}
 
 	interface BucketDef {
-		key: 'fixed' | 'broken' | 'bothCorrect' | 'bothWrong';
+		key: 'fixed' | 'broken' | 'bothCorrect' | 'bothWrong' | 'unjudged';
 		label: string;
 		desc: string;
 		accent: string;
@@ -104,7 +104,8 @@
 		{ key: 'fixed', label: 'Fixed', desc: 'wrong in A, correct in B', accent: 'text-success' },
 		{ key: 'broken', label: 'Broken (regression)', desc: 'correct in A, wrong in B', accent: 'text-danger' },
 		{ key: 'bothCorrect', label: 'Both correct', desc: 'correct in both', accent: 'text-ink-2' },
-		{ key: 'bothWrong', label: 'Both wrong', desc: 'wrong in both', accent: 'text-warning' }
+		{ key: 'bothWrong', label: 'Both wrong', desc: 'wrong in both', accent: 'text-warning' },
+		{ key: 'unjudged', label: 'Unjudged', desc: 'pending/unjudged on either side — not scored', accent: 'text-faint' }
 	];
 </script>
 

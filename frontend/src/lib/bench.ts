@@ -43,7 +43,9 @@ export function attributionCellMatches(row: BenchResultRow, cell: AttributionCel
 // ── Compare bucketing ────────────────────────────────────────────────────────
 // Mirrors eval/bench_runner.py `compare_runs`: fixed/broken/both over the
 // shared question set. `broken` is the regression catcher (correct in A, not in
-// B). only_a/only_b are the questions present in just one run (different
+// B). Shared questions where either side is `pending`/`unjudged` land in
+// `unjudged` — the pair cannot be scored, so they never read as fixed/broken.
+// only_a/only_b are the questions present in just one run (different
 // subsets — the shared set is the real denominator).
 
 export interface CompareBuckets {
@@ -52,6 +54,7 @@ export interface CompareBuckets {
 	broken: BenchResultRow[];
 	bothCorrect: BenchResultRow[];
 	bothWrong: BenchResultRow[];
+	unjudged: BenchResultRow[];
 	onlyA: string[];
 	onlyB: string[];
 }
@@ -72,17 +75,24 @@ export function computeCompareBuckets(
 	const broken: BenchResultRow[] = [];
 	const bothCorrect: BenchResultRow[] = [];
 	const bothWrong: BenchResultRow[] = [];
+	const unjudged: BenchResultRow[] = [];
+	const NON_JUDGED: Record<string, true> = { pending: true, unjudged: true };
 	for (const id of shared) {
-		const isCorrectA = a.get(id)!.verdict === 'correct';
-		const isCorrectB = b.get(id)!.verdict === 'correct';
+		const rowA = a.get(id)!;
 		const rowB = b.get(id)!;
+		if (NON_JUDGED[rowA.verdict] || NON_JUDGED[rowB.verdict]) {
+			unjudged.push(rowB);
+			continue;
+		}
+		const isCorrectA = rowA.verdict === 'correct';
+		const isCorrectB = rowB.verdict === 'correct';
 		if (isCorrectA && isCorrectB) bothCorrect.push(rowB);
 		else if (!isCorrectA && !isCorrectB) bothWrong.push(rowB);
 		else if (!isCorrectA && isCorrectB) fixed.push(rowB);
 		else broken.push(rowB);
 	}
 
-	return { sharedDenominator: shared.length, fixed, broken, bothCorrect, bothWrong, onlyA, onlyB };
+	return { sharedDenominator: shared.length, fixed, broken, bothCorrect, bothWrong, unjudged, onlyA, onlyB };
 }
 
 // ── Latency percentiles ─────────────────────────────────────────────────────

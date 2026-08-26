@@ -544,6 +544,7 @@ export interface BenchComparePair {
 	broken: string[];
 	both_correct: string[];
 	both_wrong: string[];
+	unjudged: string[];
 	only_a: string[];
 	only_b: string[];
 	deltas: Record<string, number>;
