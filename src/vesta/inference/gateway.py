@@ -147,10 +147,16 @@ def _extract_usage(resp_or_chunk: Any) -> tuple[int, int, int]:
     report usage (some proxies and older ``llama-server`` builds omit it).
     """
     usage = getattr(resp_or_chunk, "usage", None)
+    if usage is None and isinstance(resp_or_chunk, dict):
+        usage = resp_or_chunk.get("usage")
     if usage is None:
         extra = getattr(resp_or_chunk, "model_extra", None)
         if isinstance(extra, dict):
             data = extra.get("data")
+            if isinstance(data, dict):
+                usage = data.get("usage")
+        elif isinstance(resp_or_chunk, dict):
+            data = resp_or_chunk.get("data")
             if isinstance(data, dict):
                 usage = data.get("usage")
     if usage is None:
@@ -158,7 +164,12 @@ def _extract_usage(resp_or_chunk: Any) -> tuple[int, int, int]:
 
     def _get(obj: Any, *names: str, default: int = 0) -> int:
         for n in names:
-            val = getattr(obj, n, None)
+            if isinstance(obj, dict):
+                val = obj.get(n)
+            else:
+                val = getattr(obj, n, None)
+                if val is None and hasattr(obj, "get") and callable(obj.get):
+                    val = obj.get(n)
             if val is None:
                 continue
             try:

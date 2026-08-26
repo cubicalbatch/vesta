@@ -22,6 +22,7 @@ from vesta.inference.gateway import (
     NoLLMConfigured,
     NullGateway,
     OpenAIGateway,
+    _extract_usage,
 )
 from vesta.inference.local import (
     BinaryMissing,
@@ -319,6 +320,114 @@ class TestOpenAIGateway:
         assert deltas[-1].finish_reason == "stop"
 
     @pytest.mark.asyncio
+    async def test_chat_once_captures_usage_from_dict(self) -> None:
+        """chat_once reads resp.usage when it is a dict."""
+        gw = OpenAIGateway(base_url="http://localhost:8081/v1", api_key="test")
+        mock_resp = MagicMock()
+        mock_resp.choices = [MagicMock()]
+        mock_resp.choices[0].message.content = "answer"
+        mock_resp.choices[0].finish_reason = "stop"
+        mock_resp.usage = {"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150}
+
+        with patch.object(
+            gw._client.chat.completions, "create", new_callable=AsyncMock
+        ) as mock_create:
+            mock_create.return_value = mock_resp
+            result = await gw.chat_once(
+                [ChatMessage(role="user", content="hi")], model="test-model"
+            )
+        assert result.input_tokens == 120
+        assert result.output_tokens == 30
+        assert result.total_tokens == 150
+
+    @pytest.mark.asyncio
+    async def test_chat_once_captures_usage_from_data_envelope(self) -> None:
+        """chat_once reads usage from model_extra['data']['usage'] envelope."""
+        gw = OpenAIGateway(base_url="http://localhost:8081/v1", api_key="test")
+        mock_resp = MagicMock()
+        mock_resp.choices = None
+        mock_resp.usage = None
+        mock_resp.model_extra = {
+            "data": {
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150},
+            },
+            "success": True,
+        }
+
+        with patch.object(
+            gw._client.chat.completions, "create", new_callable=AsyncMock
+        ) as mock_create:
+            mock_create.return_value = mock_resp
+            result = await gw.chat_once(
+                [ChatMessage(role="user", content="hi")], model="test-model"
+            )
+        assert result.text == "ok"
+        assert result.finish_reason == "stop"
+        assert result.input_tokens == 120
+        assert result.output_tokens == 30
+        assert result.total_tokens == 150
+
+    @pytest.mark.asyncio
+    async def test_chat_stream_captures_usage_from_dict_final_chunk(self) -> None:
+        """chat_stream yields usage chunk when chunk.usage is a dict."""
+        gw = OpenAIGateway(base_url="http://localhost:8081/v1", api_key="test")
+        usage_chunk = MagicMock()
+        usage_chunk.choices = []
+        usage_chunk.usage = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+        content_chunk = _mock_chunk("hi", "stop")
+        content_chunk.usage = None
+        mock_stream = MockAsyncIterator([content_chunk, usage_chunk])
+
+        with patch.object(
+            gw._client.chat.completions, "create", new_callable=AsyncMock
+        ) as mock_create:
+            mock_create.return_value = mock_stream
+            deltas = [
+                d
+                async for d in gw.chat_stream(
+                    [ChatMessage(role="user", content="hi")], model="test-model"
+                )
+            ]
+        usage_deltas = [d for d in deltas if d.has_usage]
+        assert len(usage_deltas) == 1
+        assert usage_deltas[0].input_tokens == 100
+        assert usage_deltas[0].output_tokens == 50
+        assert usage_deltas[0].total_tokens == 150
+
+    @pytest.mark.asyncio
+    async def test_chat_stream_captures_usage_from_envelope_final_chunk(self) -> None:
+        """chat_stream yields usage chunk when usage is wrapped in data envelope."""
+        gw = OpenAIGateway(base_url="http://localhost:8081/v1", api_key="test")
+        usage_chunk = MagicMock()
+        usage_chunk.choices = []
+        usage_chunk.usage = None
+        usage_chunk.model_extra = {
+            "data": {
+                "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+            }
+        }
+        content_chunk = _mock_chunk("hi", "stop")
+        content_chunk.usage = None
+        mock_stream = MockAsyncIterator([content_chunk, usage_chunk])
+
+        with patch.object(
+            gw._client.chat.completions, "create", new_callable=AsyncMock
+        ) as mock_create:
+            mock_create.return_value = mock_stream
+            deltas = [
+                d
+                async for d in gw.chat_stream(
+                    [ChatMessage(role="user", content="hi")], model="test-model"
+                )
+            ]
+        usage_deltas = [d for d in deltas if d.has_usage]
+        assert len(usage_deltas) == 1
+        assert usage_deltas[0].input_tokens == 100
+        assert usage_deltas[0].output_tokens == 50
+        assert usage_deltas[0].total_tokens == 150
+
+    @pytest.mark.asyncio
     async def test_chat_once_usage_defaults_to_zero(self) -> None:
         """When the endpoint does not report usage, all fields stay 0."""
         gw = OpenAIGateway(base_url="http://localhost:8081/v1", api_key="test")
@@ -338,6 +447,61 @@ class TestOpenAIGateway:
         assert result.input_tokens == 0
         assert result.output_tokens == 0
         assert result.total_tokens == 0
+
+
+class TestExtractUsage:
+    def test_extract_usage_from_object(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.usage = MagicMock(prompt_tokens=42, completion_tokens=18, total_tokens=60)
+        assert _extract_usage(mock_resp) == (42, 18, 60)
+
+    def test_extract_usage_from_object_input_output_names(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.usage = MagicMock(spec=["input_tokens", "output_tokens"])
+        mock_resp.usage.input_tokens = 42
+        mock_resp.usage.output_tokens = 18
+        assert _extract_usage(mock_resp) == (42, 18, 60)
+
+    def test_extract_usage_from_dict(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.usage = {"prompt_tokens": 42, "completion_tokens": 18, "total_tokens": 60}
+        assert _extract_usage(mock_resp) == (42, 18, 60)
+
+    def test_extract_usage_from_dict_input_output_names(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.usage = {"input_tokens": 42, "output_tokens": 18}
+        assert _extract_usage(mock_resp) == (42, 18, 60)
+
+    def test_extract_usage_from_model_extra_envelope(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.usage = None
+        mock_resp.model_extra = {
+            "data": {"usage": {"prompt_tokens": 42, "completion_tokens": 18, "total_tokens": 60}}
+        }
+        assert _extract_usage(mock_resp) == (42, 18, 60)
+
+    def test_extract_usage_from_top_level_dict(self) -> None:
+        resp = {"usage": {"prompt_tokens": 42, "completion_tokens": 18, "total_tokens": 60}}
+        assert _extract_usage(resp) == (42, 18, 60)
+
+    def test_extract_usage_from_top_level_dict_envelope(self) -> None:
+        resp = {
+            "data": {"usage": {"prompt_tokens": 42, "completion_tokens": 18, "total_tokens": 60}}
+        }
+        assert _extract_usage(resp) == (42, 18, 60)
+
+    def test_extract_usage_none_or_missing(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.usage = None
+        mock_resp.model_extra = None
+        assert _extract_usage(mock_resp) == (0, 0, 0)
+        assert _extract_usage(None) == (0, 0, 0)
+        assert _extract_usage({}) == (0, 0, 0)
+
+    def test_extract_usage_invalid_types_fallback_to_zero(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.usage = {"prompt_tokens": "invalid", "completion_tokens": None}
+        assert _extract_usage(mock_resp) == (0, 0, 0)
 
 
 class TestUsageRecorder:
