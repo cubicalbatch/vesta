@@ -22,8 +22,8 @@
 	<h2 class="text-lg font-semibold text-ink">{section.displayName}</h2>
 	{#if section.name === 'Server'}
 		<p class="mb-1 mt-2 rounded-md bg-warning-soft px-3 py-2 text-xs text-warning">
-			Vesta is offline-first — these only matter if this machine is reachable by someone else. Nothing below is
-			enforced yet: a password set here does not currently protect the API or this UI.
+			Vesta is offline-first — these only matter if this machine is reachable by someone else. There is no
+			authentication layer yet: anyone who can reach the port can use the API and this UI.
 		</p>
 	{/if}
 	<div class="mt-2">

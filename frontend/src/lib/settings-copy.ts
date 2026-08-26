@@ -8,9 +8,6 @@ import { humanizeKey } from './settings-groups';
 // session-timeout or auto-index settings not covered here, and vice versa).
 // Voice: describe what happens to the user's machine, never the pipeline.
 //
-// `server.auth.password` gets its "not enforced" gap stated here, in the field
-// itself, in addition to the Access section lede — the schema still renders it
-// normally (never special-case a setting out of the generated form).
 export interface SettingCopyOverride {
 	label?: string;
 	help?: string;
@@ -44,10 +41,6 @@ export const SETTING_COPY: Record<string, SettingCopyOverride> = {
 	'logging.level': {
 		label: 'Log detail',
 		help: 'How much detail Vesta writes to its log file. INFO is right for normal use; DEBUG is verbose and meant for troubleshooting.'
-	},
-	'server.auth.password': {
-		label: 'Password',
-		help: 'Not yet enforced anywhere in the backend — setting a password here does not currently protect the API or this UI. Anything that can reach this machine on the network can use it today.'
 	},
 	'inference.local.context_size': {
 		label: 'Context window',

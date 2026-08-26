@@ -33,7 +33,6 @@ async def test_settings_schema_lists_every_setting(app_client: httpx.AsyncClient
     assert {
         "server.host",
         "server.port",
-        "server.auth.password",
         "data.dir",
         "jobs.max_concurrent.noop",
         "logging.level",

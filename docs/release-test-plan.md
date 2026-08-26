@@ -517,9 +517,9 @@ answers exactly like local. Switch back to local afterwards.
 
 ## Known limitations — do NOT file as failures
 
-- **`server.auth.password` is declared but not enforced** — the settings UI
-  itself states this. Exposing the port does not currently protect the app.
-  Note it in the report as a known gap, not a test failure.
+- **No authentication layer exists** — there is no password or auth anywhere in
+  the backend. Exposing the port exposes the whole app; only test on trusted
+  networks. Note it in the report as a known gap, not a test failure.
 - The compose file comment says `./data` but binds `./data2` (dev-machine
   quirk).
 - Follow-up AI turns may legitimately show **zero** source cards (answers from

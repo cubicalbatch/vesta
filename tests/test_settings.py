@@ -61,7 +61,6 @@ def test_schema_describes_every_declared_setting() -> None:
     assert {
         "server.host",
         "server.port",
-        "server.auth.password",
         "data.dir",
         "jobs.max_concurrent.noop",
         "logging.level",
@@ -158,7 +157,7 @@ def _register_secret_settings() -> None:
 def test_credential_settings_flagged_secret_in_schema() -> None:
     _register_secret_settings()
     items = {i.key: i for i in config.schema()}
-    for key in ("inference.llm.api_key", "eval.judge.api_key", "server.auth.password"):
+    for key in ("inference.llm.api_key", "eval.judge.api_key"):
         assert key in items, f"{key} must be declared"
         assert items[key].secret is True, f"{key} must be marked secret"
     # Non-credential knobs stay public.

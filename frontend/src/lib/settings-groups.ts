@@ -51,7 +51,7 @@ const SECTION_ORDER = [
 ];
 
 // The schema's raw group name is sometimes an implementation label, not a
-// product one. "Server" holds host/port/password — what a stranger would
+// product one. "Server" holds host/port — what a stranger would
 // call "Access". This is a display-only rename; the raw group string is
 // still what backs ordering and the BASIC-key lookup.
 const GROUP_DISPLAY_OVERRIDES: Record<string, string> = {
