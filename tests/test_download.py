@@ -48,6 +48,8 @@ class _RangeHandler(BaseHTTPRequestHandler):
     # When set, only this many bytes of any data response are sent before the
     # connection is cut mid-body (a mirror dying partway through).
     drop_after: int | None = None
+    ignore_range: bool = False
+    bad_content_range: str | None = None
     seen_starts: ClassVar[list[int]] = []  # range-start of every data request served
 
     def log_message(self, format: str, *args: object) -> None:  # silence
@@ -68,7 +70,7 @@ class _RangeHandler(BaseHTTPRequestHandler):
         start = 0
         end = total - 1
         ranged = False
-        if range_header and range_header.startswith("bytes="):
+        if range_header and range_header.startswith("bytes=") and not self.ignore_range:
             ranged = True
             spec = range_header[len("bytes=") :].split("-")
             start = int(spec[0]) if spec[0] else 0
@@ -79,7 +81,8 @@ class _RangeHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Length", str(len(chunk)))
         if ranged:
-            self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
+            cr = self.bad_content_range or f"bytes {start}-{end}/{total}"
+            self.send_header("Content-Range", cr)
         self.send_header("Accept-Ranges", "bytes")
         self.end_headers()
         if self.drop_after is not None:
@@ -102,7 +105,13 @@ class _Server:
     with range support."""
 
     def __init__(
-        self, data: bytes, meta4: str | None = None, *, drop_after: int | None = None
+        self,
+        data: bytes,
+        meta4: str | None = None,
+        *,
+        drop_after: int | None = None,
+        ignore_range: bool = False,
+        bad_content_range: str | None = None,
     ) -> None:
         self.data = data
 
@@ -115,6 +124,8 @@ class _Server:
             Handler.serve_meta4 = meta4
         if drop_after is not None:
             Handler.drop_after = drop_after
+        Handler.ignore_range = ignore_range
+        Handler.bad_content_range = bad_content_range
         self._handler_cls: type[_RangeHandler] = Handler
         self._srv = ThreadingHTTPServer(("127.0.0.1", _free_port()), Handler)
         if meta4 is not None and "{base_url}" in meta4:
@@ -469,6 +480,344 @@ async def test_model_job_writes_bare_basename_to_final_and_part_paths(
     assert final.read_bytes() == payload
     # The .part was atomically renamed away.
     assert not (models_dir / "my.model.gguf.part").exists()
+    assert ready == [final]
+
+
+async def test_model_resume_trims_stale_part_tail_beyond_checkpoint(
+    tmp_path: Path,
+) -> None:
+    """A crash between a chunk write and its checkpoint leaves bytes past the
+    checkpoint in the ``.part``; the resumed run must trim back to the
+    checkpoint before appending (mirroring the ZIM downloader) so the final
+    GGUF is byte-exact instead of poisoned by the stale tail (AUDIT_0824 I1)."""
+    from vesta.inference import bind_models_dir, bind_on_model_ready
+    from vesta.inference.download import DownloadModelJob
+
+    payload = os.urandom(4096)
+    server = _Server(payload)
+    server.start()
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    ready: list[Path] = []
+
+    async def on_ready(path: object) -> None:
+        ready.append(Path(path))  # type: ignore[arg-type]
+
+    half = len(payload) // 2
+    part = models_dir / "trim.gguf.part"
+    part.write_bytes(payload[:half] + b"stale-tail-bytes-from-a-crashed-run")
+    checkpoint = json.dumps(
+        {"bytes_done": half, "size": len(payload), "url": f"{server.base_url}/trim.gguf"}
+    )
+
+    bind_models_dir(models_dir)
+    bind_on_model_ready(on_ready)
+    config.configure()  # the job resolves catalog.download.bandwidth_limit_kbps
+    try:
+        handle = JobHandleImpl(_FakeRunner(), job_id=1)  # type: ignore[arg-type]
+        await DownloadModelJob().run(
+            handle,
+            {
+                "url": f"{server.base_url}/trim.gguf",
+                "filename": "trim",
+                RESUME_CHECKPOINT_KEY: json.loads(checkpoint),
+            },
+        )
+    finally:
+        bind_on_model_ready(None)
+        bind_models_dir(None)
+        config.reset_for_test()
+        server.stop()
+
+    final = models_dir / "trim.gguf"
+    assert final.is_file()
+    assert final.read_bytes() == payload
+    assert not part.exists()  # renamed away atomically
+    assert ready == [final]
+
+
+async def test_model_job_with_matching_sha256_verifies_and_completes(
+    tmp_path: Path,
+) -> None:
+    """When sha256 is provided and matches the downloaded file, verify passes
+    and the file is renamed."""
+    from vesta.inference import bind_models_dir, bind_on_model_ready
+    from vesta.inference.download import DownloadModelJob
+
+    payload = os.urandom(2048)
+    sha = hashlib.sha256(payload).hexdigest()
+    server = _Server(payload)
+    server.start()
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    ready: list[Path] = []
+
+    async def on_ready(path: object) -> None:
+        ready.append(Path(path))  # type: ignore[arg-type]
+
+    bind_models_dir(models_dir)
+    bind_on_model_ready(on_ready)
+    config.configure()
+    try:
+        handle = JobHandleImpl(_FakeRunner(), job_id=1)  # type: ignore[arg-type]
+        await DownloadModelJob().run(
+            handle,
+            {
+                "url": f"{server.base_url}/model.gguf",
+                "filename": "verified",
+                "sha256": sha,
+                "size": len(payload),
+            },
+        )
+    finally:
+        bind_on_model_ready(None)
+        bind_models_dir(None)
+        config.reset_for_test()
+        server.stop()
+
+    final = models_dir / "verified.gguf"
+    assert final.is_file()
+    assert final.read_bytes() == payload
+    assert not (models_dir / "verified.gguf.part").exists()
+    assert ready == [final]
+
+
+async def test_model_job_with_mismatched_sha256_discards_and_raises(
+    tmp_path: Path,
+) -> None:
+    """When sha256 is provided and mismatches the downloaded file, download is discarded
+    and DownloadModelError is raised."""
+    from vesta.inference import bind_models_dir
+    from vesta.inference.download import DownloadModelError, DownloadModelJob
+
+    payload = os.urandom(2048)
+    server = _Server(payload)
+    server.start()
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    bind_models_dir(models_dir)
+    config.configure()
+    try:
+        handle = JobHandleImpl(_FakeRunner(), job_id=1)  # type: ignore[arg-type]
+        with pytest.raises(DownloadModelError, match="checksum mismatch"):
+            await DownloadModelJob().run(
+                handle,
+                {
+                    "url": f"{server.base_url}/model.gguf",
+                    "filename": "bad_sha",
+                    "sha256": "0" * 64,
+                    "size": len(payload),
+                },
+            )
+    finally:
+        bind_models_dir(None)
+        config.reset_for_test()
+        server.stop()
+
+    assert not (models_dir / "bad_sha.gguf").exists()
+    assert not (models_dir / "bad_sha.gguf.part").exists()
+
+
+async def test_model_resume_when_server_ignores_range_restarts_from_zero(
+    tmp_path: Path,
+) -> None:
+    """When resuming with bytes_done > 0, if the server ignores Range (returns 200),
+    the downloader must restart from byte 0 and overwrite .part cleanly."""
+    from vesta.inference import bind_models_dir, bind_on_model_ready
+    from vesta.inference.download import DownloadModelJob
+
+    payload = os.urandom(4096)
+    server = _Server(payload, ignore_range=True)
+    server.start()
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    ready: list[Path] = []
+
+    async def on_ready(path: object) -> None:
+        ready.append(Path(path))  # type: ignore[arg-type]
+
+    half = len(payload) // 2
+    part = models_dir / "norange.gguf.part"
+    part.write_bytes(payload[:half])
+    checkpoint = json.dumps(
+        {"bytes_done": half, "size": len(payload), "url": f"{server.base_url}/norange.gguf"}
+    )
+
+    bind_models_dir(models_dir)
+    bind_on_model_ready(on_ready)
+    config.configure()
+    try:
+        handle = JobHandleImpl(_FakeRunner(), job_id=1)  # type: ignore[arg-type]
+        await DownloadModelJob().run(
+            handle,
+            {
+                "url": f"{server.base_url}/norange.gguf",
+                "filename": "norange",
+                RESUME_CHECKPOINT_KEY: json.loads(checkpoint),
+            },
+        )
+    finally:
+        bind_on_model_ready(None)
+        bind_models_dir(None)
+        config.reset_for_test()
+        server.stop()
+
+    final = models_dir / "norange.gguf"
+    assert final.is_file()
+    assert final.read_bytes() == payload
+    assert not part.exists()
+    assert ready == [final]
+
+
+async def test_model_resume_when_server_returns_mismatched_content_range(
+    tmp_path: Path,
+) -> None:
+    """If server returns 206 with Content-Range start not matching requested start,
+    fail with DownloadModelError."""
+    from vesta.inference import bind_models_dir
+    from vesta.inference.download import DownloadModelError, DownloadModelJob
+
+    payload = os.urandom(4096)
+    server_mismatch = _Server(payload, bad_content_range="bytes 50-4095/4096")
+    server_mismatch.start()
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+
+    half = len(payload) // 2
+    part = models_dir / "bad_range.gguf.part"
+    part.write_bytes(payload[:half])
+    checkpoint = json.dumps(
+        {
+            "bytes_done": half,
+            "size": len(payload),
+            "url": f"{server_mismatch.base_url}/bad_range.gguf",
+        }
+    )
+
+    bind_models_dir(models_dir)
+    config.configure()
+    try:
+        handle = JobHandleImpl(_FakeRunner(), job_id=1)  # type: ignore[arg-type]
+        with pytest.raises(DownloadModelError, match="server Content-Range start 50 != expected"):
+            await DownloadModelJob().run(
+                handle,
+                {
+                    "url": f"{server_mismatch.base_url}/bad_range.gguf",
+                    "filename": "bad_range",
+                    RESUME_CHECKPOINT_KEY: json.loads(checkpoint),
+                },
+            )
+    finally:
+        bind_models_dir(None)
+        config.reset_for_test()
+        server_mismatch.stop()
+
+
+async def test_model_resume_when_part_shrank_restarts_from_zero(
+    tmp_path: Path,
+) -> None:
+    """If the .part file on disk shrank below checkpoint bytes_done, remove it
+    and restart clean from zero."""
+    from vesta.inference import bind_models_dir, bind_on_model_ready
+    from vesta.inference.download import DownloadModelJob
+
+    payload = os.urandom(4096)
+    server = _Server(payload)
+    server.start()
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    ready: list[Path] = []
+
+    async def on_ready(path: object) -> None:
+        ready.append(Path(path))  # type: ignore[arg-type]
+
+    part = models_dir / "shrank.gguf.part"
+    part.write_bytes(payload[:100])  # only 100 bytes on disk
+    checkpoint = json.dumps(
+        {"bytes_done": 2048, "size": len(payload), "url": f"{server.base_url}/shrank.gguf"}
+    )
+
+    bind_models_dir(models_dir)
+    bind_on_model_ready(on_ready)
+    config.configure()
+    try:
+        handle = JobHandleImpl(_FakeRunner(), job_id=1)  # type: ignore[arg-type]
+        await DownloadModelJob().run(
+            handle,
+            {
+                "url": f"{server.base_url}/shrank.gguf",
+                "filename": "shrank",
+                RESUME_CHECKPOINT_KEY: json.loads(checkpoint),
+            },
+        )
+    finally:
+        bind_on_model_ready(None)
+        bind_models_dir(None)
+        config.reset_for_test()
+        server.stop()
+
+    final = models_dir / "shrank.gguf"
+    assert final.is_file()
+    assert final.read_bytes() == payload
+    assert not part.exists()
+    assert ready == [final]
+
+
+async def test_model_resume_when_checkpoint_mismatches_restarts_clean(
+    tmp_path: Path,
+) -> None:
+    """If checkpoint recorded a different url, sha256, or size, restart from zero."""
+    from vesta.inference import bind_models_dir, bind_on_model_ready
+    from vesta.inference.download import DownloadModelJob
+
+    payload = os.urandom(2048)
+    sha = hashlib.sha256(payload).hexdigest()
+    server = _Server(payload)
+    server.start()
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    ready: list[Path] = []
+
+    async def on_ready(path: object) -> None:
+        ready.append(Path(path))  # type: ignore[arg-type]
+
+    part = models_dir / "mismatch.gguf.part"
+    part.write_bytes(b"garbage-from-old-source")
+    # Checkpoint has a different sha256
+    checkpoint = json.dumps(
+        {
+            "bytes_done": 10,
+            "size": len(payload),
+            "sha256": "different_sha",
+            "url": f"{server.base_url}/mismatch.gguf",
+        }
+    )
+
+    bind_models_dir(models_dir)
+    bind_on_model_ready(on_ready)
+    config.configure()
+    try:
+        handle = JobHandleImpl(_FakeRunner(), job_id=1)  # type: ignore[arg-type]
+        await DownloadModelJob().run(
+            handle,
+            {
+                "url": f"{server.base_url}/mismatch.gguf",
+                "filename": "mismatch",
+                "sha256": sha,
+                "size": len(payload),
+                RESUME_CHECKPOINT_KEY: json.loads(checkpoint),
+            },
+        )
+    finally:
+        bind_on_model_ready(None)
+        bind_models_dir(None)
+        config.reset_for_test()
+        server.stop()
+
+    final = models_dir / "mismatch.gguf"
+    assert final.is_file()
+    assert final.read_bytes() == payload
+    assert not part.exists()
     assert ready == [final]
 
 
