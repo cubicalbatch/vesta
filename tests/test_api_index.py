@@ -14,7 +14,6 @@ plus the archive-removal cascade: deleting an archive must delete its vectors
 
 from __future__ import annotations
 
-
 import httpx
 import numpy as np
 import pytest
