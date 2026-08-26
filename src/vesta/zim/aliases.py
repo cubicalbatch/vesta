@@ -15,6 +15,8 @@ junk clusters (248 TLD redirects → one ``List of`` article, measured).
 
 from __future__ import annotations
 
+import logging
+
 from libzim.reader import Archive as LibzimArchive
 
 #: Cap aliases per canonical target — some targets accrete hundreds of redundant
@@ -24,6 +26,8 @@ MAX_ALIASES_PER_TARGET = 30
 #: Targets whose path looks like a list/index page are skipped — their aliases
 #: are navigation, not synonymy.
 _LIST_TARGET_PREFIXES = ("List_of_", "Lists_of_", "Index_of_", "Timeline_of_", "Glossary_of_")
+
+_log = logging.getLogger(__name__)
 
 
 def mine_aliases(
@@ -41,11 +45,16 @@ def mine_aliases(
     per_target_count: dict[str, int] = {}
     seen_sources: set[str] = set()
     out: list[tuple[str, str]] = []
+    skipped = 0  # corrupt entries: skipped, never fatal (see registry._text_entry_paths_sync)
     for i in range(archive.entry_count):
-        entry = archive._get_entry_by_id(i)  # documented libzim iteration API
-        if not entry.is_redirect:
+        try:
+            entry = archive._get_entry_by_id(i)  # documented libzim iteration API
+            if not entry.is_redirect:
+                continue
+            source = entry.title.strip()
+        except Exception:  # corrupt/unreadable entry; skip it like a dangling redirect
+            skipped += 1
             continue
-        source = entry.title.strip()
         if not source or source in seen_sources:
             continue
         try:
@@ -60,6 +69,8 @@ def mine_aliases(
         seen_sources.add(source)
         per_target_count[target] = count + 1
         out.append((source, target))
+    if skipped:
+        _log.warning("zim.alias_mine_skipped", extra={"skipped": skipped})
     return out
 
 
