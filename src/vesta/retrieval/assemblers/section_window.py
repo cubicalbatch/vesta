@@ -69,14 +69,15 @@ class SectionWindow:
         expanded: list[ScoredPassage] = []
         seen: set[_PassageKey] = set()
         dedup_gate = NearDuplicateGate(threshold) if threshold is not None else None
-        per_article: dict[str, int] = {}
+        per_article: dict[tuple[int, str], int] = {}
         tokens_used = 0
 
         for sp in ranked:
             key = (sp.passage.zim_id, sp.passage.path, sp.passage.ordinal)
             if key in seen:
                 continue
-            if per_article.get(sp.passage.path, 0) >= max_per_article:
+            article_key = (sp.passage.zim_id, sp.passage.path)
+            if per_article.get(article_key, 0) >= max_per_article:
                 continue
             if dedup_gate is not None and dedup_gate.is_near_duplicate(sp):
                 continue
@@ -98,7 +99,7 @@ class SectionWindow:
                 # deduped against, so the gate tracks them too.
                 if dedup_gate is not None:
                     dedup_gate.accept(g)
-            per_article[sp.passage.path] = per_article.get(sp.passage.path, 0) + 1
+            per_article[article_key] = per_article.get(article_key, 0) + 1
             tokens_used += marginal_tokens
 
         ordered = apply_ordering(expanded, self._params.ordering)

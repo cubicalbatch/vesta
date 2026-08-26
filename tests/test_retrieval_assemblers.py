@@ -13,6 +13,7 @@ from vesta.retrieval.assemblers._shared import (
     apply_budget,
     apply_ordering,
     build_result,
+    compute_confidence,
 )
 from vesta.retrieval.assemblers.diverse import Diverse
 from vesta.retrieval.assemblers.lead_boost import LeadBoost
@@ -814,6 +815,146 @@ def test_diverse_all_equal_scores_stays_monotone() -> None:
         assert len(result.passages) == 3
 
 
+# ── AUDIT_0824 R4: multi-archive cross-article scoping with identical paths ──
+
+
+def test_apply_budget_multi_archive_identical_paths_per_article_cap() -> None:
+    """Distinct archives with identical article paths must not collide in
+    ``per_article`` or ``max_per_article`` tracking: (1, 'A') and (2, 'A') are
+    different articles."""
+    p1 = _sp("first text in archive 1", path="common_article", zim_id=1, ordinal=0, score=0.9)
+    p2 = _sp("first text in archive 2", path="common_article", zim_id=2, ordinal=0, score=0.8)
+    p3 = _sp("second text in archive 1", path="common_article", zim_id=1, ordinal=1, score=0.7)
+
+    selected = apply_budget(
+        [p1, p2, p3],
+        token_budget=10_000,
+        max_per_article=1,
+        dedup_threshold=None,
+    )
+    keys = [(sp.passage.zim_id, sp.passage.path, sp.passage.ordinal) for sp in selected]
+    # (1, common_article, 0) and (2, common_article, 0) are both kept;
+    # (1, common_article, 1) is capped because zim_id=1 already has 1 passage.
+    assert keys == [(1, "common_article", 0), (2, "common_article", 0)]
+
+
+def test_apply_budget_min_articles_counts_distinct_archives_with_same_path() -> None:
+    """Score floor min_articles check must count (zim_id, path) tuples as
+    distinct articles, not bare paths."""
+    p1 = _sp("text one", path="shared", zim_id=1, score=0.01)
+    p2 = _sp("text two", path="shared", zim_id=2, score=0.01)
+    p3 = _sp("text three", path="other", zim_id=1, score=0.01)
+    p4 = _sp("text four", path="other2", zim_id=1, score=0.01)
+
+    selected = apply_budget(
+        [p1, p2, p3, p4],
+        token_budget=10_000,
+        max_per_article=1,
+        dedup_threshold=None,
+        score_floor_abs=0.5,
+        min_articles=2,
+    )
+    # min_articles=2 is satisfied after admitting (1, "shared") and (2, "shared").
+    # The subsequent low-scoring passages p3 and p4 are pruned by the floor.
+    assert len(selected) == 2
+    assert [(sp.passage.zim_id, sp.passage.path) for sp in selected] == [
+        (1, "shared"),
+        (2, "shared"),
+    ]
+
+
+def test_compute_confidence_multi_archive_identical_paths_density() -> None:
+    """Confidence density calculation must key articles by (zim_id, path)."""
+    p1 = _sp("text one in archive 1", path="Same", zim_id=1, score=0.9)
+    p2 = _sp("text one in archive 2", path="Same", zim_id=2, score=0.8)
+
+    signals = compute_confidence([p1, p2])
+    # 2 passages across 2 distinct (zim_id, path) articles -> max_count is 1 -> density = 1/2 = 0.5
+    # (A bare path would group them into 1 article -> max_count 2 -> density 1.0)
+    assert signals.density == 0.5
+
+
+def test_topk_budget_multi_archive_identical_paths() -> None:
+    """TopKBudget assembler handles identical paths across archives correctly
+    in selection, cards, and confidence."""
+    a = TopKBudget(params=TopKBudget.Params(max_per_article=1, budget_tokens=10_000, dedup="none"))
+    p1 = _sp("arch 1 text", path="Overview", zim_id=1, score=0.95, breadcrumb="Overview")
+    p2 = _sp("arch 2 text", path="Overview", zim_id=2, score=0.90, breadcrumb="Overview")
+    p3 = _sp("arch 1 second text", path="Overview", zim_id=1, score=0.85, breadcrumb="Overview")
+
+    result = a.assemble([p1, p2, p3], _BIG_BUDGET, _pq(), tr=None)  # type: ignore[arg-type]
+    assert len(result.passages) == 2
+    assert [(sp.passage.zim_id, sp.passage.path) for sp in result.passages] == [
+        (1, "Overview"),
+        (2, "Overview"),
+    ]
+    assert len(result.cards) == 2
+    assert [(c.zim_id, c.path) for c in result.cards] == [(1, "Overview"), (2, "Overview")]
+    assert result.confidence.density == 0.5
+
+
+def test_diverse_multi_archive_identical_paths() -> None:
+    """Diverse assembler enforces max_per_article per (zim_id, path) and
+    max_per_archive per zim_id."""
+    a = Diverse(
+        params=Diverse.Params(
+            max_per_article=1,
+            max_per_archive=2,
+            dedup="none",
+            lambda_relevance=1.0,
+        )
+    )
+    p1 = _sp("arch 1 art A text 1", path="A", zim_id=1, score=0.9)
+    p2 = _sp("arch 2 art A text 1", path="A", zim_id=2, score=0.8)
+    p3 = _sp("arch 1 art A text 2", path="A", zim_id=1, score=0.7)
+
+    result = a.assemble([p1, p2, p3], _BIG_BUDGET, _pq(), tr=None)  # type: ignore[arg-type]
+    assert len(result.passages) == 2
+    assert [(sp.passage.zim_id, sp.passage.path) for sp in result.passages] == [(1, "A"), (2, "A")]
+
+
+def test_section_window_multi_archive_identical_paths() -> None:
+    """SectionWindow assembler tracks per_article per (zim_id, path) winning sections."""
+    a = SectionWindow(params=SectionWindow.Params(max_per_article=1, window=1, dedup="none"))
+    passages = [
+        _sp("arch 1 winner", path="Shared", ordinal=5, score=0.9, zim_id=1, breadcrumb="Sec"),
+        _sp("arch 1 neighbour", path="Shared", ordinal=6, score=0.1, zim_id=1, breadcrumb="Sec"),
+        _sp("arch 2 winner", path="Shared", ordinal=5, score=0.85, zim_id=2, breadcrumb="Sec"),
+        _sp("arch 2 neighbour", path="Shared", ordinal=6, score=0.1, zim_id=2, breadcrumb="Sec"),
+    ]
+    result = a.assemble(passages, _BIG_BUDGET, _pq(), tr=None)  # type: ignore[arg-type]
+    # Both archive 1 and archive 2 winning sections expand and are admitted
+    assert len(result.passages) == 4
+    keys = {(sp.passage.zim_id, sp.passage.path, sp.passage.ordinal) for sp in result.passages}
+    assert keys == {(1, "Shared", 5), (1, "Shared", 6), (2, "Shared", 5), (2, "Shared", 6)}
+
+
+def test_lead_boost_multi_archive_identical_paths() -> None:
+    """LeadBoost top-K lead guarantee tracks top articles by (zim_id, path)."""
+    a = LeadBoost(
+        params=LeadBoost.Params(
+            max_per_article=1,
+            guarantee_top_lead=True,
+            guarantee_top_lead_k=2,
+            boost=0.0,
+            dedup="none",
+            exact_title_boost=False,
+        )
+    )
+    # In archive 1, body scores 0.95 and lead scores 0.20
+    p1_body = _sp("arch 1 body", path="Same", zim_id=1, score=0.95, is_lead=False, ordinal=1)
+    p1_lead = _sp("arch 1 lead", path="Same", zim_id=1, score=0.20, is_lead=True, ordinal=0)
+    # In archive 2, body scores 0.90 and lead scores 0.25
+    p2_body = _sp("arch 2 body", path="Same", zim_id=2, score=0.90, is_lead=False, ordinal=1)
+    p2_lead = _sp("arch 2 lead", path="Same", zim_id=2, score=0.25, is_lead=True, ordinal=0)
+
+    # With max_per_article=1, normal selection takes p1_body and p2_body.
+    # top_k=2 guarantee should rescue both p1_lead and p2_lead for (1, "Same") and (2, "Same").
+    result = a.assemble([p1_body, p1_lead, p2_body, p2_lead], _BIG_BUDGET, _pq(), tr=None)  # type: ignore[arg-type]
+    keys = {(sp.passage.zim_id, sp.passage.path, sp.passage.ordinal) for sp in result.passages}
+    assert keys == {(1, "Same", 1), (1, "Same", 0), (2, "Same", 1), (2, "Same", 0)}
+
+
 # ── AUDIT_0822 P2: cached bigram/word-set paths vs naive references ──────────
 #
 # The near-dedup and MMR paths now precompute each passage's bigram/word set
@@ -907,10 +1048,10 @@ def _ref_apply_budget(
         floor = max(abs_part, rel_part)
 
     selected: list[ScoredPassage] = []
-    per_article: dict[str, int] = {}
+    per_article: dict[tuple[int, str], int] = {}
     tokens_used = 0
     for sp in ranked:
-        key = sp.passage.path
+        key = (sp.passage.zim_id, sp.passage.path)
         if per_article.get(key, 0) >= max_per_article:
             continue
         if dedup_threshold is not None and _ref_is_near_duplicate(
@@ -948,7 +1089,7 @@ def _ref_diverse_assemble(
     max_score = pool[0].score or 1.0
 
     selected: list[ScoredPassage] = []
-    per_article: dict[str, int] = {}
+    per_article: dict[tuple[int, str], int] = {}
     per_archive: dict[int, int] = {}
     tokens_used = 0
 
@@ -956,7 +1097,7 @@ def _ref_diverse_assemble(
         best: ScoredPassage | None = None
         best_mmr = float("-inf")
         for sp in pool:
-            if per_article.get(sp.passage.path, 0) >= max_per_article:
+            if per_article.get((sp.passage.zim_id, sp.passage.path), 0) >= max_per_article:
                 continue
             if per_archive.get(sp.passage.zim_id, 0) >= max_per_archive:
                 continue
@@ -978,7 +1119,9 @@ def _ref_diverse_assemble(
         if passage_tokens + tokens_used > token_budget and selected:
             break
         selected.append(best)
-        per_article[best.passage.path] = per_article.get(best.passage.path, 0) + 1
+        per_article[(best.passage.zim_id, best.passage.path)] = (
+            per_article.get((best.passage.zim_id, best.passage.path), 0) + 1
+        )
         per_archive[best.passage.zim_id] = per_archive.get(best.passage.zim_id, 0) + 1
         tokens_used += passage_tokens
     return selected
@@ -999,14 +1142,14 @@ def _ref_section_window_assemble(
 
     expanded: list[ScoredPassage] = []
     seen: set[tuple[int, str, int]] = set()
-    per_article: dict[str, int] = {}
+    per_article: dict[tuple[int, str], int] = {}
     tokens_used = 0
 
     for sp in ranked:
         key = (sp.passage.zim_id, sp.passage.path, sp.passage.ordinal)
         if key in seen:
             continue
-        if per_article.get(sp.passage.path, 0) >= max_per_article:
+        if per_article.get((sp.passage.zim_id, sp.passage.path), 0) >= max_per_article:
             continue
         if threshold is not None and _ref_is_near_duplicate(sp, expanded, threshold=threshold):
             continue
@@ -1027,7 +1170,9 @@ def _ref_section_window_assemble(
         for g in new_members:
             seen.add((g.passage.zim_id, g.passage.path, g.passage.ordinal))
             expanded.append(g)
-        per_article[sp.passage.path] = per_article.get(sp.passage.path, 0) + 1
+        per_article[(sp.passage.zim_id, sp.passage.path)] = (
+            per_article.get((sp.passage.zim_id, sp.passage.path), 0) + 1
+        )
         tokens_used += marginal_tokens
     return expanded
 
@@ -1038,10 +1183,14 @@ def _rand_text(rng: random.Random, lo: int, hi: int) -> str:
 
 def _mutate(rng: random.Random, text: str) -> str:
     """One or two word swaps — near-duplicate Jaccard around the threshold."""
-    out = text.split()
-    for _ in range(rng.choice([1, 2])):
-        out[rng.randrange(len(out))] = rng.choice(_VOCAB)
-    return " ".join(out)
+    words = text.split()
+    if not words:
+        return text
+    k = min(len(words), rng.randint(1, 2))
+    for _ in range(k):
+        idx = rng.randrange(len(words))
+        words[idx] = rng.choice(_VOCAB)
+    return " ".join(words)
 
 
 def _random_corpus(rng: random.Random) -> list[ScoredPassage]:
@@ -1051,11 +1200,11 @@ def _random_corpus(rng: random.Random) -> list[ScoredPassage]:
     text, a cross-archive exact duplicate) are appended deterministically so
     every seed exercises them."""
     scored: list[ScoredPassage] = []
-    ordinals: dict[str, int] = {}
+    ordinals: dict[tuple[int, str], int] = {}
 
     def add(text: str, *, path: str, score: float, zim_id: int, breadcrumb: str) -> None:
-        o = ordinals.get(path, 0)
-        ordinals[path] = o + 1
+        o = ordinals.get((zim_id, path), 0)
+        ordinals[(zim_id, path)] = o + 1
         scored.append(
             _sp(text, path=path, score=score, ordinal=o, breadcrumb=breadcrumb, zim_id=zim_id)
         )

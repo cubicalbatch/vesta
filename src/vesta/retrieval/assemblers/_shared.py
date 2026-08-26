@@ -68,10 +68,10 @@ def apply_budget(
         NearDuplicateGate(threshold=dedup_threshold) if dedup_threshold is not None else None
     )
     selected: list[ScoredPassage] = []
-    per_article: dict[str, int] = {}
+    per_article: dict[tuple[int, str], int] = {}
     tokens_used = 0
     for sp in ranked:
-        key = sp.passage.path
+        key = (sp.passage.zim_id, sp.passage.path)
         if per_article.get(key, 0) >= max_per_article:
             continue
         if dedup_gate is not None and dedup_gate.is_near_duplicate(sp):
@@ -174,9 +174,10 @@ def compute_confidence(passages: Sequence[ScoredPassage]) -> ConfidenceSignals:
     else:
         score_dropoff = None
 
-    per_article: dict[str, int] = {}
+    per_article: dict[tuple[int, str], int] = {}
     for sp in passages:
-        per_article[sp.passage.path] = per_article.get(sp.passage.path, 0) + 1
+        key = (sp.passage.zim_id, sp.passage.path)
+        per_article[key] = per_article.get(key, 0) + 1
     max_count = max(per_article.values()) if per_article else 0
     density = max_count / len(passages) if passages else 0.0
 

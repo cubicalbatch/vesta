@@ -83,7 +83,7 @@ class Diverse:
         selected: list[ScoredPassage] = []
         selected_sets: list[frozenset[str]] = []
         dedup_gate = NearDuplicateGate(threshold) if threshold is not None else None
-        per_article: dict[str, int] = {}
+        per_article: dict[tuple[int, str], int] = {}
         per_archive: dict[int, int] = {}
         tokens_used = 0
         pool_sets = [_word_set(sp.passage.text) for sp in pool]
@@ -92,7 +92,8 @@ class Diverse:
             best_idx: int | None = None
             best_mmr = float("-inf")
             for i, (sp, sp_set) in enumerate(zip(pool, pool_sets, strict=True)):
-                if per_article.get(sp.passage.path, 0) >= max_per_article:
+                article_key = (sp.passage.zim_id, sp.passage.path)
+                if per_article.get(article_key, 0) >= max_per_article:
                     continue
                 if per_archive.get(sp.passage.zim_id, 0) >= self._params.max_per_archive:
                     continue
@@ -135,7 +136,8 @@ class Diverse:
             selected_sets.append(best_set)
             if dedup_gate is not None:
                 dedup_gate.accept(best)
-            per_article[best.passage.path] = per_article.get(best.passage.path, 0) + 1
+            best_article_key = (best.passage.zim_id, best.passage.path)
+            per_article[best_article_key] = per_article.get(best_article_key, 0) + 1
             per_archive[best.passage.zim_id] = per_archive.get(best.passage.zim_id, 0) + 1
             tokens_used += passage_tokens
 
