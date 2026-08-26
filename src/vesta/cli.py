@@ -757,6 +757,7 @@ async def _cmd_bench_run(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR
                 return 1
         if args.save_context and systems != ["retrieval_only"]:
             print("--save-context needs --system retrieval_only (it snapshots the pipeline).")
+            return 1
         if args.context_passages is not None and context_path is None:
             print("--context-passages requires --from-context (it truncates a snapshot replay).")
             return 1

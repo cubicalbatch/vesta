@@ -195,6 +195,62 @@ async def test_bench_run_no_persist_bootstraps(
 
 
 @pytest.mark.asyncio
+async def test_bench_run_save_context_requires_retrieval_only(
+    cli_db: Database, monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`vesta bench run --save-context ...` without `--system retrieval_only` fails with exit code 1."""
+    from vesta import cli
+    from vesta import config as app_config
+
+    @asynccontextmanager
+    async def _fake_open(*_args: Any, **_kwargs: Any) -> Any:
+        app_config.configure()
+        yield _fake_state(cli_db)
+
+    monkeypatch.setattr(cli, "_open_runtime", _fake_open)
+
+    # Case 1: default systems (not retrieval_only)
+    args = cli._build_parser().parse_args(
+        [
+            "bench",
+            "run",
+            "--limit",
+            "2",
+            "--save-context",
+            "snap.json",
+            "--no-persist",
+            "--model",
+            "stub-model",
+        ]
+    )
+    code = await cli._cmd_bench_run(args)
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "--save-context needs --system retrieval_only" in out
+
+    # Case 2: explicit non-retrieval_only system
+    args_sources = cli._build_parser().parse_args(
+        [
+            "bench",
+            "run",
+            "--limit",
+            "2",
+            "--save-context",
+            "snap.json",
+            "--system",
+            "sources_only",
+            "--no-persist",
+            "--model",
+            "stub-model",
+        ]
+    )
+    code_sources = await cli._cmd_bench_run(args_sources)
+    out_sources = capsys.readouterr().out
+    assert code_sources == 1
+    assert "--save-context needs --system retrieval_only" in out_sources
+
+
+@pytest.mark.asyncio
 async def test_bench_compare_buckets(
     cli_db: Database, monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
