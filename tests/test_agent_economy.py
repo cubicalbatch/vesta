@@ -22,6 +22,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import DeltaToolCall, FunctionModel
 
@@ -156,6 +157,22 @@ def _stub_model(
         yield text
 
     return FunctionModel(function=_dummy_request, stream_function=stream_fn)
+
+
+def _crash_then_fallback_model(fallback_text: str) -> FunctionModel:
+    """First ``run`` raises UsageLimitExceeded; every later call answers directly."""
+    calls = {"n": 0}
+
+    def fn(messages: list[ModelMessage], info: Any) -> ModelResponse:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise UsageLimitExceeded("request limit hit")
+        return ModelResponse(parts=[TextPart(content=fallback_text)])
+
+    async def stream_fn(messages: list[ModelMessage], info: Any) -> AsyncIterator[Any]:
+        yield "unused"  # pragma: no cover — run_one_turn never streams
+
+    return FunctionModel(function=fn, stream_function=stream_fn)
 
 
 # ── Round-0 pre-seed: outlier-guard cap (passage set unchanged) ─────────────
@@ -840,6 +857,63 @@ async def test_run_one_turn_answer_cleanup_is_opt_in(
         endpoint="http://stub",
     )
     assert result.answer == "The answer is 42 [1]."
+
+
+@pytest.mark.asyncio
+async def test_run_one_turn_recovery_answer_survives_cleanup_off(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: with ``answer.agent.answer_cleanup=false``, a crashed main
+    run must still return the no-tool fallback answer. The shared recovery core
+    writes ``st.answer``; the driver must mirror it unconditionally (the
+    streaming driver always rebinds) — not return the pre-recovery binding,
+    which is empty after UsageLimitExceeded/overflow."""
+    runtime = FakeToolRuntime(
+        [_scored(0, "relevant passage")],
+        [_card(0, "relevant passage")],
+        "a",
+    )
+    _patch_runtime(monkeypatch, runtime)
+    fallback = 'The fallback answer is 42 [1].\n[1] "Article"'
+    monkeypatch.setattr(
+        agent_chat, "_make_model", lambda *a, **k: _crash_then_fallback_model(fallback)
+    )
+    sn = make_snapshot(**{"answer.agent.answer_cleanup": False})
+    result = await agent_chat.run_one_turn(
+        state,
+        sn,
+        "what is the answer",
+        model_id="stub",
+        endpoint="http://stub",
+    )
+    assert result.answer == fallback
+
+
+@pytest.mark.asyncio
+async def test_run_one_turn_recovery_answer_cleaned_when_opt_in(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With cleanup enabled the recovered answer still passes through cleanup —
+    unchanged behaviour on top of the unconditional rebind."""
+    runtime = FakeToolRuntime(
+        [_scored(0, "relevant passage")],
+        [_card(0, "relevant passage")],
+        "a",
+    )
+    _patch_runtime(monkeypatch, runtime)
+    fallback = 'Based on the provided sources. The fallback answer is 42 [1].\n[1] "Article"'
+    monkeypatch.setattr(
+        agent_chat, "_make_model", lambda *a, **k: _crash_then_fallback_model(fallback)
+    )
+    sn = make_snapshot(**{"answer.agent.answer_cleanup": True})
+    result = await agent_chat.run_one_turn(
+        state,
+        sn,
+        "what is the answer",
+        model_id="stub",
+        endpoint="http://stub",
+    )
+    assert result.answer == "The fallback answer is 42 [1]."
 
 
 @pytest.mark.asyncio

@@ -2468,8 +2468,12 @@ async def run_one_turn(
         ):
             pass  # pragma: no cover — the silent mode never yields
 
-        if ctx.answer_cleanup:
-            answer = _cleanup_answer(st.answer)
+        # Mirror the recovery core's mutations of st.answer unconditionally —
+        # the no-tool fallback / compact re-ask / abstention retry all write
+        # st.answer, and with cleanup off the pre-recovery binding would
+        # otherwise be returned (empty after a crash). Same rebind the
+        # streaming driver performs at its recovery boundary.
+        answer = _cleanup_answer(st.answer) if ctx.answer_cleanup else st.answer
 
         elapsed_ms = int((time.monotonic() - ctx.started) * 1000)
         cards = sorted(ctx.turn_cards.values(), key=lambda c: c.n)
