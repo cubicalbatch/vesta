@@ -57,6 +57,23 @@ class FakeSUT:
         )
 
 
+class RetrievalOnlySUT(FakeSUT):
+    """Duck-typed stand-in for the ``retrieval_only`` harness."""
+
+    name = "retrieval_only"
+    generates_answers = False
+
+    async def run_one(self, q: BenchQuestion) -> QuestionOutput:
+        return QuestionOutput(
+            answer_text="",
+            retrieved_paths=("A",),
+            abstained=False,
+            error=None,
+            trace={},
+            resolved_strategy="retrieval_only",
+        )
+
+
 class FakeJudge:
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -298,3 +315,29 @@ async def test_calibration_min_correlation_controls_trusted(
     config.set_db_values({"bench.calibration_min_correlation": "0.7"})
     (rec,) = await run_benchmark(run_group="grp-trust-lo", **kw)
     assert rec.trusted is True
+
+
+@pytest.mark.asyncio
+async def test_retrieval_only_cell_is_trusted_without_judge(store, resolver) -> None:
+    """AUDIT_0824 N35: a cell that never judges has no verdicts to distrust.
+
+    ``retrieval_only`` rows were stamped ``trusted=false`` whenever judge
+    calibration was unmeasured — even though they never run the judge. The
+    calibration gate applies only to answer-producing cells.
+    """
+    qs = (_q("q1"),)
+    kw = {
+        "dataset": _dataset(qs),
+        "questions": qs,
+        "store": store,
+        "judge": None,
+        "judge_model": "",
+    }
+
+    (rec,) = await run_benchmark(run_group="grp-ro-trusted", systems=[RetrievalOnlySUT()], **kw)
+    assert rec.trusted is True
+    assert rec.calibration is None
+
+    # Control: an answer-producing cell with no judge stays untrusted.
+    (rec,) = await run_benchmark(run_group="grp-judge-untrusted", systems=[FakeSUT()], **kw)
+    assert rec.trusted is False

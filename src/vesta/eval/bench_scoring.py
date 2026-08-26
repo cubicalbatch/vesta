@@ -709,6 +709,25 @@ def _hand_score(verdict: str) -> float:
     return 0.0
 
 
+#: Repo root — anchors the repo-relative ``bench.calibration_path`` default
+#: (``benchmarks/calibration_v1.json``) so it resolves no matter which working
+#: directory the server or CLI starts in.
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _resolve_calibration_path(raw: str) -> Path:
+    """Anchor a relative calibration path to the project root.
+
+    Absolute paths pass through untouched; a relative path that does not
+    exist under the project root falls back to CWD-relative for custom setups.
+    """
+    p = Path(raw).expanduser()
+    if p.is_absolute():
+        return p
+    rooted = _PROJECT_ROOT / p
+    return rooted if rooted.exists() else Path.cwd() / p
+
+
 async def measure_bench_calibration(
     judge: JudgeLLM | None,
     judge_model: str,
@@ -720,9 +739,12 @@ async def measure_bench_calibration(
     """Judge-vs-hand Pearson correlation over the calibration subset.
 
     Loads the hand-scored items at ``calibration_path`` (default
-    ``BENCH_CALIBRATION_PATH``), judges each item's FIXED ``model_answer``
-    against its ground truth via :func:`judge_verdict`, and returns the Pearson
-    correlation between the judge's verdict scores and the hand scores.
+    ``BENCH_CALIBRATION_PATH``, a repo-relative path anchored to the project
+    root), judges each item's FIXED ``model_answer`` against its ground truth
+    via :func:`judge_verdict`, and returns the Pearson correlation between the
+    judge's verdict scores and the hand scores. An item may declare
+    ``expected_behavior`` (``answer``, the default, or ``abstain``) to select
+    the rubric direction it is graded under.
 
     Returns ``None`` when there is no judge, no judge model, no readable
     calibration file, or fewer than 2 scored items — *unmeasured*, not
@@ -733,7 +755,9 @@ async def measure_bench_calibration(
     """
     if judge is None or not judge_model:
         return None
-    path = calibration_path or str(get_or_default(BENCH_CALIBRATION_PATH))
+    path = _resolve_calibration_path(
+        calibration_path or str(get_or_default(BENCH_CALIBRATION_PATH))
+    )
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -753,7 +777,7 @@ async def measure_bench_calibration(
             capability="lookup",
             difficulty="easy",
             slice="core",
-            expected_behavior="answer",
+            expected_behavior=str(it.get("expected_behavior") or "answer"),
             answer=known,
             answer_detail=str(it.get("known_detail", "")),
         )

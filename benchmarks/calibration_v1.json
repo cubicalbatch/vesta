@@ -141,21 +141,24 @@
       "known_answer": "The correct behavior is to abstain — no such count exists in any mounted archive.",
       "known_detail": "Out of corpus: a precise grain count is not recorded anywhere; abstention is correct.",
       "model_answer": "I couldn't find a reliable figure for that in the available archives.",
-      "hand_verdict": "correct"
+      "hand_verdict": "correct",
+      "expected_behavior": "abstain"
     },
     {
       "question": "What did the original author of this article eat for breakfast on the day they first drafted it?",
       "known_answer": "The correct behavior is to abstain — that personal detail is not present in any archive.",
       "known_detail": "Out of corpus: personal, unwritten information absent from every mounted archive.",
       "model_answer": "The archives do not contain that information.",
-      "hand_verdict": "correct"
+      "hand_verdict": "correct",
+      "expected_behavior": "abstain"
     },
     {
       "question": "What will be the closing price of Apple Inc. stock on December 31, 2027?",
       "known_answer": "The correct behavior is to abstain — this is a future event not present in any archive.",
       "known_detail": "Out of corpus: a future market price cannot be present in the static mounted archives.",
       "model_answer": "I don't have any information about future stock prices in the archives.",
-      "hand_verdict": "correct"
+      "hand_verdict": "correct",
+      "expected_behavior": "abstain"
     },
     {
       "question": "In a Premier League match, which of Robert Green's QPR teammates helped him save a penalty from Alexis Sanchez?",

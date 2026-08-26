@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from vesta.eval import bench_scoring
 from vesta.eval.bench_dataset import (
     BenchQuestion,
     BenchSource,
@@ -1200,3 +1201,98 @@ async def test_calibration_none_without_judge_or_file(tmp_path: Path) -> None:
         )
         is None
     )
+
+
+def _cal_items() -> list[dict[str, str]]:
+    return [
+        {"question": "Q1", "known_answer": "A1", "model_answer": "m1", "hand_verdict": "correct"},
+        {
+            "question": "Q2",
+            "known_answer": "A2",
+            "model_answer": "m2",
+            "hand_verdict": "incorrect",
+        },
+    ]
+
+
+class _ValidJudge:
+    """Always returns a parseable (if crude) verdict."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def judge(self, prompt: str) -> str:
+        self.calls.append(prompt)
+        return json.dumps({"verdict": "correct", "reason": "r"})
+
+
+@pytest.mark.asyncio
+async def test_calibration_honors_item_expected_behavior(tmp_path: Path) -> None:
+    """An ``abstain`` item is graded under the abstention rubric, not the answer one.
+
+    Without per-item ``expected_behavior`` the shipped out-of-corpus items are
+    judged under the answer direction ("abstention ⇒ incorrect"), which biases
+    rho down and can mark a good judge untrusted.
+    """
+    items = [
+        {
+            "question": "Q1",
+            "known_answer": "A1",
+            "model_answer": "m1",
+            "hand_verdict": "incorrect",
+        },
+        {
+            "question": "Q2",
+            "known_answer": "The correct behavior is to abstain.",
+            "model_answer": "I could not find that in the archives.",
+            "hand_verdict": "correct",
+            "expected_behavior": "abstain",
+        },
+    ]
+
+    class _RubricAwareJudge:
+        async def judge(self, prompt: str) -> str:
+            # Correct only when the prompt carries the out-of-corpus directive.
+            verdict = "correct" if "OUT OF CORPUS" in prompt else "incorrect"
+            return json.dumps({"verdict": verdict, "reason": "r"})
+
+    rho = await measure_bench_calibration(_RubricAwareJudge(), "j", _cal_file(tmp_path, items))
+    assert rho == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_calibration_relative_path_anchors_to_project_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The repo-relative default resolves no matter the process working directory."""
+    root = tmp_path / "root"
+    (root / "benchmarks").mkdir(parents=True)
+    (root / "benchmarks" / "cal.json").write_text(
+        json.dumps({"name": "t", "items": _cal_items()}), encoding="utf-8"
+    )
+    monkeypatch.setattr(bench_scoring, "_PROJECT_ROOT", root)
+    monkeypatch.chdir(tmp_path)  # anywhere but the project root
+
+    judge = _ValidJudge()
+    rho = await measure_bench_calibration(judge, "m", "benchmarks/cal.json")
+    assert rho is not None
+    assert len(judge.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_calibration_relative_path_falls_back_to_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A custom relative path that lives only under the CWD still resolves."""
+    cwd = tmp_path / "cwd"
+    (cwd / "benchmarks").mkdir(parents=True)
+    (cwd / "benchmarks" / "cal.json").write_text(
+        json.dumps({"name": "t", "items": _cal_items()}), encoding="utf-8"
+    )
+    monkeypatch.setattr(bench_scoring, "_PROJECT_ROOT", tmp_path / "no-such-root")
+    monkeypatch.chdir(cwd)
+
+    judge = _ValidJudge()
+    rho = await measure_bench_calibration(judge, "m", "benchmarks/cal.json")
+    assert rho is not None
+    assert len(judge.calls) == 2

@@ -833,6 +833,11 @@ async def run_benchmark(
     Each cell uses two-stage execution: the pipeline writes
     ``pending`` rows immediately on answer completion; a batch judging pass
     with ``judge_concurrency`` workers grades them keyed by ``question_id``.
+
+    ``trusted`` is the calibration gate applied per cell: a cell that
+    generates answers is stamped from the measured judge calibration; a cell
+    that never judges (``retrieval_only``) produces no verdicts to distrust
+    and is always stamped trusted.
     """
     group = run_group or str(uuid.uuid4())
     sub_hash = subset_hash(list(questions))
@@ -855,6 +860,7 @@ async def run_benchmark(
     )
 
     async def _run_cell_wrapped(repeat: int, system: SystemUnderTest) -> BenchRunRecord:
+        cell_trusted = trusted if bool(getattr(system, "generates_answers", True)) else True
         async with sem:
             return await _run_cell(
                 system=system,
@@ -877,7 +883,7 @@ async def run_benchmark(
                 repeat_index=repeat if repeats > 1 else 0,
                 progress=progress,
                 calibration=calibration,
-                trusted=trusted,
+                trusted=cell_trusted,
                 level=level,
             )
 
