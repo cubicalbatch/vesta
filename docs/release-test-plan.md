@@ -2,7 +2,7 @@
 
 Purpose: confirm the whole standard user journey works before shipping — Docker
 Compose setup → first-run wizard → archive download + indexing → search → AI
-answers on the local 1.2B model → settings → persistence → offline. You (the
+answers on the local Qwen3.5 4B model → settings → persistence → offline. You (the
 test agent) are acting as a normal user with a browser, a shell, and this file.
 Follow the phases in order; each phase lists concrete steps, expected results,
 and the evidence to capture. File a failure for anything that deviates, with
@@ -34,21 +34,22 @@ UI surfaces (served at `/`):
 
 Key facts:
 
-- **Ports**: compose maps host **5329 → container 8080**. App URL:
-  `http://localhost:5329`.
-- **Data lives in one bind-mounted directory** (zims/, models/, vesta.db). The
-  compose file currently binds `./data2` — read Phase 1 before starting; do a
-  **fresh-directory** install so the first-run journey is honestly exercised.
+- **Ports**: compose maps host **5129 → container 8080**. App URL:
+  `http://localhost:5129`.
+- **Data lives in one bind-mounted directory** (zims/, models/, vesta.db).
+  Compose binds `./data` (created on first run); the `docker-compose.e2e.yml`
+  override points the bind at `$E2E` instead — read Phase 1 before starting;
+  do a **fresh-directory** install so the first-run journey is honestly
+  exercised.
 - **Three retrieval profiles**: `lexical` (Xapian full-text only), `standard`
   (+ONNX static scoring), `hybrid` (default; + vector kNN **only when the
   archive has a semantic index**). Keyword search works immediately at depth 0;
   semantic matching needs the one-time index build (depth 1–3).
-- **Local LLM presets**: `LFM2.5 1.2B Instruct (Q4_K_M)` — 730,895,168 bytes,
-  ~921 MiB loaded, ~1.1 s cold load, never emits hidden reasoning — and
-  `Qwen3.5 4B (Q4_K_S)` — 2.6 GB, needs ≥4 GB RAM, has a thinking toggle.
-  The wizard preselects by RAM (≥4 GB → Qwen). **This box has ~38 GB RAM, so
-  Qwen will be preselected — explicitly pick LFM2.5 1.2B** (the mission's
-  target model).
+- **Local LLM preset**: exactly one ships — **Qwen3.5 4B (Q4_K_S)**
+  (`qwen3.5-4b-q4_k_s`) — 2,590,430,368 bytes (~2.6 GB download), needs ≥4 GB
+  RAM (~2.5 GB resident at the default 8k window), thinking toggle (off =
+  fast direct answers; default off). It is the only preset, so the wizard
+  preselects it regardless of RAM.
 - **Internet is needed only for**: the Docker image build, the Kiwix catalog
   refresh + ZIM downloads, and the GGUF model download (HuggingFace). After
   setup, everything is local.
@@ -56,7 +57,7 @@ Key facts:
   symlinked into the data volume on first boot — no encoder downloads at runtime.
 
 Host environment (already verified): Linux, Docker 29.x, 8 CPUs, ~38 GB RAM,
-~196 GB free disk — ample for a 2.24 GB archive + the 1.2B model.
+~196 GB free disk — ample for a 2.24 GB archive + the 4B model.
 
 ---
 
@@ -71,18 +72,16 @@ allow 10–25 minutes. Boot after build: seconds.
    ```sh
    docker compose config | sed -n '/volumes:/,/^[a-z]/p'
    ```
-   Expected: `./data2:/app/data` (the file's comment says `./data`; the bind is
-   `./data2` — that mismatch is known, not a bug to file).
-2. **Do not touch `./data`** — it holds live dev state (3 GB DB). For a fresh
-   install use the e2e override, which points the bind at an empty dir and also
+   Expected: `./data:/app/data` plain, or with the e2e override
+   `${E2E:-/tmp/vesta-e2e}:/app/data`.
+2. **Do a fresh-directory install** so the first-run journey is honestly
+   exercised: the e2e override points the bind at an empty dir and also
    publishes the llama-server router on `127.0.0.1:8081` (used in Phase 11):
    ```sh
    export E2E=/tmp/vesta-e2e && mkdir -p "$E2E"
    docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build
    ```
-   (Alternative: `mv data2 data2.staging-backup` then plain
-   `docker compose up -d --build`. Either way, the data dir must start empty.)
-3. Confirm nothing else squats on host port 5239.
+3. Confirm nothing else squats on host port 5129.
 
 ### P1.2 Build & boot
 
@@ -96,22 +95,22 @@ allow 10–25 minutes. Boot after build: seconds.
 
 ### P1.3 Healthy empty state
 
-1. `curl -s http://localhost:5239/health | jq` →
+1. `curl -s http://localhost:5129/health | jq` →
    - `"status": "ok"`, `components.database: "ok"`;
    - `setup_completed: false`;
    - `advanced_menu: false`;
    - all `capabilities` false (empty appliance is *healthy*).
-2. Open **http://localhost:5239** in the browser → the SPA loads and
+2. Open **http://localhost:5129** in the browser → the SPA loads and
    **redirects to `/welcome`** (zero archives + setup incomplete).
 3. Spot-check API surfaces on the empty state:
    ```sh
-   curl -s http://localhost:5239/api/zims | jq            # {"archives":[]}
-   curl -s http://localhost:5239/api/models/status | jq    # state "absent"
-   curl -s http://localhost:5239/api/settings/schema | jq '.settings | length'
-   curl -s http://localhost:5239/api/system/hardware | jq  # ram_total_bytes ~38GB, cpu_count 8
-   curl -s http://localhost:5239/api/system/storage | jq   # free_bytes sane
+   curl -s http://localhost:5129/api/zims | jq            # {"archives":[]}
+   curl -s http://localhost:5129/api/models/status | jq    # state "absent"
+   curl -s http://localhost:5129/api/settings/schema | jq '.settings | length'
+   curl -s http://localhost:5129/api/system/hardware | jq  # ram_total_bytes ~38GB, cpu_count 8
+   curl -s http://localhost:5129/api/system/storage | jq   # free_bytes sane
    ```
-   Schema length should be ~110 settings.
+   Schema length should be ~104 settings.
 4. **Evidence**: `/health` JSON + a screenshot of the welcome page.
 
 ---
@@ -119,7 +118,7 @@ allow 10–25 minutes. Boot after build: seconds.
 ## 2. Phase 2 — First-run wizard (archive + local LLM)
 
 **Time budget**: archive download depends on bandwidth (~0.18 GB should be
-minutes); model download 730 MB; index depth-1 of the small archive: minutes.
+minutes); model download ~2.6 GB; index depth-1 of the small archive: minutes.
 
 ### P2.1 Wizard step 1 — choose archives
 
@@ -127,7 +126,7 @@ minutes); model download 730 MB; index depth-1 of the small archive: minutes.
    cached OPDS feed). Watch the Jobs (dot in top bar → Jobs tab, or
    `GET /api/jobs`) — a `refresh_catalog` job runs and completes. If the feed
    was already cached, no refresh fires; either is fine.
-2. Two featured cards appear: **wikipedia_en_100 (nopic, ~0.18 GB, "Fastest
+2. Two featured cards appear: **wikipedia_en_100 (~0.18 GB, "Fastest
    start")** and **wikipedia_en_top (nopic, ~2.24 GB, "Most useful")**, plus a
    secondary checkbox list (wikivoyage, stackexchange, …). Sizes/article counts
    render once the live catalog matches.
@@ -139,12 +138,12 @@ minutes); model download 730 MB; index depth-1 of the small archive: minutes.
 5. **Evidence**: screenshot of step 1 with the selection; job list showing
    `download_zim` running with progress/rate.
 
-### P2.2 Wizard step 2 — local LLM (the 1.2B)
+### P2.2 Wizard step 2 — local LLM
 
 1. Step 2 offers three options: use a remote endpoint, **download a GGUF**,
-   or skip. The RAM-tuned recommendation preselects **Qwen3.5 4B** on this
-   38 GB box — switch the selection to **LFM2.5 1.2B Instruct (Q4_K_M)**
-   (~697 MiB, "fast and memory-efficient").
+   or skip. The recommendation preselects the only preset,
+   **Qwen3.5 4B (Q4_K_S)** (~2.6 GB download, min 4 GB RAM — fine on this
+   38 GB box).
 2. Click **Download** → a `download_model` job runs with progress. On
    completion the preset card flips to "Downloaded", the runtime **preloads**
    the model (`GET /api/models/status`: `loading` → `loaded`), and the wizard
@@ -161,11 +160,11 @@ minutes); model download 730 MB; index depth-1 of the small archive: minutes.
 
 ### P2.3 Acquisition chain completes
 
-1. Poll `GET /api/zims` until the archive shows `index_status: "ready"` and
+1. Poll `GET /api/zims` until the archive shows `index_status: "complete"` and
    `index_depth: 1` (watch the Jobs tab for the `index_zim` job's progress
    bar). Expected within minutes for ~5k articles on 8 CPUs.
 2. StatusBar (bottom of Search page) now reads like
-   `offline · 1 archive · ~5K articles · LFM2.5 1.2B … · profile hybrid`.
+   `offline · 1 archive · ~5K articles · Qwen3.5 4B … · profile hybrid`.
 3. **Evidence**: final `GET /api/zims` JSON + StatusBar screenshot.
 
 ---
@@ -205,7 +204,7 @@ The **Use AI** toggle defaults OFF. Sources mode hits `GET /api/search`.
 
 ---
 
-## 4. Phase 4 — AI answers with LFM2.5 1.2B (citations, follow-ups)
+## 4. Phase 4 — AI answers with Qwen3.5 4B (citations, follow-ups)
 
 **Time budget**: first AI answer includes model load + retrieval + CPU
 generation — allow **up to 5 minutes** before calling it hung. Subsequent
@@ -271,9 +270,9 @@ file, context, thinking, memory estimate, last used) and Settings → AI.
 
 ### P5.1 Chip states and manual load/unload
 
-1. Chip shows green + "LFM2.5 1.2B …" when loaded. Click the chip → popover
-   details; context ≈ 32768 (33K tokens), thinking off (LFM never thinks),
-   memory ≈ 0.9–1.2 GB.
+1. Chip shows green + "Qwen3.5 4B …" when loaded. Click the chip → popover
+   details; context ≈ 8192 (8K tokens — the factory default), thinking off
+   (default; Qwen has a working toggle), memory ≈ 2.5 GB.
 2. **Unload** from the popover (or Settings → AI) → chip state changes
    (unloaded/stopped; "No AI"/idle styling).
 3. Ask a question while unloaded → the model transparently reloads and the
@@ -299,10 +298,12 @@ file, context, thinking, memory estimate, last used) and Settings → AI.
    `answer.agent.context_profile` and `inference.local.context_size`; the copy
    explains the window applies after a model restart (Vesta restarts it
    itself).
-2. Pick **Lean** (8k) → ask a question → still answers; the chip popover now
-   shows ~8K context.
-3. Restore **Balanced** afterwards.
-4. **Evidence**: popover screenshots at 33K and 8K.
+2. Pick **Thorough** (32k) → ask a question → still answers (the runtime
+   restarts llama-server with the new window); the chip popover now shows
+   ~32K context.
+3. Restore **Lean** afterwards (the factory reading: profile `auto` +
+   8192 tokens).
+4. **Evidence**: popover screenshots at 32K and back at 8K.
 
 ### P5.4 Model deletion (do this only when no further AI tests remain)
 
@@ -335,7 +336,7 @@ file, context, thinking, memory estimate, last used) and Settings → AI.
 1. Cancel the in-flight index → job terminal, archive left at depth 0 (or
    partial), the row offers Build index again. Re-trigger at **depth 1** and
    let it run to completion this time (allow a long budget; poll
-   `GET /api/zims` for `index_status: "ready"`, `index_depth: 1`).
+   `GET /api/zims` for `index_status: "complete"`, `index_depth: 1`).
 2. After it's ready: `index_depth` label shows on the row; a fresh AI question
    now retrieves from the bigger corpus (noticeably better answers).
 3. **Evidence**: final `GET /api/zims` for both archives.
@@ -402,7 +403,7 @@ file, context, thinking, memory estimate, last used) and Settings → AI.
 
 ## 8. Phase 8 — Settings
 
-Do **not** exhaustively test all ~110 knobs. Test the surfaces and a
+Do **not** exhaustively test all ~104 knobs. Test the surfaces and a
 representative sample.
 
 ### P8.1 Basic view and composites
@@ -415,7 +416,7 @@ representative sample.
 
 ### P8.2 All-settings view, groups, validation
 
-1. Toggle **All settings** → the full ~110 settings render grouped by section
+1. Toggle **All settings** → the full ~104 settings render grouped by section
    → subsection, each with help text; restart-required settings are marked
    (e.g. `server.host` not hot).
 2. Make one valid change (e.g. `logging.level` → `DEBUG`) plus one **invalid**
@@ -484,12 +485,12 @@ Run these against the running fresh install and record status codes (all
 straightforward 200s unless noted):
 
 ```sh
-BASE=http://localhost:5239
+BASE=http://localhost:5129
 curl -s $BASE/health | jq '.status, .setup_completed'
 curl -s $BASE/api/zims | jq '.archives | length'
 curl -s "$BASE/api/search?q=einstein" | jq '.cards | length'        # > 0
-curl -s $BASE/api/settings/schema | jq '.settings | length'          # ~110
-curl -s $BASE/api/models/presets | jq '.presets[].id'                # lfm2.5-1.2b…, qwen3.5-4b…
+curl -s $BASE/api/settings/schema | jq '.settings | length'          # ~104
+curl -s $BASE/api/models/presets | jq '.presets[].id'                # qwen3.5-4b-q4_k_s (the only preset)
 curl -s $BASE/api/models/status | jq '.state'                        # loaded
 curl -s $BASE/api/jobs | jq '.jobs[0] | {type,status}'
 curl -s $BASE/api/conversations | jq 'length'
@@ -510,7 +511,7 @@ curl -sN -X POST $BASE/api/chat -H 'content-type: application/json' \
 
 Optional loopback "remote" test (uses the e2e override's published router):
 switch inference to remote with endpoint `http://127.0.0.1:8081/v1` (Settings →
-AI → Remote), set model to `LFM2.5-1.2B-Instruct-Q4_K_M`, ask a question →
+AI → Remote), set model to `Qwen3.5-4B-Q4_K_S.gguf`, ask a question →
 answers exactly like local. Switch back to local afterwards.
 
 ---
@@ -520,8 +521,6 @@ answers exactly like local. Switch back to local afterwards.
 - **No authentication layer exists** — there is no password or auth anywhere in
   the backend. Exposing the port exposes the whole app; only test on trusted
   networks. Note it in the report as a known gap, not a test failure.
-- The compose file comment says `./data` but binds `./data2` (dev-machine
-  quirk).
 - Follow-up AI turns may legitimately show **zero** source cards (answers from
   conversation context).
 - Documents-bundle ZIMs (`zimgit-*`) and media ZIMs are specialized; PDF
@@ -534,7 +533,7 @@ answers exactly like local. Switch back to local afterwards.
 
 - Benchmark/eval tooling (`vesta bench`, `vesta eval`, judge calibration) —
   behind the Advanced gate; not part of the standard user journey.
-- Exhaustive settings coverage (test the sample above, not all ~110 knobs).
+- Exhaustive settings coverage (test the sample above, not all ~104 knobs).
 - Multi-user/auth hardening, GPU (Vulkan) acceleration paths (no `/dev/dri`
   mapping in the default compose), non-Docker dev workflow (`./start.sh`,
   `./dev.sh`) unless specifically requested.
@@ -543,6 +542,6 @@ answers exactly like local. Switch back to local afterwards.
 
 Produce a table: `Test ID | Status (pass/fail/blocked/not-exercised) |
 Evidence (screenshot path / curl output / log excerpt) | Notes`. End with:
-overall verdict (ship / ship-blockers listed), the known-gap notes (auth
-password, compose comment), and any observed timings worth recording (first
-answer, index rate, model load).
+overall verdict (ship / ship-blockers listed), the known-gap notes (no auth
+password), and any observed timings worth recording (first answer, index rate,
+model load).
