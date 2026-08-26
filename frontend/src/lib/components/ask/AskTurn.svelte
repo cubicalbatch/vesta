@@ -5,6 +5,7 @@
 	// (Render order).
 	import type { AnswerState } from '$lib/answer/reducer';
 	import { formatTurnStatus } from '$lib/answer/status';
+	import { untrack } from 'svelte';
 	import type { SourceCard as SourceCardT } from '$lib/types';
 	import { provideSources } from '$lib/stores/sources-context.svelte';
 	import { readerStore } from '$lib/stores/reader.svelte';
@@ -42,7 +43,11 @@
 	});
 
 	$effect(() => {
-		// Focus token changes on every click, even re-clicking the same chip.
+		// Focus is EDGE-TRIGGERED on focusToken: it bumps once per chip click
+		// (even re-clicking the same card). The reducer replaces the whole
+		// AnswerState object on every streamed event, so any reactive read of
+		// `answerState` here would re-open the Reader drawer and replay this
+		// effect on every token after one click — hence untrack below.
 		sources.focusToken;
 		const id = sources.focused;
 		if (id == null || !sourcesEl) return;
@@ -52,18 +57,20 @@
 			[{ boxShadow: '0 0 0 3px var(--accent-ring)' }, { boxShadow: '0 0 0 0 transparent' }],
 			{ duration: 900 }
 		);
-		const card = answerState.sources[id];
+		const card = untrack(() => answerState.sources[id]);
 		if (card) {
 			const span = sources.spanForCard(id);
-			readerStore.open({
-				zimId: card.zim_id,
-				path: card.path,
-				title: card.title,
-				cards: answerState.sources,
-				cardIndex: id,
-				passageSpan: span?.passage_span ?? null,
-				citedAs: id + 1
-			});
+			untrack(() =>
+				readerStore.open({
+					zimId: card.zim_id,
+					path: card.path,
+					title: card.title,
+					cards: answerState.sources,
+					cardIndex: id,
+					passageSpan: span?.passage_span ?? null,
+					citedAs: id + 1
+				})
+			);
 		}
 	});
 
