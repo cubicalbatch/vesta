@@ -4,9 +4,9 @@
 
 Vesta turns Kiwix ZIM archives (Wikipedia, StackExchange, Project Gutenberg,
 Wikivoyage, and thousands more) into a knowledge base you search and converse
-with. Ask a question in plain language and get a direct answer, streamed as
-it's written, with every claim cited back to the passage it came from. It all
-runs on your machine: after setup, no internet connection is needed.
+with. Ask a question in plain language and get a direct answer, with every claim
+cited back to the passage it came from. It all runs on your machine: after setup,
+no internet connection is needed.
 
 <p align="center">
   <img src="screenshots/welcome.png" width="31%" alt="Welcome Setup" />
@@ -106,7 +106,7 @@ Switchable at any time in Settings:
 Nearly everything is a setting in the web UI, and nearly everything applies
 without restarts.
 
-## Acknowledgement
+## Acknowledgements
 
 Vesta relies on great work from others:
 
@@ -115,7 +115,7 @@ Vesta relies on great work from others:
   more possible.
 - [llama.cpp](https://github.com/ggml-org/llama.cpp), whose `llama-server`
   binary we bundle to run the local language model.
-- [ONNX Runtime](https://onnxruntime.org), which powers the embedding and
+- [ONNX Runtime](https://onnxruntime.ai), which powers the embedding and
   reranking encoders.
 - The authors of the bundled encoder models:
   [potion-retrieval-32M](https://huggingface.co/minishlab/potion-retrieval-32M)
