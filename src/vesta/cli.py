@@ -266,20 +266,21 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 — one parser 
     )
     p_run.add_argument("--limit", type=int, default=None, help="Run only the first N questions.")
     p_run.add_argument(
-        "--repeats", type=int, default=None, help="Run each cell N times (default 1)."
+        "--repeats", type=int, default=None, help="Run each cell N times (default: bench.repeats)."
     )
     p_run.add_argument(
         "--concurrency",
         type=int,
         default=None,
-        help="Pipeline questions in flight (default 1 — raising it contaminates latency; "
-        "use only for a dedicated endpoint).",
+        help="Pipeline questions in flight (default: bench.max_concurrent — raising it "
+        "contaminates latency; use only for a dedicated endpoint).",
     )
     p_run.add_argument(
         "--judge-concurrency",
         type=int,
         default=None,
-        help="Judge calls in flight (default 4; clamped to 1 when the judge shares the answer endpoint).",
+        help="Judge calls in flight (default: bench.judge.concurrency; clamped to 1 when the "
+        "judge shares the answer endpoint).",
     )
     p_run.add_argument("--scope", default=None, help="Restrict retrieval scope (ZIM id/name).")
     p_run.add_argument("--label", default=None, help="Human label for the run group.")
@@ -422,7 +423,8 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 — one parser 
         "--judge-concurrency",
         type=int,
         default=None,
-        help="Judge calls in flight (default 4; clamped to 1 when the judge shares the answer endpoint).",
+        help="Judge calls in flight (default: bench.judge.concurrency; clamped to 1 when the "
+        "judge shares the answer endpoint).",
     )
     p_verify.add_argument("--data-dir", default=None, help="Override data.dir.")
     p_list = bsub.add_parser("list", help="List persisted bench runs.")
@@ -774,7 +776,7 @@ async def _cmd_bench_run(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR
         # Judge endpoint override must be reflected in the clamp too.
         effective_judge_endpoint = args.judge_endpoint or judge_endpoint
         judge_concurrency, shares = resolve_judge_concurrency(
-            args.judge_concurrency or int(BENCH_JUDGE_CONCURRENCY.default),
+            args.judge_concurrency or int(config.get(BENCH_JUDGE_CONCURRENCY)),
             answer_endpoint=answer_endpoint,
             judge_endpoint=effective_judge_endpoint,
         )
@@ -812,7 +814,7 @@ async def _cmd_bench_run(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR
         )
         print(
             f"matrix {len(systems)} systems x {len(profiles)} profiles x {len(models)} models "
-            f"= {len(sut_list)} cells x {args.repeats or BENCH_REPEATS.default} repeat(s)"
+            f"= {len(sut_list)} cells x {args.repeats or config.get(BENCH_REPEATS)} repeat(s)"
         )
         print(
             f"answer endpoint {answer_endpoint}  judge concurrency {judge_concurrency}"
@@ -863,8 +865,8 @@ async def _cmd_bench_run(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR
                 settings_set=(settings_set or None),
                 judge_concurrency=judge_concurrency,
                 judge_shares_endpoint=shares,
-                repeats=args.repeats or int(BENCH_REPEATS.default),
-                max_concurrent=args.concurrency or int(BENCH_MAX_CONCURRENT.default),
+                repeats=args.repeats or int(config.get(BENCH_REPEATS)),
+                max_concurrent=args.concurrency or int(config.get(BENCH_MAX_CONCURRENT)),
                 progress=_print_progress,
                 level=args.level,
             )
@@ -1095,7 +1097,8 @@ async def _cmd_bench_rejudge(args: argparse.Namespace) -> int:
                 judge_model,
                 args.run_id,
                 questions=questions,
-                judge_concurrency=args.judge_concurrency or int(BENCH_JUDGE_CONCURRENCY.default),
+                judge_concurrency=args.judge_concurrency
+                or int(config.get(BENCH_JUDGE_CONCURRENCY)),
             )
         finally:
             if judge_gateway is not None:
@@ -1276,9 +1279,9 @@ async def _cmd_bench_verify(args: argparse.Namespace) -> int:
         # bench.max_concurrent (verify reports no latency, so raise freely via
         # --concurrency), judges bench.judge.concurrency clamped to 1 when the
         # judge shares the answer endpoint, archive ops the retrieval fan-out.
-        answer_concurrency = max(1, args.concurrency or int(BENCH_MAX_CONCURRENT.default))
+        answer_concurrency = max(1, args.concurrency or int(config.get(BENCH_MAX_CONCURRENT)))
         judge_concurrency, _shares = resolve_judge_concurrency(
-            args.judge_concurrency or int(BENCH_JUDGE_CONCURRENCY.default),
+            args.judge_concurrency or int(config.get(BENCH_JUDGE_CONCURRENCY)),
             answer_endpoint=str(config.get(INFERENCE_LLM_ENDPOINT_URL)),
             judge_endpoint=str(config.get(EVAL_JUDGE_ENDPOINT_URL)),
         )
@@ -1421,7 +1424,7 @@ async def _verify_pass(
     from vesta.eval.bench_runner import BENCH_MAX_CONCURRENT
 
     sut = make_system(system, state, model_id=model)
-    sem = asyncio.Semaphore(max(1, int(max_concurrent or int(BENCH_MAX_CONCURRENT.default))))
+    sem = asyncio.Semaphore(max(1, int(max_concurrent or int(config.get(BENCH_MAX_CONCURRENT)))))
 
     async def _one(q: Any) -> tuple[str, str]:
         async with sem:
@@ -1452,7 +1455,7 @@ async def _verify_judge(
     from vesta.eval.bench_runner import BENCH_JUDGE_CONCURRENCY
     from vesta.eval.bench_scoring import judge_verdict
 
-    sem = asyncio.Semaphore(max(1, int(max_concurrent or int(BENCH_JUDGE_CONCURRENCY.default))))
+    sem = asyncio.Semaphore(max(1, int(max_concurrent or int(config.get(BENCH_JUDGE_CONCURRENCY)))))
 
     async def _one(q: Any) -> tuple[str, Any]:
         ans = answers.get(q.id, "")

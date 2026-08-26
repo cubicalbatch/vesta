@@ -30,6 +30,7 @@ from enum import StrEnum
 from pathlib import Path
 from statistics import mean
 
+from vesta.config import get_or_default
 from vesta.config.settings import setting
 from vesta.eval.answer_metrics import JudgeLLM, compute_calibration_correlation
 from vesta.eval.bench_dataset import BenchQuestion, BenchSource
@@ -592,7 +593,7 @@ async def judge_verdict(
     abstained: bool,
     judge: JudgeLLM | None,
     judge_model: str,
-    retries: int = int(BENCH_JUDGE_RETRIES.default),
+    retries: int | None = None,
     cache_get: Callable[[str], Awaitable[JudgeOutcome | None]] | None = None,
     cache_put: Callable[[str, JudgeOutcome], Awaitable[None]] | None = None,
 ) -> JudgeOutcome:
@@ -611,6 +612,8 @@ async def judge_verdict(
     """
     if judge is None or not judge_model:
         return _unjudged(judge_model, "no judge configured")
+    if retries is None:
+        retries = int(get_or_default(BENCH_JUDGE_RETRIES))
     prompt = render_rubric(question=question, model_answer=model_answer, abstained=abstained)
     if cache_get is not None:
         key = judge_cache_key(prompt, question.id, model_answer, judge_model)
@@ -659,9 +662,9 @@ def _hand_score(verdict: str) -> float:
 async def measure_bench_calibration(
     judge: JudgeLLM | None,
     judge_model: str,
-    calibration_path: str = "",
+    calibration_path: str | None = None,
     *,
-    retries: int = int(BENCH_JUDGE_RETRIES.default),
+    retries: int | None = None,
     concurrency: int = 1,
 ) -> float | None:
     """Judge-vs-hand Pearson correlation over the calibration subset.
@@ -680,7 +683,7 @@ async def measure_bench_calibration(
     """
     if judge is None or not judge_model:
         return None
-    path = calibration_path or str(BENCH_CALIBRATION_PATH.default)
+    path = calibration_path or str(get_or_default(BENCH_CALIBRATION_PATH))
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):

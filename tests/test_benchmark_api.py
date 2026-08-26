@@ -946,6 +946,9 @@ async def test_concurrent_groups_serialize_on_gate(monkeypatch: pytest.MonkeyPat
         def strip_secret_values(self, values: Any) -> dict[str, Any]:
             return dict(values)
 
+        def get_or_default(self, s: Any) -> Any:
+            return s.default
+
     monkeypatch.setattr("vesta.api.bench.app_config", _StubConfig())
     monkeypatch.setattr("vesta.api.bench.make_judge_llm", lambda _state, _m: (None, None))
 

@@ -40,6 +40,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
+from vesta.config import get_or_default
 from vesta.config.settings import setting
 from vesta.eval.answer_metrics import JudgeLLM
 from vesta.eval.bench_dataset import BenchDataset, BenchQuestion, subset_hash
@@ -618,8 +619,8 @@ async def _run_cell(  # noqa: PLR0912, PLR0915
     run_id = await store.insert_run(record)
     record = replace(record, id=run_id)
 
-    cache_enabled = bool(BENCH_JUDGE_CACHE.default)
-    retries = int(BENCH_JUDGE_RETRIES.default)
+    cache_enabled = bool(get_or_default(BENCH_JUDGE_CACHE))
+    retries = int(get_or_default(BENCH_JUDGE_RETRIES))
     n_q = len(questions)
 
     # keyed outputs for stage 2 (concurrency invariance: results keyed by qid)
@@ -792,10 +793,10 @@ async def run_benchmark(
     economy: str | None = None,
     context_profile: str | None = None,
     settings_set: Mapping[str, str] | None = None,
-    judge_concurrency: int = int(BENCH_JUDGE_CONCURRENCY.default),
+    judge_concurrency: int | None = None,
     judge_shares_endpoint: bool = False,
-    max_concurrent: int = int(BENCH_MAX_CONCURRENT.default),
-    repeats: int = int(BENCH_REPEATS.default),
+    max_concurrent: int | None = None,
+    repeats: int | None = None,
     progress: Callable[[ProgressUpdate], None] | None = None,
     level: int | None = None,
 ) -> list[BenchRunRecord]:
@@ -803,8 +804,9 @@ async def run_benchmark(
 
     One invocation produces one ``run_group`` (uuid) + one ``bench_runs`` row
     per cell (system x repeat). Cells run at most ``max_concurrent`` at a time
-    (default 1 — shared inference endpoints contaminate reported latency at
-    N-wide pipeline concurrency; raise it only for a dedicated endpoint).
+    (default: the ``bench.max_concurrent`` setting, itself 1 — shared inference
+    endpoints contaminate reported latency at N-wide pipeline concurrency; raise
+    it only for a dedicated endpoint).
     ``repeats > 1`` runs each cell N times for variance.
 
     Each cell uses two-stage execution: the pipeline writes
@@ -813,6 +815,12 @@ async def run_benchmark(
     """
     group = run_group or str(uuid.uuid4())
     sub_hash = subset_hash(list(questions))
+    if judge_concurrency is None:
+        judge_concurrency = int(get_or_default(BENCH_JUDGE_CONCURRENCY))
+    if max_concurrent is None:
+        max_concurrent = int(get_or_default(BENCH_MAX_CONCURRENT))
+    if repeats is None:
+        repeats = int(get_or_default(BENCH_REPEATS))
     cells = [(repeat, system) for repeat in range(repeats) for system in systems]
     sem = asyncio.Semaphore(max(1, max_concurrent))
 
@@ -822,7 +830,7 @@ async def run_benchmark(
         concurrency=judge_concurrency,
     )
     trusted = calibration is not None and calibration >= float(
-        BENCH_CALIBRATION_MIN_CORRELATION.default
+        get_or_default(BENCH_CALIBRATION_MIN_CORRELATION)
     )
 
     async def _run_cell_wrapped(repeat: int, system: SystemUnderTest) -> BenchRunRecord:
@@ -877,11 +885,10 @@ async def rejudge_run(
     run_id: int,
     questions: Mapping[str, BenchQuestion] | None = None,
     *,
-    judge_concurrency: int = int(BENCH_JUDGE_CONCURRENCY.default),
+    judge_concurrency: int | None = None,
     progress: Callable[[ProgressUpdate], None] | None = None,
 ) -> int:
     """Re-grade ``pending`` rows on a stored run without re-running the pipeline.
-
     Grades each pending question via the judge (cache-aware). Questions whose
     full :class:`BenchQuestion` is unavailable (``questions`` is None or missing
     a qid) can only be graded from the judge cache — a cache miss leaves them
@@ -897,8 +904,10 @@ async def rejudge_run(
     answer_model = record.answer_model if record else ""
     if record is not None and not bool(record.config_json.get("generates_answers", True)):
         raise ValueError(f"run {run_id} ({record.system}) generates no answers — nothing to judge")
-    cache_enabled = bool(BENCH_JUDGE_CACHE.default)
-    retries = int(BENCH_JUDGE_RETRIES.default)
+    if judge_concurrency is None:
+        judge_concurrency = int(get_or_default(BENCH_JUDGE_CONCURRENCY))
+    cache_enabled = bool(get_or_default(BENCH_JUDGE_CACHE))
+    retries = int(get_or_default(BENCH_JUDGE_RETRIES))
     sem = asyncio.Semaphore(max(1, judge_concurrency))
     sys_name = record.system if record else "unknown"
     n_p = len(pending)

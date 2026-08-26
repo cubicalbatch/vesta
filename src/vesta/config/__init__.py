@@ -19,6 +19,7 @@ from vesta.config.capabilities import (
 from vesta.config.resolution import (
     configure,
     get,
+    get_or_default,
     reset_for_test,
     set_db_values,
     snapshot,
@@ -163,6 +164,7 @@ __all__ = [
     "compute_capabilities",
     "configure",
     "get",
+    "get_or_default",
     "is_secret",
     "redact_values",
     "register_probe",

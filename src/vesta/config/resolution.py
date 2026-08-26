@@ -97,6 +97,18 @@ def get(s: Setting[T]) -> T:
     return get_resolver().get(s)
 
 
+def get_or_default(s: Setting[T]) -> T:
+    """The resolved value of ``s`` where a resolver exists, else its default.
+
+    For consumers that must work in the bootstrap window before
+    :func:`configure` runs (module-level defaults, unit tests): instead of
+    raising, the declared default is returned.
+    """
+    if _RESOLVER is None:
+        return s.default
+    return _RESOLVER.get(s)
+
+
 def snapshot() -> SettingsSnapshot:
     """An immutable snapshot of every setting's current resolved value."""
     return get_resolver().snapshot()

@@ -1945,7 +1945,7 @@ async def _run_to_completion(
                 judge_concurrency=judge_concurrency,
                 judge_shares_endpoint=judge_shares_endpoint,
                 repeats=repeats,
-                max_concurrent=int(BENCH_MAX_CONCURRENT.default),
+                max_concurrent=int(app_config.get_or_default(BENCH_MAX_CONCURRENT)),
                 progress=_progress_cb,
                 level=body.level,
             )
@@ -2005,7 +2005,7 @@ async def run_bench_endpoint(request: Request, body: BenchRunRequest) -> BenchRu
     answer_endpoint = str(app_config.get(INFERENCE_LLM_ENDPOINT_URL))
     judge_endpoint = str(app_config.get(EVAL_JUDGE_ENDPOINT_URL))
     judge_concurrency, shares = resolve_judge_concurrency(
-        int(BENCH_JUDGE_CONCURRENCY.default),
+        int(app_config.get_or_default(BENCH_JUDGE_CONCURRENCY)),
         answer_endpoint=answer_endpoint,
         judge_endpoint=judge_endpoint,
     )
@@ -2029,7 +2029,7 @@ async def run_bench_endpoint(request: Request, body: BenchRunRequest) -> BenchRu
                     )
                 )
 
-    repeats = body.repeats or int(BENCH_REPEATS.default)
+    repeats = body.repeats or int(app_config.get_or_default(BENCH_REPEATS))
     run_group = str(uuid.uuid4())
     subset_val = subset_hash(list(qs))
 
