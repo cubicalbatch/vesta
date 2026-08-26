@@ -66,6 +66,7 @@ from vesta.eval.bench_scoring import (
     source_hit_rank,
     stage_latency_breakdown,
 )
+from vesta.eval.metrics import degradations_from_traces
 from vesta.eval.runner import git_sha, machine_id, now_iso
 
 # ── Settings ────────────────────────────────────────────────────────────────
@@ -407,7 +408,8 @@ def _compute_metrics(
 ) -> dict[str, object]:
     """Build the full metrics_json from scored questions.
 
-    ``traces`` adds the per-stage latency breakdown.
+    ``traces`` adds the per-stage latency breakdown AND the degradation guard
+    signal (reduced exactly like the eval twin's ``_reduce_metrics``).
     ``with_answers=False`` marks the answer/attribution blocks as skipped —
     the retrieval-only fast path produces no answers to judge.
     """
@@ -419,6 +421,7 @@ def _compute_metrics(
     ans_tokens = aggregate_token_usage(
         scored, input_attr="answer_input_tokens", output_attr="answer_output_tokens"
     )
+    degraded_components = degradations_from_traces(traces)
     return {
         "source": {
             "n": source.n,
@@ -493,6 +496,12 @@ def _compute_metrics(
             }
             for cap, cb in by_cap.items()
         },
+        # Degradation guard signal, reduced from the run's traces like the
+        # eval twin: a cell whose profile silently capability-dropped a
+        # component (e.g. VECTORS unmet) must not persist clean-looking
+        # metrics that compare() would later trust.
+        "degraded": len(degraded_components) > 0,
+        "degraded_components": list(degraded_components),
     }
 
 
@@ -1046,12 +1055,15 @@ def _verdict_is_correct(v: str) -> bool:
 
 
 class IncomparableRuns(ValueError):
-    """Two bench runs differ on dataset identity and must not be compared.
+    """Two bench runs differ on dataset identity or degradation and must not be
+    compared.
 
-    Raised by :func:`compare_runs` when ``dataset_hash`` or ``subset_hash``
-    disagree — the same refusal posture as eval's degraded-vs-clean guard.
-    Profile/model differences are deliberately NOT guarded: A/B across profiles
-    is what the benchmark exists to measure.
+    Raised by :func:`compare_runs` when ``dataset_hash``/``subset_hash``
+    disagree, or when one run's ``metrics_json.degraded`` disagrees with the
+    other (a component was capability-dropped in one run) — the same refusal
+    posture as eval's degradation guard. Profile/model differences are
+    deliberately NOT guarded: A/B across profiles is what the benchmark exists
+    to measure.
     """
 
 
@@ -1065,7 +1077,8 @@ async def compare_runs(store: BenchStore, run_a: int, run_b: int) -> CompareResu
 
     Refuses runs whose dataset identity differs (:class:`IncomparableRuns`):
     a different ``dataset_hash`` or ``subset_hash`` makes fixed/broken lists
-    meaningless.
+    meaningless. Also refuses a degraded run against a clean one: "the dense
+    path helped" is meaningless when VECTORS was dropped in one arm.
     """
     rec_a = await store.get_run(run_a)
     rec_b = await store.get_run(run_b)
@@ -1082,6 +1095,14 @@ async def compare_runs(store: BenchStore, run_a: int, run_b: int) -> CompareResu
             f"subset mismatch: run {run_a} subset_hash={rec_a.subset_hash[:8]!r} "
             f"vs run {run_b} subset_hash={rec_b.subset_hash[:8]!r} — a filtered "
             "run is not comparable to a full run"
+        )
+    deg_a = bool(rec_a.metrics_json.get("degraded"))
+    deg_b = bool(rec_b.metrics_json.get("degraded"))
+    if deg_a != deg_b:
+        raise IncomparableRuns(
+            f"degradation mismatch: run {run_a} degraded={deg_a} vs run {run_b} "
+            f"degraded={deg_b} — components were capability-dropped in one run; "
+            "re-run both arms under equal capabilities to compare"
         )
     rows_a = {r.question_id: r for r in await store.list_question_results(run_a)}
     rows_b = {r.question_id: r for r in await store.list_question_results(run_b)}

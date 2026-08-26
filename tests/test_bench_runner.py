@@ -27,6 +27,7 @@ from vesta.eval.bench_runner import (
     CompareResult,
     IncomparableRuns,
     QuestionOutput,
+    _compute_metrics,
     _rebuild_scored,
     compare_runs,
     rejudge_run,
@@ -618,6 +619,40 @@ async def test_compare_runs_allows_profile_mismatch(store) -> None:
     assert cmp.shared_denominator == 0
 
 
+@pytest.mark.asyncio
+async def test_compare_runs_refuses_degradation_mismatch(store) -> None:
+    """AUDIT_0824 N36: a run whose traces recorded capability drops is flagged
+    degraded in metrics_json; comparing it against a clean run must be refused,
+    the same posture as eval's degraded-vs-clean guard."""
+    rec = _make_run_record()
+    clean_id = await store.insert_run(rec)
+    degraded_id = await store.insert_run(
+        replace(
+            rec,
+            label="degraded",
+            metrics_json={
+                "degraded": True,
+                "degraded_components": ["candidate_source/vector_knn"],
+            },
+        )
+    )
+    with pytest.raises(IncomparableRuns, match="degradation mismatch"):
+        await compare_runs(store, clean_id, degraded_id)
+
+
+@pytest.mark.asyncio
+async def test_compare_runs_allows_two_degraded_runs(store) -> None:
+    """Both arms equally degraded → flags agree → comparison proceeds."""
+    rec = replace(
+        _make_run_record(),
+        metrics_json={"degraded": True, "degraded_components": ["static_scorer"]},
+    )
+    run_a = await store.insert_run(rec)
+    run_b = await store.insert_run(replace(rec, label="b"))
+    cmp = await compare_runs(store, run_a, run_b)
+    assert cmp.shared_denominator == 0
+
+
 # ── Two-stage + rejudge ─────────────────────────────────────────────────────
 
 
@@ -859,6 +894,77 @@ async def test_run_benchmark_full(store) -> None:
     assert m["reference"]["reference_n"] == 1
     assert m["by_capability"]["lookup"]["strict_accuracy"] == 1.0
     assert "pipeline" in progress and "judging" in progress and "complete" in progress
+
+
+class DegradedSUT(FakeSUT):
+    """A SUT whose pipeline traces record a capability drop (VECTORS unmet)."""
+
+    async def run_one(self, q: BenchQuestion) -> QuestionOutput:
+        out = await super().run_one(q)
+        return replace(
+            out,
+            trace={
+                "stages": [{"name": "answer", "component": "sources_only"}],
+                "degradations": [
+                    {
+                        "component": "candidate_source/vector_knn",
+                        "missing": "VECTORS",
+                        "reason": "capability VECTORS not available",
+                    }
+                ],
+            },
+        )
+
+
+def test_compute_metrics_derives_degraded_from_traces() -> None:
+    """AUDIT_0824 N36: metrics_json carries the degradation signal reduced
+    from cell traces, exactly like the eval twin's _reduce_metrics."""
+    deg_trace = {
+        "stages": [{"name": "answer", "component": "sources_only"}],
+        "degradations": [{"component": "candidate_source/vector_knn", "missing": "VECTORS"}],
+    }
+    m = _compute_metrics([], answer_model="m", traces=[deg_trace])
+    assert m["degraded"] is True
+    assert m["degraded_components"] == ["candidate_source/vector_knn"]
+
+    clean = _compute_metrics([], answer_model="m", traces=[{"stages": []}])
+    assert clean["degraded"] is False
+    assert clean["degraded_components"] == []
+
+
+@pytest.mark.asyncio
+async def test_capability_drop_flags_run_and_blocks_compare(store) -> None:
+    """AUDIT_0824 N36 regression: a bench cell whose profile silently dropped
+    VECTORS persists metrics_json.degraded=True, and compare_runs then refuses
+    it against a clean run instead of producing a misleading diff."""
+    qs = (_q("q1"), _q("q2"))
+    ds = _dataset(qs)
+    degraded = await run_benchmark(
+        dataset=ds,
+        questions=qs,
+        systems=[DegradedSUT()],
+        store=store,
+        judge=FakeJudge(),
+        judge_model="judge-b",
+        run_group="grp-degraded",
+    )
+    m = degraded[0].metrics_json
+    assert m["degraded"] is True
+    assert m["degraded_components"] == ["candidate_source/vector_knn"]
+
+    clean = await run_benchmark(
+        dataset=ds,
+        questions=qs,
+        systems=[FakeSUT()],
+        store=store,
+        judge=FakeJudge(),
+        judge_model="judge-b",
+        run_group="grp-clean",
+    )
+    assert clean[0].metrics_json["degraded"] is False
+
+    with pytest.raises(IncomparableRuns, match="degradation mismatch"):
+        await compare_runs(store, clean[0].id, degraded[0].id)
 
 
 class TokenSUT:
