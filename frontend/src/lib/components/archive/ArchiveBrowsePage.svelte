@@ -7,7 +7,8 @@
 	// search pre-scoped to exactly this archive. All work at any index_depth,
 	// including 0 — keyword search is Xapian full-text via libzim, independent of
 	// the depth-based vector index (see CatalogRow.svelte's progress copy).
-	import { search as runSearch, type SearchResponse } from '$lib/api/search';
+	import type { SearchResponse } from '$lib/api/search';
+	import { PageSearch } from '$lib/page-search.svelte';
 	import { zimsApi } from '$lib/api/zims';
 	import { zimsStore } from '$lib/stores/zims.svelte';
 	import { readerStore } from '$lib/stores/reader.svelte';
@@ -26,10 +27,9 @@
 	const archiveLabel = $derived(archive?.corpus_label ?? archive?.title ?? archive?.name ?? `archive ${zimId}`);
 
 	let queryInput = $state('');
-	let result = $state<SearchResponse | null>(null);
-	let searching = $state(false);
-	let searchError = $state<string | null>(null);
-	let lastQuery = $state('');
+	// Sequence-guarded search state (AUDIT_0824 F3): a slower stale response
+	// for an edited-away query must not clobber the newer result.
+	const searchState = new PageSearch();
 
 	let randomLoading = $state(false);
 	let randomError = $state<string | null>(null);
@@ -69,25 +69,10 @@
 		});
 	}
 
-	async function doSearch() {
-		const q = queryInput.trim();
-		if (!q) return;
-		searching = true;
-		searchError = null;
-		try {
-			result = await runSearch(q, String(zimId));
-			lastQuery = q;
-		} catch (err) {
-			searchError = err instanceof Error ? err.message : 'search failed';
-			result = null;
-		} finally {
-			searching = false;
-		}
-	}
-
 	function submit(e: SubmitEvent) {
 		e.preventDefault();
-		doSearch();
+		const q = queryInput.trim();
+		if (q) void searchState.run(q, String(zimId));
 	}
 
 	function openCard(card: SearchResponse['cards'][number], i: number) {
@@ -96,7 +81,7 @@
 			path: card.path,
 			title: card.title,
 			media: card.media,
-			cards: result?.cards,
+			cards: searchState.result?.cards,
 			cardIndex: i
 		});
 	}
@@ -223,7 +208,7 @@
 			<p class="mb-4 text-sm text-danger">{randomError}</p>
 		{/if}
 
-		{#if !searching && !result}
+		{#if !searchState.loading && !searchState.result}
 			{#if isDocuments}
 				<section class="mb-2">
 					<div class="mb-3 flex items-center justify-between gap-2">
@@ -311,23 +296,24 @@
 			{/if}
 		{/if}
 
-		{#if searching}
+		{#if searchState.loading}
 			<div class="py-10 text-center text-sm text-muted">Searching…</div>
-		{:else if searchError}
-			<div class="rounded-lg border border-danger/30 bg-danger-soft p-4 text-sm text-danger">{searchError}</div>
-		{:else if result}
+		{:else if searchState.error}
+			<div class="rounded-lg border border-danger/30 bg-danger-soft p-4 text-sm text-danger">{searchState.error}</div>
+		{:else if searchState.result}
+			{@const result = searchState.result}
 			<section>
 				<h2 class="mb-3 text-lg font-semibold tracking-tight text-ink">
 					{result.cards.length} passage{result.cards.length === 1 ? '' : 's'}
 				</h2>
 				{#if result.cards.length === 0}
 					<div class="rounded-lg border border-border bg-surface p-6 text-center">
-						<p class="text-sm text-ink">Nothing in {archiveLabel} matched "{lastQuery}".</p>
+						<p class="text-sm text-ink">Nothing in {archiveLabel} matched "{searchState.lastQuery}".</p>
 					</div>
 				{:else}
 					<div class="flex flex-col gap-3">
 						{#each result.cards as card, i (i)}
-							<SourceCard {card} rank={i + 1} queryForHighlight={lastQuery} onOpen={() => openCard(card, i)} />
+							<SourceCard {card} rank={i + 1} queryForHighlight={searchState.lastQuery} onOpen={() => openCard(card, i)} />
 						{/each}
 					</div>
 				{/if}

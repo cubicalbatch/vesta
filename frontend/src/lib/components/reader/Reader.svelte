@@ -66,16 +66,30 @@
 	// Fetch outline + title for whichever path is currently showing — the
 	// originally-opened one, or wherever in-iframe navigation has taken the
 	// user.
+	//
+	// Stale-response guard (AUDIT_0824 F3): next/prev card and the iframe
+	// navigation poll rerun this effect while the previous /api/article
+	// request may still be in flight; without the cleanup flag below the slow
+	// old response would clobber the fresh article/title/outline. Same idiom
+	// as the pdf.js effect underneath.
 	$effect(() => {
 		const t = target;
 		const p = currentPath;
 		article = null;
 		articleError = null;
 		if (!t || !p) return;
+		let cancelled = false;
 		api
 			.get<ArticleOut>(`/api/article/${t.zimId}/${encodeURIComponent(p)}`)
-			.then((a) => (article = a))
-			.catch((err) => (articleError = err instanceof Error ? err.message : 'failed to load article'));
+			.then((a) => {
+				if (!cancelled) article = a;
+			})
+			.catch((err) => {
+				if (!cancelled) articleError = err instanceof Error ? err.message : 'failed to load article';
+			});
+		return () => {
+			cancelled = true;
+		};
 	});
 
 	// Load the PDF bytes (same-origin passthrough route) with pdf.js and give

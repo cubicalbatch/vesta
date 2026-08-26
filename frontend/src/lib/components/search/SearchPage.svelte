@@ -16,7 +16,6 @@
 	import { onMount, untrack } from 'svelte';
 	import { page } from '$app/state';
 	import { goto, pushState } from '$app/navigation';
-	import { search as runSearch, type SearchResponse } from '$lib/api/search';
 	import type { SourceCard } from '$lib/types';
 	import { zimsStore } from '$lib/stores/zims.svelte';
 	import { jobsStore } from '$lib/stores/jobs.svelte';
@@ -30,6 +29,7 @@
 	} from '$lib/search-mode';
 	import { readUseAi, writeUseAi } from '$lib/use-ai';
 	import { AnswerSession } from '$lib/answer/session.svelte';
+	import { PageSearch } from '$lib/page-search.svelte';
 	import SearchHero from './SearchHero.svelte';
 	import SourceResults from './SourceResults.svelte';
 	import AnswerThread from './AnswerThread.svelte';
@@ -50,17 +50,14 @@
 	let queryInput = $state('');
 	let scope = $state<Set<number>>(new Set());
 
-	// Sources-mode result region.
-	let result = $state<SearchResponse | null>(null);
-	let loading = $state(false);
-	let error = $state<string | null>(null);
-	let lastQuery = $state('');
+	// Sources-mode result region — a PageSearch: its sequence token drops a
+	// slower stale response that lands after a newer query (AUDIT_0824 F3).
+	const searchState = new PageSearch();
 
 	// The AI conversation state. One session lives for the page's lifetime.
 	let session = $state(new AnswerSession());
 	let historyOpen = $state(false);
 	let heroInputEl = $state<HTMLInputElement | null>(null);
-
 	// Self-write guard (Trap 1). Set in the SAME statement as the goto/pushState
 	// that produced a URL; the $effect below ignores any firing where the URL
 	// matches this. Everything else is a genuine external navigation and re-seeds.
@@ -145,21 +142,6 @@
 		session.scope = scopeParam;
 	});
 
-	// ── Sources pipeline ─────────────────────────────────────────────────────
-	async function doSearch(q: string) {
-		if (!q) return;
-		loading = true;
-		error = null;
-		try {
-			result = await runSearch(q, scopeParam);
-			lastQuery = q;
-		} catch (err) {
-			error = err instanceof Error ? err.message : 'search failed';
-			result = null;
-		} finally {
-			loading = false;
-		}
-	}
 
 	// ── AI pipeline ──────────────────────────────────────────────────────────
 	function startAiTurn(q: string, { asRegenerate = false }: { asRegenerate?: boolean } = {}) {
@@ -192,11 +174,11 @@
 		} else {
 			// Sources: keep the query in the box so it can be edited/re-searched.
 			writeUrlReplace();
-			doSearch(q);
+			void searchState.run(q, scopeParam);
 		}
 	}
 
-	// ── Mode switching ─
+	// ── Mode switching ───────────────────────────────────────────────────────
 	function setMode(next: Mode) {
 		if (next === mode) return;
 		// Toggling ALWAYS aborts the live stream first — a stream left running
@@ -223,7 +205,7 @@
 			// session alive so toggling back restores the thread. Sources mode
 			// drops `c` from the URL (it has no conversation).
 			writeUrlReplace();
-			doSearch(queryInput.trim());
+			void searchState.run(queryInput.trim(), scopeParam);
 		} else {
 			// empty query: switch mode + storage only; keep any existing thread so a
 			// flip back restores it. Sources hides the thread by rendering a
@@ -235,7 +217,6 @@
 	function onToggleMode() {
 		setMode(mode === 'ai' ? 'sources' : 'ai');
 	}
-
 	function onToggleScope(id: number | 'all') {
 		if (id === 'all') scope = new Set();
 		else {
@@ -246,7 +227,8 @@
 		// Reflect the new scope in the URL (self-write, effect ignores) and, in
 		// sources mode, re-run the search for it.
 		writeUrlReplace();
-		if (mode === 'sources' && lastQuery) doSearch(lastQuery);
+		if (mode === 'sources' && searchState.lastQuery)
+			void searchState.run(searchState.lastQuery, scopeParam);
 	}
 
 	// ── Reader ───────────────────────────────────────────────────────────────
@@ -255,7 +237,7 @@
 			zimId: card.zim_id,
 			path: card.path,
 			title: card.title,
-			cards: result?.cards,
+			cards: searchState.result?.cards,
 			cardIndex: i
 		});
 	}
@@ -265,9 +247,7 @@
 		session.abort();
 		session.reset();
 		queryInput = '';
-		result = null;
-		lastQuery = '';
-		error = null;
+		searchState.clear();
 		// Stay in the current mode (AI), but drop the conversation from the URL.
 		writeUrlReplace();
 		heroInputEl?.focus();
@@ -296,10 +276,9 @@
 		scope = s.scope;
 		session.conversationId = s.conversationId;
 		session.scope = s.scope.size > 0 ? [...s.scope].join(',') : undefined;
-		result = null;
-		lastQuery = '';
-		error = null;
-		loading = false;
+		// Blank the surface and invalidate any in-flight search — a response
+		// racing home after the navigation must not repaint the re-seeded view.
+		searchState.clear();
 
 		if (s.conversationId != null && s.ai) {
 			session.reset();
@@ -317,7 +296,7 @@
 			// Sources: keep the query in the box (matches the old / page).
 			session.reset();
 			queryInput = s.query;
-			doSearch(s.query);
+			void searchState.run(s.query, scopeParam);
 		} else {
 			session.reset();
 			queryInput = s.query;
@@ -434,10 +413,10 @@
 {#if mode === 'sources'}
 	<div class="mx-auto max-w-[var(--content-max)]">
 		<SourceResults
-			{result}
-			{loading}
-			{error}
-			{lastQuery}
+			result={searchState.result}
+			loading={searchState.loading}
+			error={searchState.error}
+			lastQuery={searchState.lastQuery}
 			midIndexArchive={midIndexArchive ?? null}
 			midIndexPct={midIndexArchive ? archiveIndexingPct(midIndexArchive.id) : null}
 			onOpenCard={openCard}
