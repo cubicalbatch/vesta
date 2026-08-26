@@ -462,3 +462,49 @@ async def test_followup_crash_after_search_still_emits_latched_sources(
     assert tokens_after[0].text == "stub fallback answer [1]"
 
     assert isinstance(events[-1], DoneEvent)
+
+
+# ── (i) terminal errors end the stream (protocol ordering rule 8) ───────────
+
+
+@pytest.mark.asyncio
+async def test_empty_answer_ends_stream_at_budget_exhausted_error(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A model that produces no answer text emits the ``budget_exhausted``
+    error — and nothing after it: an error event terminates the stream, so no
+    ``trace``/``done`` may follow (docs/sse-protocol.md ordering rule 8)."""
+    monkeypatch.setattr(agent_chat, "_make_model", lambda *a, **k: _stub_model(text=""))
+    # An empty answer normally routes into the abstention-retry gate; keep it
+    # so the turn reaches the budget_exhausted emitter with nothing to say.
+    monkeypatch.setattr(agent_chat, "looks_abstained", lambda _answer: False)
+    events = await _collect(state, "Einstein")
+
+    errors = [e for e in events if isinstance(e, ErrorEvent)]
+    assert len(errors) == 1
+    assert errors[0].code == "budget_exhausted"
+    assert isinstance(events[-1], ErrorEvent)
+    # No trace/done tail after the terminal error.
+    assert not isinstance(events[-2], TraceEvent)
+    assert sum(isinstance(e, DoneEvent) for e in events) == 0
+
+
+@pytest.mark.asyncio
+async def test_warmup_failure_ends_stream_at_no_llm_error(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A runtime that cannot come up emits one terminal ``no_llm`` error and
+    the generator stops there — no ``done`` after the error (rule 8)."""
+    from fixtures.llm_runtime import FakeLlmRuntime
+    from vesta.inference.runtime import LlmRuntimeError
+
+    fake = FakeLlmRuntime(error=LlmRuntimeError("no model matched"))
+    monkeypatch.setattr("vesta.inference.get_runtime", lambda: fake)
+
+    events = await _collect(state, "Einstein")
+
+    errors = [e for e in events if isinstance(e, ErrorEvent)]
+    assert len(errors) == 1
+    assert errors[0].code == "no_llm"
+    assert isinstance(events[-1], ErrorEvent)
+    assert sum(isinstance(e, DoneEvent) for e in events) == 0

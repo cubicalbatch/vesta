@@ -669,8 +669,8 @@ class TestLocalRuntimeWarmup:
         assert err["recoverable"] is True
         assert "Settings" in err["message"]
         assert "missing.gguf" in err["message"]
-        # Terminal success marker still closes the stream cleanly.
-        assert names[-1] == "done"
+        # Protocol ordering rule 8: the error event terminates the stream.
+        assert names[-1] == "error"
 
     @pytest.mark.asyncio
     async def test_put_settings_inference_key_rebuilds_runtime_once(

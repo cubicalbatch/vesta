@@ -2630,7 +2630,8 @@ async def iter_agent_turn_events(  # noqa: PLR0912, PLR0915
             message=f"{_LOCAL_RUNTIME_UNAVAILABLE} ({exc})",
             recoverable=True,
         )
-        yield DoneEvent()
+        # Protocol ordering rule 8: an error event terminates the stream —
+        # no ``done`` after a terminal error.
         return
     for status in warm:
         yield status
@@ -2762,11 +2763,14 @@ async def iter_agent_turn_events(  # noqa: PLR0912, PLR0915
             spans = synthesize_citation_spans(answer, len(ctx.turn_cards))
             yield CitationsEvent(spans=tuple(spans), answer_text=answer or None)
         else:
+            # Protocol ordering rule 8: an error event terminates the stream.
+            # No trace/done may follow a terminal error.
             yield ErrorEvent(
                 code="budget_exhausted",
                 message="agent produced no answer",
                 recoverable=True,
             )
+            return
 
         trace: dict[str, object] = {
             "system": "agentic_pydantic",
