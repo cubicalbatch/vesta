@@ -22,9 +22,14 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from vesta import config
+from vesta.config.netguard import (
+    EgressBlocked,
+    assert_public_http_url,
+    guarded_request,
+    guarded_stream,
+    safe_client,
+)
 from vesta.jobs.types import (
     RESUME_CHECKPOINT_KEY,
     JobHandle,
@@ -96,6 +101,15 @@ async def _run_download(job: JobHandle, params: Mapping[str, Any]) -> None:
     except ValueError as exc:
         raise DownloadModelError(str(exc)) from exc
 
+    # AUDIT_0824 A1: ``url`` is request-controlled (raw URL on
+    # POST /api/models/download or POST /api/jobs) — it must be public-internet
+    # http(s) before anything is fetched. Owner-configured inference endpoints
+    # are unaffected: they never pass through here.
+    try:
+        assert_public_http_url(url)
+    except EgressBlocked as exc:
+        raise DownloadModelError(str(exc)) from exc
+
     models_dir = get_models_dir()
     if models_dir is None:
         raise RuntimeError("download_model: models dir not bound (run inside the app lifespan)")
@@ -147,8 +161,8 @@ async def _run_download(job: JobHandle, params: Mapping[str, Any]) -> None:
 async def _content_length(url: str) -> int:
     """Best-effort Content-Length via HEAD; 0 if unavailable."""
     try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            resp = await client.head(url)
+        async with safe_client(timeout=30.0) as client:
+            resp = await guarded_request(client, "HEAD", url)
             if resp.status_code >= 400:
                 return 0
             cl = resp.headers.get("Content-Length")
@@ -176,8 +190,8 @@ async def _download_with_resume(
 
     t0 = asyncio.get_event_loop().time()
     async with (
-        httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S, follow_redirects=True) as client,
-        client.stream("GET", url, headers=headers) as resp,
+        safe_client(timeout=_HTTP_TIMEOUT_S) as client,
+        guarded_stream(client, "GET", url, headers=headers) as resp,
     ):
         if resp.status_code not in (200, 206):
             raise DownloadModelError(f"HTTP {resp.status_code} fetching {url}")

@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from vesta.catalog.curated import curated_rank_for
+from vesta.config import netguard
 
 if TYPE_CHECKING:
     from vesta.db.connection import Database
@@ -225,7 +226,9 @@ class OPDSParseError(RuntimeError):
 # ── fetching ────────────────────────────────────────────────────────────────
 
 
-async def fetch_opds_feed(url: str, *, client: httpx.AsyncClient | None = None) -> str:
+async def fetch_opds_feed(
+    url: str, *, client: httpx.AsyncClient | None = None, egress_guard: bool = False
+) -> str:
     """Fetch the OPDS feed body at ``url`` as text. Raises on network/HTTP error.
 
     ``url`` is explicit (the job resolves it from the ``catalog.opds_url``
@@ -234,15 +237,29 @@ async def fetch_opds_feed(url: str, *, client: httpx.AsyncClient | None = None) 
     turns any error into "catalog unavailable" rather than letting it propagate to
     the request path. ``client`` is injectable so tests fetch
     against a recorded fixture.
+
+    ``egress_guard=True`` (set by the job ONLY when the URL was supplied by the
+    request rather than resolved from settings — audit AUDIT_0824 A1) routes the
+    fetch through :mod:`vesta.config.netguard`, which validates scheme + host on
+    every hop including redirects. Settings-resolved URLs stay unguarded: the
+    owner's LAN catalog is legitimate.
     """
     own_client = client is None
     if client is None:
-        client = httpx.AsyncClient(
-            timeout=_OPDS_TIMEOUT_S,
-            follow_redirects=True,  # download.kiwix.org 301s
+        client = (
+            netguard.safe_client(timeout=_OPDS_TIMEOUT_S)
+            if egress_guard
+            else httpx.AsyncClient(
+                timeout=_OPDS_TIMEOUT_S,
+                follow_redirects=True,  # download.kiwix.org 301s
+            )
         )
     try:
-        resp = await client.get(url, params=None if "?" in url else _OPDS_PARAMS)
+        params = None if "?" in url else _OPDS_PARAMS
+        if egress_guard:
+            resp = await netguard.guarded_request(client, "GET", url, params=params)
+        else:
+            resp = await client.get(url, params=params)
         resp.raise_for_status()
         return resp.text
     finally:
@@ -298,7 +315,11 @@ async def _persist(db: Database, entries: Sequence[CatalogEntry]) -> int:
 
 
 async def refresh_catalog_cache(
-    db: Database, *, url: str | None = None, client: httpx.AsyncClient | None = None
+    db: Database,
+    *,
+    url: str | None = None,
+    client: httpx.AsyncClient | None = None,
+    egress_guard: bool = False,
 ) -> int:
     """Fetch + parse + persist the catalog. Returns the entry count written.
 
@@ -306,9 +327,12 @@ async def refresh_catalog_cache(
     half-written cache): a network failure leaves the existing cache untouched
     because ``_persist`` only runs after a successful parse — a catalog outage
     must not degrade what's already cached.
+
+    ``egress_guard`` passes through to :func:`fetch_opds_feed`: on ONLY when
+    ``url`` came from a request parameter rather than settings.
     """
     feed_url = url or DEFAULT_OPDS_URL
-    xml = await fetch_opds_feed(feed_url, client=client)
+    xml = await fetch_opds_feed(feed_url, client=client, egress_guard=egress_guard)
     entries = parse_opds_feed(xml, base_url=feed_url)
     return await _persist(db, entries)
 

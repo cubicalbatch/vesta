@@ -52,6 +52,8 @@ from vesta.catalog import (
     get_zims_dir,
 )
 from vesta.catalog.opds import _local_name
+from vesta.config import netguard
+from vesta.config.netguard import EgressBlocked, assert_public_http_url, guarded_stream
 from vesta.jobs.types import (
     RESUME_CHECKPOINT_KEY,
     JobHandle,
@@ -305,8 +307,10 @@ async def _resolve_metalink(meta4_url: str, mirror_policy: str) -> MetalinkInfo:
             filename="", size=0, sha256=None, mirrors=(_direct_url_from_meta4(meta4_url),)
         )
     try:
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S, follow_redirects=True) as client:
-            resp = await client.get(meta4_url)
+        # AUDIT_0824 A1: ``meta4_url`` is request-controlled — validate scheme
+        # + host on every hop (the safe client disables httpx auto-follow).
+        async with netguard.safe_client(timeout=_HTTP_TIMEOUT_S) as client:
+            resp = await netguard.guarded_request(client, "GET", meta4_url)
             resp.raise_for_status()
             return parse_metalink(resp.text)
     except Exception as exc:
@@ -348,14 +352,24 @@ async def _download_with_resume(
     limit_kbps = int(config.get(DOWNLOAD_BANDWIDTH_LIMIT_KBPS))
     last_disk_check = bytes_done
     t0 = asyncio.get_event_loop().time()
-
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S, follow_redirects=True) as client:
+    async with netguard.safe_client(timeout=_HTTP_TIMEOUT_S) as client:
         for idx, mirror in enumerate(mirrors):
             # The checkpoint is the single source of truth: a failed attempt
             # (or a crash between a chunk write and its checkpoint) can leave
             # the .part out of sync with ``bytes_done`` — re-sync before each
             # attempt so its range append lands exactly at the resume offset.
             start = _trim_part_to(part_path, bytes_done)
+            # AUDIT_0824 A1: mirrors come from REMOTE metalink XML — a hostile
+            # feed must not point the fetch at internal targets. A blocked
+            # mirror is just a failed mirror: warn and fall down the list.
+            try:
+                assert_public_http_url(mirror)
+            except EgressBlocked as exc:
+                _log.warning(
+                    "download.mirror_blocked",
+                    extra={"mirror": mirror, "error": str(exc)},
+                )
+                continue
             try:
                 return await _download_one(
                     client=client,
@@ -445,7 +459,7 @@ async def _download_one(
     written = start
     try:
         # ``stream`` gives us the body without buffering the whole file in memory.
-        async with client.stream("GET", url, headers=headers) as resp:
+        async with guarded_stream(client, "GET", url, headers=headers) as resp:
             if resp.status_code not in (200, 206):
                 raise DownloadError(f"mirror returned HTTP {resp.status_code}")
             served_from_zero = resp.status_code == 200

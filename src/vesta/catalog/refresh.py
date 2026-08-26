@@ -33,10 +33,15 @@ class RefreshCatalogJob:
             raise RuntimeError("refresh_catalog: db not bound (run inside the app lifespan)")
         # The job (not the parser) resolves the feed URL from settings; the parser
         # stays config-free so it's unit-testable with a mock transport.
-        url = str(params.get("url") or "") or str(config.get(CATALOG_OPDS_URL))
+        # AUDIT_0824 A1: a request-supplied ``url`` is untrusted input to a
+        # server-side fetch — egress-guard it (public http(s) only, every
+        # redirect hop). The settings-resolved default is owner-configured and
+        # deliberately unrestricted.
+        override = str(params.get("url") or "")
+        url = override or str(config.get(CATALOG_OPDS_URL))
         await job.progress(0, 1, "fetching catalog")
         try:
-            count = await refresh_catalog_cache(db, url=url)
+            count = await refresh_catalog_cache(db, url=url, egress_guard=bool(override))
         except Exception as exc:
             # The cache is left untouched (refresh only persists after a clean
             # parse); surface the failure on the job row for the jobs panel.

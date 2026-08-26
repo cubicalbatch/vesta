@@ -153,6 +153,23 @@ def _reset_config() -> object:
     config.reset_for_test()
 
 
+@pytest.fixture(autouse=True)
+def _allow_test_egress(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The egress guard (AUDIT_0824 A1) rejects loopback targets, but these
+    tests download from an in-process 127.0.0.1 server. Stub the guard's DNS
+    resolution so every host looks globally routable; the rejection classes
+    themselves are covered in ``test_netguard.py``."""
+    import ipaddress
+
+    from vesta.config import netguard
+
+    monkeypatch.setattr(
+        netguard,
+        "_resolve_host",
+        lambda _host: [ipaddress.ip_address("93.184.216.34")],
+    )
+
+
 # A minimal fake JobRunner so JobHandleImpl can publish progress/checkpoints
 # without a real DB. Captures the last checkpoint for resume handoff.
 class _FakeRunner:
