@@ -57,11 +57,9 @@ import re
 import string
 from typing import TYPE_CHECKING, ClassVar
 
-from pydantic import BaseModel
-
 from vesta.config.capabilities import Capability
 from vesta.retrieval.contracts import Candidate, PreparedQuery, Scope
-from vesta.retrieval.registry import register
+from vesta.retrieval.registry import ComponentParams, register
 from vesta.zim.query import DEFAULT_STOPWORDS
 from vesta.zim.types import entry_title_key
 
@@ -377,7 +375,7 @@ class TitleEntitySuggest:
 
     requires: ClassVar[frozenset[Capability]] = frozenset()
 
-    class Params(BaseModel):
+    class Params(ComponentParams):
         """Profile-owned knobs (params, not settings).
 
         ``limit`` — per-span, per-archive suggest limit: the fallback

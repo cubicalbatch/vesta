@@ -15,11 +15,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
-from pydantic import BaseModel
-
 from vesta.config.capabilities import Capability
 from vesta.retrieval.contracts import PreparedQuery, ScoredPassage
-from vesta.retrieval.registry import register
+from vesta.retrieval.registry import ComponentParams, register
 from vesta.retrieval.scorers._compose import passage_text
 
 if TYPE_CHECKING:
@@ -33,7 +31,7 @@ class CrossEncoderScorer:
 
     requires: ClassVar[frozenset[Capability]] = frozenset({Capability.CROSS_ENCODER})
 
-    class Params(BaseModel):
+    class Params(ComponentParams):
         #: The A/B toggle. False makes this scorer a
         #: passthrough without removing it from the profile — a quick way to
         #: disable reranking from a saved profile's param form without hand-

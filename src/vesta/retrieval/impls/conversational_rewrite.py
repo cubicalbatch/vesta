@@ -23,11 +23,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
-from pydantic import BaseModel
-
 from vesta.config.capabilities import Capability
 from vesta.retrieval.contracts import PreparedQuery, QueryRewriter
-from vesta.retrieval.registry import register
+from vesta.retrieval.registry import ComponentParams, register
 
 if TYPE_CHECKING:
     from vesta.retrieval.trace import Trace
@@ -59,7 +57,7 @@ class ConversationalRewrite:
 
     requires: ClassVar[frozenset[Capability]] = frozenset({Capability.LLM})
 
-    class Params(BaseModel):
+    class Params(ComponentParams):
         """``max_history_turns`` caps how many recent history entries reach the
         rewriter (a turn here is one ``(role, content)`` entry; the most recent
         are kept). Bounding history keeps the rewrite prompt inside the latency

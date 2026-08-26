@@ -32,11 +32,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar, Literal
 
-from pydantic import BaseModel
-
 from vesta.config.capabilities import Capability
 from vesta.retrieval.contracts import PreparedQuery
-from vesta.retrieval.registry import register
+from vesta.retrieval.registry import ComponentParams, register
 
 if TYPE_CHECKING:
     from vesta.retrieval.trace import Trace
@@ -53,7 +51,7 @@ class AliasExpand:
 
     requires: ClassVar[frozenset[Capability]] = frozenset()
 
-    class Params(BaseModel):
+    class Params(ComponentParams):
         max_aliases: int = 3
         mode: Literal["fts_terms", "title_hints", "both"] = "fts_terms"
 

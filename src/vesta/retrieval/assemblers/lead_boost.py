@@ -43,13 +43,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
-from pydantic import BaseModel
-
 from vesta.config.capabilities import Capability
 from vesta.retrieval.assemblers._shared import apply_budget, apply_ordering, build_result
 from vesta.retrieval.contracts import Budget, PreparedQuery, RetrievalResult, ScoredPassage
 from vesta.retrieval.dedup import DEFAULT_THRESHOLD
-from vesta.retrieval.registry import register
+from vesta.retrieval.registry import ComponentParams, register
 from vesta.retrieval.title_match import find_exact_title_lead
 
 if TYPE_CHECKING:
@@ -63,7 +61,7 @@ class LeadBoost:
 
     requires: ClassVar[frozenset[Capability]] = frozenset()
 
-    class Params(BaseModel):
+    class Params(ComponentParams):
         budget_tokens: int = 2400
         max_per_article: int = 2
         dedup: str = "near_exact"

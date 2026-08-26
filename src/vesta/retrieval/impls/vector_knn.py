@@ -24,11 +24,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from pydantic import BaseModel
-
 from vesta.config.capabilities import Capability
 from vesta.retrieval.contracts import Candidate, PreparedQuery, Scope
-from vesta.retrieval.registry import register
+from vesta.retrieval.registry import ComponentParams, register
 
 if TYPE_CHECKING:
     from vesta.encoders.manager import EncoderManager
@@ -43,7 +41,7 @@ class VectorKnn:
 
     requires: ClassVar[frozenset[Capability]] = frozenset({Capability.VECTORS})
 
-    class Params(BaseModel):
+    class Params(ComponentParams):
         #: Neighbours fetched per query before per-article dedup.
         k: int = 40
         #: A/B toggle: False drops this source without removing it from the profile.

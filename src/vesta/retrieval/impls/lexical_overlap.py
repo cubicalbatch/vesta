@@ -14,11 +14,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
-from pydantic import BaseModel
-
 from vesta.config.capabilities import Capability
 from vesta.retrieval.contracts import PreparedQuery, ScoredPassage
-from vesta.retrieval.registry import register
+from vesta.retrieval.registry import ComponentParams, register
 
 if TYPE_CHECKING:
     from vesta.retrieval.trace import Trace
@@ -30,7 +28,7 @@ class LexicalOverlap:
 
     requires: ClassVar[frozenset[Capability]] = frozenset()
 
-    class Params(BaseModel):
+    class Params(ComponentParams):
         """No tunable params for the lexical overlap heuristic."""
 
     def __init__(self, params: Params | None = None) -> None:

@@ -19,13 +19,23 @@ An implementation carries:
   per-component forms generically.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from vesta.config.capabilities import Capability
+
+
+class ComponentParams(BaseModel):
+    """Base for every component ``Params`` model.
+
+    ``extra='forbid'``: a typo'd param name in a profile YAML
+    (``limt: 3`` instead of ``limit: 3``) is a profile-authoring error and is
+    rejected at profile load, not silently ignored at query time.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
 
 #: All registered components. Key is ``(kind, name)`` — e.g. ``("candidate_source",
 #: "xapian_fts")``. The value is the implementation *class* (not an instance).

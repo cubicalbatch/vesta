@@ -24,11 +24,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
-from pydantic import BaseModel
-
 from vesta.config.capabilities import Capability
 from vesta.retrieval.contracts import Candidate, PreparedQuery, Scope
-from vesta.retrieval.registry import register
+from vesta.retrieval.registry import ComponentParams, register
 from vesta.zim.types import entry_title_key
 
 if TYPE_CHECKING:
@@ -48,7 +46,7 @@ class AliasTitleResolve:
 
     requires: ClassVar[frozenset[Capability]] = frozenset()
 
-    class Params(BaseModel):
+    class Params(ComponentParams):
         limit: int = 5
         exact_title_match: bool = True
 

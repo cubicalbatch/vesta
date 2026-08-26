@@ -33,11 +33,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
-from pydantic import BaseModel
-
 from vesta.config.capabilities import Capability
 from vesta.retrieval.contracts import PreparedQuery, ScoredPassage
-from vesta.retrieval.registry import register
+from vesta.retrieval.registry import ComponentParams, register
 from vesta.retrieval.scorers._compose import passage_text
 from vesta.retrieval.title_match import find_exact_title_lead
 
@@ -52,7 +50,7 @@ class StaticPass:
 
     requires: ClassVar[frozenset[Capability]] = frozenset({Capability.STATIC_ENCODER})
 
-    class Params(BaseModel):
+    class Params(ComponentParams):
         #: Defensive bound on the incoming passage count before embedding
         #: (Traps: "an unbounded pool will hurt"; the passage builder already
         #: caps at ~200, this is a second, cheap bound in case a future

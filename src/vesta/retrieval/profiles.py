@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import BaseModel, ValidationError
 
 from vesta.retrieval.registry import resolve
 
@@ -45,6 +46,10 @@ _LIST_KINDS: frozenset[str] = frozenset({"preparers", "sources", "scorers"})
 
 #: Component kinds that store a single impl.
 _SINGLE_KINDS: frozenset[str] = frozenset({"fusion", "passages", "assembler"})
+
+#: Every key a profile document may carry; anything else is a typo and is
+#: rejected at load ("validation error, not a silent default").
+_KNOWN_TOP_LEVEL_KEYS: frozenset[str] = frozenset(_KIND_MAP) | {"name", "description"}
 
 
 @dataclass(frozen=True)
@@ -84,6 +89,12 @@ def _hash_yaml(text: str) -> str:
 
 def _validate_components(profile_name: str, data: dict[str, Any]) -> None:
     """Raise ``ValueError`` if any component ref does not resolve in the registry."""
+    unknown = sorted(set(data) - _KNOWN_TOP_LEVEL_KEYS)
+    if unknown:
+        raise ValueError(
+            f"profile {profile_name!r}: unknown top-level key(s) {unknown} "
+            f"(expected {sorted(_KNOWN_TOP_LEVEL_KEYS)})"
+        )
 
     def _check(kind_tags: dict[str, str], key: str, entry: Any) -> None:
         if not isinstance(entry, dict):
@@ -93,14 +104,33 @@ def _validate_components(profile_name: str, data: dict[str, Any]) -> None:
         impl = entry.get("impl")
         if not impl:
             raise ValueError(f"profile {profile_name!r}: {key}.impl is required")
+        resolved: type | None = None
         for tag in kind_tags:
             resolved = resolve(tag, impl)
             if resolved is not None:
-                return
-        raise ValueError(
-            f"profile {profile_name!r}: {key}.impl={impl!r} not found in registry "
-            f"(looked under {sorted(kind_tags)})"
-        )
+                break
+        if resolved is None:
+            raise ValueError(
+                f"profile {profile_name!r}: {key}.impl={impl!r} not found in registry "
+                f"(looked under {sorted(kind_tags)})"
+            )
+        # A typo'd param name (``limt: 3``) must fail here at load, not
+        # silently fall back to the default at query time.
+        params = entry.get("params") or {}
+        if not isinstance(params, dict):
+            raise ValueError(f"profile {profile_name!r}: {key}.params must be a dict")
+        params_model = getattr(resolved, "Params", None)
+        if isinstance(params_model, type) and issubclass(params_model, BaseModel):
+            try:
+                params_model(**params)
+            except ValidationError as exc:
+                detail = "; ".join(
+                    "{}: {}".format(".".join(str(loc) for loc in err["loc"]), err["msg"])
+                    for err in exc.errors()
+                )
+                raise ValueError(
+                    f"profile {profile_name!r}: {key}.impl={impl!r} invalid params: {detail}"
+                ) from exc
 
     for key in _LIST_KINDS & set(data):
         entries = data[key]

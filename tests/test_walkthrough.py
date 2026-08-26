@@ -626,3 +626,49 @@ class TestProfiles:
                     "sources": [],
                 },
             )
+
+    @staticmethod
+    def _minimal_profile_yaml(**fusion_params: object) -> str:
+        """A smallest valid profile; fusion params are the mutation point."""
+        params = ", ".join(f"{k}: {v}" for k, v in fusion_params.items())
+        return (
+            "name: t\n"
+            "fusion: {impl: rrf, params: {" + params + "}}\n"
+            "passages: {impl: candidate_articles}\n"
+            "assembler: {impl: topk_budget}\n"
+            "sources:\n  - {impl: xapian_fts}\n"
+        )
+
+    def test_unknown_top_level_key_rejected(self) -> None:
+        """AUDIT_0824 N43: a typo'd top-level key (``scorer:`` for ``scorers:``)
+        is a load error naming the key, not a silently ignored line that leaves
+        the profile running with zero scorers."""
+        from vesta.retrieval.profiles import parse_profile_text
+
+        yaml_text = self._minimal_profile_yaml(k=20) + "scorer: [{impl: lexical_overlap}]\n"
+        with pytest.raises(ValueError, match=r"unknown top-level key\(s\) \['scorer'\]"):
+            parse_profile_text(yaml_text)
+
+    def test_unknown_component_param_rejected(self) -> None:
+        """AUDIT_0824 N43: a typo'd param name (``limt:`` for ``limit:``) is a
+        load error naming the offending key, not a silent default at query time."""
+        from vesta.retrieval.profiles import parse_profile_text
+
+        yaml_text = (
+            "name: t\n"
+            "fusion: {impl: rrf, params: {k: 20, limt: 3}}\n"
+            "passages: {impl: candidate_articles}\n"
+            "assembler: {impl: topk_budget}\n"
+            "sources:\n  - {impl: xapian_fts, params: {limt: 5}}\n"
+        )
+        with pytest.raises(ValueError, match="limt"):
+            parse_profile_text(yaml_text)
+
+    def test_rrf_k_must_be_positive(self) -> None:
+        """AUDIT_0824 N43: ``rrf`` ``k: 0`` divides by zero on every rank-0 hit;
+        it must be a profile validation error, not a runtime crash that falls
+        into the unflagged flat-union fallback."""
+        from vesta.retrieval.profiles import parse_profile_text
+
+        with pytest.raises(ValueError, match=r"\bk\b.*greater than or equal to 1"):
+            parse_profile_text(self._minimal_profile_yaml(k=0))

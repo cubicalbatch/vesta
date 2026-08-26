@@ -23,13 +23,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Literal
 
-from pydantic import BaseModel
+from pydantic import Field
 
 from vesta.config.capabilities import Capability
 from vesta.retrieval.contracts import Candidate, FusionKey
-from vesta.retrieval.registry import register
+from vesta.retrieval.registry import ComponentParams, register
 
 if TYPE_CHECKING:
     from vesta.retrieval.trace import Trace
@@ -98,9 +98,10 @@ class RRF:
 
     requires: ClassVar[frozenset[Capability]] = frozenset()
 
-    class Params(BaseModel):
-        k: int = 20
-        across_archives: str = "union"  # "union" or "rrf"
+    class Params(ComponentParams):
+        #: RRF smoothing constant; ``k=0`` would divide by zero on rank-0 hits.
+        k: int = Field(default=20, ge=1)
+        across_archives: Literal["union", "rrf"] = "union"
 
     def __init__(self, params: Params | None = None) -> None:
         self._params = params or self.Params()

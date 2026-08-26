@@ -27,11 +27,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
-from pydantic import BaseModel
-
 from vesta.config.capabilities import Capability
 from vesta.retrieval.contracts import Candidate, PreparedQuery
-from vesta.retrieval.registry import register
+from vesta.retrieval.registry import ComponentParams, register
 from vesta.zim.types import EntryPath, Passage
 
 if TYPE_CHECKING:
@@ -70,7 +68,7 @@ class CandidateArticles:
 
     requires: ClassVar[frozenset[Capability]] = frozenset()
 
-    class Params(BaseModel):
+    class Params(ComponentParams):
         max_articles: int = 20
         max_passages: int = 200
         #: When a candidate's body is empty but it has a title, synthesize a

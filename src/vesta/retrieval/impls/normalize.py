@@ -12,11 +12,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
-from pydantic import BaseModel
-
 from vesta.config.capabilities import Capability
 from vesta.retrieval.contracts import PreparedQuery
-from vesta.retrieval.registry import register
+from vesta.retrieval.registry import ComponentParams, register
 from vesta.zim.query import DEFAULT_STOPWORDS, INERT_TOKENS, looks_like_question
 
 if TYPE_CHECKING:
@@ -54,7 +52,7 @@ class Normalize:
 
     requires: ClassVar[frozenset[Capability]] = frozenset()
 
-    class Params(BaseModel):
+    class Params(ComponentParams):
         strip_stopwords: bool = True
         stopwords: str = ",".join(DEFAULT_STOPWORDS)
 
