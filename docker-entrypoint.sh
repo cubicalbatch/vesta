@@ -12,8 +12,17 @@
 # inference.local.binary_path); nothing to do here.
 set -e
 
+APP_USER=vesta
+DATA_DIR="${VESTA_DATA_DIR:-/app/data}"
 BAKED_MODELS="/opt/vesta/models"
 VOLUME_MODELS="${VESTA_MODELS_DIR:-/app/data/models}"
+
+# The data volume is a host bind mount, so its owner UID is whatever the host
+# (or a previous root-run image) left behind. Repair ownership so the
+# unprivileged runtime user can write zims/, models/, vesta.db, cache/ — then
+# exec the app as that user instead of root.
+mkdir -p "$DATA_DIR"
+chown -R "$APP_USER:$APP_USER" "$DATA_DIR"
 
 if [ -d "$BAKED_MODELS" ]; then
     mkdir -p "$VOLUME_MODELS"
@@ -32,4 +41,6 @@ if [ -d "$BAKED_MODELS" ]; then
     done
 fi
 
-exec "$@"
+# Never run the app as root.
+exec gosu "$APP_USER" "$@"
+

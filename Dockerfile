@@ -98,7 +98,7 @@ ENV PYTHONUNBUFFERED=1 \
 # silently falls back to CPU; never crashes.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        libgomp1 libvulkan1 mesa-vulkan-drivers \
+        libgomp1 libvulkan1 mesa-vulkan-drivers gosu \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=llamacpp /opt/llama.cpp /opt/llama.cpp
@@ -109,6 +109,13 @@ COPY pyproject.toml uv.lock ./
 COPY src ./src
 COPY --from=frontend /build/src/vesta/static/app ./src/vesta/static/app
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN groupadd -r -g 1000 vesta \
+    && useradd -r -u 1000 -g vesta -d /app -s /usr/sbin/nologin vesta \
+    && mkdir -p /app/data \
+    && chown vesta:vesta /app/data
+# No USER directive here: the entrypoint starts as root to repair ownership of
+# the bind-mounted data volume (host UIDs vary), then drops privileges via gosu
+# before exec'ing the app. The app itself never runs as root.
 
 EXPOSE 8080
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
