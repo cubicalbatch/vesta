@@ -16,7 +16,9 @@ objects. This router never decides ranking; it exposes raw material only.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import urllib.parse
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -625,6 +627,14 @@ async def delete_index(zim_id: int, state: AppState = Depends(app_state)) -> dic
     # Recompute the capability flag: if no other archive is indexed, VECTORS
     # turns off and dense profiles degrade to lexical (degrade-don't-fail).
     await reseed_indexed_state(state.db)
+    # Drop any detached-CLI resume sidecar: this wipe invalidates its
+    # positional cursor, so a later plain `vesta index --depth d` must start
+    # fresh instead of "resuming" into the emptied store (AUDIT_0824 M8 —
+    # server arm of AUDIT_0822 M8). Best-effort: a missing file is fine.
+    from vesta import config
+
+    with contextlib.suppress(OSError):
+        (Path(config.get(config.DATA_DIR)) / f".index_progress_{zim_id}.json").unlink()
     return {"ok": True, "zim_id": zim_id, "depth": 0}
 
 

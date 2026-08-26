@@ -2589,8 +2589,31 @@ async def _run_index(state: AppState, args: argparse.Namespace) -> int:  # noqa:
             and int(blob.get("depth", -1)) == depth
             and int(blob.get("done_count", 0)) > 0
         ):
-            params[RESUME_CHECKPOINT_KEY] = blob
-            print(f"resuming at ~{blob.get('done_count')} articles (from {cp_path.name}).")
+            # Trust-point validation (AUDIT_0824 M8): a positional cursor is
+            # only meaningful against the store lineage the zims row still
+            # describes. A server-side wipe or same-depth rebuild resets
+            # index_progress to a mark BELOW this sidecar's done_count;
+            # resuming past that mark would permanently skip articles. Only
+            # resume when the row records this depth AND has committed at
+            # least done_count articles of the current lineage.
+            async with db.read() as conn:
+                cur = await conn.execute(
+                    "SELECT index_depth, index_progress FROM zims WHERE id=?", (zim_id,)
+                )
+                row = await cur.fetchone()
+            recorded_depth = int(row["index_depth"] or 0) if row is not None else 0
+            committed = int(row["index_progress"] or 0) if row is not None else 0
+            done_count = int(blob.get("done_count", 0))
+            if recorded_depth != depth or done_count > committed:
+                print(
+                    f"sidecar is stale (store was rebuilt or wiped: recorded depth "
+                    f"{recorded_depth}, {committed} committed); starting fresh."
+                )
+                with contextlib.suppress(OSError):
+                    cp_path.unlink()
+            else:
+                params[RESUME_CHECKPOINT_KEY] = blob
+                print(f"resuming at ~{done_count} articles (from {cp_path.name}).")
 
     handle = _CLIIndexHandle(cp_path)
 

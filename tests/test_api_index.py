@@ -16,6 +16,9 @@ plus the archive-removal cascade: deleting an archive must delete its vectors
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import httpx
 import numpy as np
 import pytest
@@ -208,6 +211,23 @@ async def test_delete_index_wipes_vectors_meta_and_row(
     body = (await client.get(f"/api/zims/{zim_id}/index")).json()
     assert body["depth"] == 0 and body["status"] == "none"
     assert body["embedding_model"] is None
+
+
+async def test_delete_index_drops_the_cli_resume_sidecar(
+    app_client_with_zim: tuple[httpx.AsyncClient, int],
+) -> None:
+    """AUDIT_0824 M8: the wipe must also unlink the detached-CLI resume
+    sidecar — a surviving ``done_count=N`` on disk would let a later plain
+    ``vesta index --depth d`` "resume" into this emptied store."""
+    from vesta import config
+
+    client, zim_id = app_client_with_zim
+    sidecar = Path(config.get(config.DATA_DIR)) / f".index_progress_{zim_id}.json"
+    sidecar.write_text(json.dumps({"done_count": 40, "depth": 1}))
+
+    resp = await client.delete(f"/api/zims/{zim_id}/index")
+    assert resp.status_code == 200 and resp.json()["depth"] == 0
+    assert not sidecar.exists(), "the wiped archive's resume sidecar must not survive"
 
 
 async def test_status_and_delete_reject_unknown_archive_404(

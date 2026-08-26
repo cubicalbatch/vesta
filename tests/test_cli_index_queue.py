@@ -214,6 +214,12 @@ async def test_plain_resume_still_honors_an_existing_sidecar(
 ) -> None:
     config.configure(env={})
     sidecar = _seed_sidecar(tmp_path)
+    # The zims row must still describe the lineage the sidecar was written
+    # against: same depth, at least done_count articles committed.
+    async with db.write() as conn:
+        await conn.execute(
+            "UPDATE zims SET index_status='error', index_depth=1, index_progress=40 WHERE id=1"
+        )
     monkeypatch.setattr("vesta.index.job.IndexZimJob", _FakeIndexJob)
 
     code = await _run_index(
@@ -237,7 +243,9 @@ async def test_paused_run_keeps_the_sidecar(
     config.configure(env={})
     sidecar = _seed_sidecar(tmp_path)
     async with db.write() as conn:
-        await conn.execute("UPDATE zims SET index_status='paused' WHERE id=1")
+        await conn.execute(
+            "UPDATE zims SET index_status='paused', index_depth=1, index_progress=40 WHERE id=1"
+        )
     monkeypatch.setattr("vesta.index.job.IndexZimJob", _FakeIndexJob)
 
     code = await _run_index(
@@ -247,3 +255,57 @@ async def test_paused_run_keeps_the_sidecar(
 
     assert code == 0
     assert sidecar.exists(), "a paused run keeps its resume sidecar"
+
+
+async def test_server_wipe_leaves_no_stale_resume(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AUDIT_0824 M8: after DELETE /api/zims/{id}/index the row is wiped to
+    depth 0 / progress 0, but the CLI sidecar survived (the API never touched
+    it). A plain `vesta index --depth 1` must NOT resume at N into the emptied
+    store — that would permanently skip articles 0..N."""
+    config.configure(env={})
+    sidecar = _seed_sidecar(tmp_path)
+    async with db.write() as conn:
+        await conn.execute(
+            "UPDATE zims SET index_status='none', index_depth=0, index_progress=0 WHERE id=1"
+        )
+    monkeypatch.setattr("vesta.index.job.IndexZimJob", _FakeIndexJob)
+
+    code = await _run_index(
+        type("State", (), {"db": db})(),  # type: ignore[arg-type]
+        _index_args("wikipedia", tmp_path, fresh=False),
+    )
+
+    assert code == 0
+    fake = instances[-1]
+    assert fake.params is not None
+    assert RESUME_CHECKPOINT_KEY not in fake.params, "a wiped store must not be resumed into"
+    assert not sidecar.exists(), "the stale cursor is dropped, not left for the next run"
+
+
+async def test_same_depth_rebuild_drift_refuses_resume(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AUDIT_0824 M8: a server-side rebuild at the SAME depth wiped the store
+    and re-committed only 10 articles before erroring. The CLI sidecar's N=40
+    describes the destroyed lineage; resuming at 40 would skip articles 10..39
+    of the new build forever."""
+    config.configure(env={})
+    sidecar = _seed_sidecar(tmp_path)
+    async with db.write() as conn:
+        await conn.execute(
+            "UPDATE zims SET index_status='error', index_depth=1, index_progress=10 WHERE id=1"
+        )
+    monkeypatch.setattr("vesta.index.job.IndexZimJob", _FakeIndexJob)
+
+    code = await _run_index(
+        type("State", (), {"db": db})(),  # type: ignore[arg-type]
+        _index_args("wikipedia", tmp_path, fresh=False),
+    )
+
+    assert code == 0
+    fake = instances[-1]
+    assert fake.params is not None
+    assert RESUME_CHECKPOINT_KEY not in fake.params, "drifted lineage must not be resumed"
+    assert not sidecar.exists()
