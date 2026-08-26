@@ -2412,6 +2412,12 @@ async def _cmd_index(args: argparse.Namespace) -> int:
         return await _run_index_many(state, args)
 
 
+# A user interrupt (graceful pause on the first Ctrl+C, force-quit on the
+# second) exits with the conventional SIGINT code so callers — including the
+# multi-archive queue — can tell "interrupted" from "failed".
+_INDEX_INTERRUPTED = 130
+
+
 async def _run_index_many(state: AppState, args: argparse.Namespace) -> int:
     specs: list[str] = []
     z = args.zim
@@ -2436,7 +2442,10 @@ async def _run_index_many(state: AppState, args: argparse.Namespace) -> int:
             ),
         )
     code = 0
-    # Queue each archive back-to-back; the first failure stops the queue.
+    # Queue each archive back-to-back; the first failure stops the queue, and
+    # so does a user pause/force-quit (_INDEX_INTERRUPTED): Ctrl+C means "stop
+    # this session", not "move on to the next archive". The interrupt code
+    # propagates unchanged so the process exits interrupted, not failed.
     for i, zim_id in enumerate(ids, 1):
         sub = argparse.Namespace(
             depth=args.depth, zim=str(zim_id), fresh=args.fresh, data_dir=args.data_dir
@@ -2592,7 +2601,7 @@ async def _run_index(state: AppState, args: argparse.Namespace) -> int:  # noqa:
         await IndexZimJob().run(handle, params)
     except KeyboardInterrupt:
         print("\nforced quit. Index state left as-is; re-run to resume.")
-        code = 130
+        code = _INDEX_INTERRUPTED
     except IndexLeaseHeld as exc:
         # Lost the race: a build claimed the archive between our pre-check and
         # the job's own lease claim. Same refusal as above, minus the framing.
@@ -2610,7 +2619,9 @@ async def _run_index(state: AppState, args: argparse.Namespace) -> int:  # noqa:
     status = await _zim_index_status(db, zim_id)
     if status == "paused":
         print(f"\npaused. Resume with: uv run vesta index --depth {depth} --zim {zim_id}")
-        return 0
+        # Interrupted, not failed — and a queued run must stop here rather
+        # than roll straight into indexing the next archive.
+        return _INDEX_INTERRUPTED
     with contextlib.suppress(OSError):
         cp_path.unlink()
     print(f"\ndone: {label} indexed at depth {depth}.")

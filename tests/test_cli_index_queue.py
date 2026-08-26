@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 from vesta import config
-from vesta.cli import _resolve_zims, _run_index, _run_index_many
+from vesta.cli import _INDEX_INTERRUPTED, _resolve_zims, _run_index, _run_index_many
 from vesta.db.connection import Database
 from vesta.db.migrations import run_migrations
 from vesta.jobs.types import RESUME_CHECKPOINT_KEY
@@ -68,10 +68,13 @@ class _FakeRunIndex:
     def __init__(self) -> None:
         self.calls: list[int] = []
         self.fails_on: set[int] = set()
+        self.pauses_on: set[int] = set()
 
     async def __call__(self, _state: object, args: object) -> int:  # pragma: no cover - tracing
         zim_id = int(args.zim)  # type: ignore[attr-defined]
         self.calls.append(zim_id)
+        if zim_id in self.pauses_on:
+            return _INDEX_INTERRUPTED
         return 1 if zim_id in self.fails_on else 0
 
 
@@ -121,6 +124,21 @@ async def test_failure_stops_the_queue(db: Database, monkeypatch: pytest.MonkeyP
 
     assert code == 1
     assert fake.calls == [1, 2], "queue must stop at the first failing archive"
+
+
+async def test_pause_stops_the_queue(db: Database, monkeypatch: pytest.MonkeyPatch) -> None:
+    """AUDIT_0824 N19: pausing archive #1 must not launch archive #2. One
+    Ctrl+C ends the whole session, exiting interrupted (130), not failed."""
+    fake = _FakeRunIndex()
+    fake.pauses_on = {1}
+    monkeypatch.setattr("vesta.cli._run_index", fake)
+
+    code = await _run_index_many(  # type: ignore[arg-type]
+        type("State", (), {"db": db})(), _args("wikipedia", "history")
+    )
+
+    assert code == _INDEX_INTERRUPTED
+    assert fake.calls == [1], "the queue must stop at the paused archive"
 
 
 async def test_unresolvable_spec_is_skipped_not_aborting(
@@ -253,7 +271,7 @@ async def test_paused_run_keeps_the_sidecar(
         _index_args("wikipedia", tmp_path, fresh=False),
     )
 
-    assert code == 0
+    assert code == _INDEX_INTERRUPTED
     assert sidecar.exists(), "a paused run keeps its resume sidecar"
 
 
