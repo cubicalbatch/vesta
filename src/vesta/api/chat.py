@@ -177,7 +177,7 @@ async def _run_chat_turn(
     #    (test app + offline first-run).
     answer_parts: list[str] = []
     final_answer: str | None = None
-    sources_json: str | None = None
+    source_cards: list[dict[str, Any]] | None = None
     trace_dict: dict[str, object] | None = None
     started = time.monotonic()
 
@@ -223,7 +223,16 @@ async def _run_chat_turn(
             if event.answer_text is not None:
                 final_answer = event.answer_text
         elif isinstance(event, SourcesEvent):
-            sources_json = _dumps([_card_to_dict(c) for c in event.cards])
+            # docs/sse-protocol.md "Sources merge": a ``merge: true`` event
+            # carries ONLY the delta cards discovered after the first event —
+            # append them (continuing the same 0-based numbering), exactly like
+            # the SPA reducer; a non-merge event is this turn's initial set and
+            # replaces. Persisting only the last event's cards would drop every
+            # Round-0 card from the system of record.
+            if source_cards is None or not event.merge:
+                source_cards = [_card_to_dict(c) for c in event.cards]
+            else:
+                source_cards.extend(_card_to_dict(c) for c in event.cards)
         elif isinstance(event, TraceEvent):
             trace_dict = event.trace
 
@@ -231,6 +240,7 @@ async def _run_chat_turn(
     #    in the request path; the trace carries the full detail for analysis.
     latency_ms = int((time.monotonic() - started) * 1000)
     trace_json = _dumps(trace_dict) if trace_dict is not None else None
+    sources_json = _dumps(source_cards) if source_cards is not None else None
     await store.append_message(
         conversation_id,
         "assistant",

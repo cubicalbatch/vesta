@@ -533,6 +533,110 @@ class TestAnswerResetAndCitationRewritePersistence:
         assert assistant["content"] != "The battle happened in 1066 [7]."
 
 
+class TestSourcesMergePersistence:
+    """AUDIT_0824 M9: ``_run_chat_turn`` must accumulate cards across
+    ``SourcesEvent``s before persisting. The agent chat path emits a final
+    ``sources(merge=True)`` event carrying ONLY the delta cards its tool rounds
+    discovered beyond the initial set (docs/sse-protocol.md "Sources merge");
+    replacing the accumulator on every event persisted a row whose
+    ``sources_json`` held just the late cards, so restored conversations lost
+    the Round-0 sources and the persisted answer's [n] markers referenced card
+    numbers that no longer existed. The live SPA appends on merge — the
+    persisted JSON must match what the client displayed."""
+
+    @staticmethod
+    def _card(path: str) -> object:
+        from vesta.retrieval.contracts import SourceCard
+
+        return SourceCard(
+            zim_id=1,
+            path=path,
+            title=path,
+            snippet=f"snippet for {path}",
+            breadcrumb=path,
+            score=1.0,
+            source="test",
+        )
+
+    @pytest.mark.asyncio
+    async def test_merge_delta_is_appended_not_replaced(
+        self, app_client_with_zim: tuple[httpx.AsyncClient, int], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import vesta.api.chat as chat_module
+        from vesta.answer.contracts import (
+            CitationsEvent,
+            DoneEvent,
+            SourcesEvent,
+            TokenEvent,
+            TraceEvent,
+        )
+
+        async def fake_iter_answer_events(
+            state: object,
+            query: str,
+            scope: str | None,
+            profile: str | None,
+            strategy: str | None,
+            *,
+            history: tuple[tuple[str, str], ...] = (),
+        ) -> AsyncIterator[object]:
+            yield SourcesEvent(cards=(self._card("round0/a"),))  # type: ignore[arg-type]
+            yield TokenEvent(text="Answer citing [1] and [2].")
+            yield SourcesEvent(cards=(self._card("recovered/b"),), merge=True)  # type: ignore[arg-type]
+            yield CitationsEvent(spans=(), answer_text="Answer citing [0] and [1].")
+            yield TraceEvent(trace={"version": 1, "stages": []})
+            yield DoneEvent()
+
+        monkeypatch.setattr(chat_module, "iter_answer_events", fake_iter_answer_events)
+        # Force the no-LLM (sources_only) branch so the fake generator above is
+        # used — see the sibling FIX tests for why.
+        monkeypatch.setattr(chat_module, "compute_capabilities", frozenset)
+
+        client, _ = app_client_with_zim
+        resp = await client.post("/api/chat", json={"query": "test"})
+        conv_id = int(resp.headers["X-Conversation-Id"])
+
+        detail = await client.get(f"/api/conversations/{conv_id}")
+        assistant = next(m for m in detail.json()["messages"] if m["role"] == "assistant")
+        cards = assistant["sources"]
+        assert [c["path"] for c in cards] == ["round0/a", "recovered/b"]
+
+    @pytest.mark.asyncio
+    async def test_single_non_merge_event_persists_exactly_its_cards(
+        self, app_client_with_zim: tuple[httpx.AsyncClient, int], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No tool rounds → exactly one non-merge sources event; the persisted
+        row is unchanged from the pre-fix behaviour."""
+        import vesta.api.chat as chat_module
+        from vesta.answer.contracts import DoneEvent, SourcesEvent, TokenEvent, TraceEvent
+
+        async def fake_iter_answer_events(
+            state: object,
+            query: str,
+            scope: str | None,
+            profile: str | None,
+            strategy: str | None,
+            *,
+            history: tuple[tuple[str, str], ...] = (),
+        ) -> AsyncIterator[object]:
+            yield SourcesEvent(cards=(self._card("only/a"), self._card("only/b")))  # type: ignore[arg-type]
+            yield TokenEvent(text="plain answer")
+            yield TraceEvent(trace={"version": 1, "stages": []})
+            yield DoneEvent()
+
+        monkeypatch.setattr(chat_module, "iter_answer_events", fake_iter_answer_events)
+        monkeypatch.setattr(chat_module, "compute_capabilities", frozenset)
+
+        client, _ = app_client_with_zim
+        resp = await client.post("/api/chat", json={"query": "test"})
+        conv_id = int(resp.headers["X-Conversation-Id"])
+
+        detail = await client.get(f"/api/conversations/{conv_id}")
+        assistant = next(m for m in detail.json()["messages"] if m["role"] == "assistant")
+        cards = assistant["sources"]
+        assert [c["path"] for c in cards] == ["only/a", "only/b"]
+
+
 # ── The local runtime in the answer path ─────────────────────────────────────
 
 
