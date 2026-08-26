@@ -257,6 +257,7 @@ class LlmRuntime:
         rid = self._resolved_id
         if states.get(rid) == "loaded":
             self._state = "loaded"
+            self._error = None
             self.mark_used()
             return
 
@@ -265,9 +266,13 @@ class LlmRuntime:
         self._state = "loading"
         # The POST returns {"success": true} immediately — the
         # long timeout only guards a hung call, not the load itself.
-        await self._post_router("/models/load", {"model": rid}, timeout=_LOAD_TIMEOUT_S)
+        try:
+            await self._post_router("/models/load", {"model": rid}, timeout=_LOAD_TIMEOUT_S)
+        except Exception as exc:
+            self._fail(f"llama-server /models/load failed: {exc!r}")
         await self._poll_until_loaded(rid)
         self._state = "loaded"
+        self._error = None
         self.mark_used()
 
     async def _poll_until_loaded(self, rid: str) -> None:
@@ -289,8 +294,10 @@ class LlmRuntime:
         if self._source() == "remote":
             return
         if self._supervisor is not None and self._resolved_id is not None:
-            with contextlib.suppress(Exception):
+            try:
                 await self._post_router("/models/unload", {"model": self._resolved_id})
+            except Exception as exc:
+                _log.warning("llm.unload_failed", extra={"error": str(exc)})
         self._state = "unloaded"
 
     @property
@@ -345,8 +352,10 @@ class LlmRuntime:
             self._state = "unloaded"
             if self._supervisor is not None and self._supervisor.is_running():
                 if rid is not None and old_model:
-                    with contextlib.suppress(Exception):
+                    try:
                         await self._post_router("/models/unload", {"model": rid})
+                    except Exception as exc:
+                        _log.warning("llm.unload_failed", extra={"error": str(exc)})
                 await self._supervisor.restart()
 
         if old_source != new_source and new_source == "remote":
@@ -480,9 +489,17 @@ class LlmRuntime:
         stop_after = int(self._snapshot.get(INFERENCE_LOCAL_STOP_SERVER_AFTER_IDLE_SECONDS))
         if unload_after > 0 and idle > unload_after and self._state == "loaded":
             if self._resolved_id is not None and self._supervisor is not None:
-                await self._post_router("/models/unload", {"model": self._resolved_id})
-            self._state = "unloaded"
-            _log.info("llm.idle_unloaded", extra={"idle_s": round(idle, 1)})
+                try:
+                    await self._post_router("/models/unload", {"model": self._resolved_id})
+                    self._state = "unloaded"
+                    _log.info("llm.idle_unloaded", extra={"idle_s": round(idle, 1)})
+                except Exception as exc:
+                    _log.warning(
+                        "llm.idle_unload_failed",
+                        extra={"error": str(exc), "idle_s": round(idle, 1)},
+                    )
+            else:
+                self._state = "unloaded"
         if (
             stop_after > 0
             and idle > stop_after
@@ -529,12 +546,10 @@ class LlmRuntime:
 
     async def _post_router(
         self, path: str, payload: dict[str, str], *, timeout: float = _MODELS_TIMEOUT_S
-    ) -> None:
-        try:
-            resp = await self._client().post(path, json=payload, timeout=timeout)
-            resp.raise_for_status()
-        except Exception as exc:
-            self._fail(f"llama-server {path} failed: {exc!r}")
+    ) -> httpx.Response:
+        resp = await self._client().post(path, json=payload, timeout=timeout)
+        resp.raise_for_status()
+        return resp
 
 
 __all__ = [

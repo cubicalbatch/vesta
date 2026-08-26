@@ -56,6 +56,7 @@ class FakeRouter:
         self._loading: dict[str, int] = {}
         self.load_calls: list[str] = []
         self.unload_calls: list[str] = []
+        self.fail_unload: bool = False
 
     async def health(self, request: Any) -> JSONResponse:
         return JSONResponse({"status": "ok"})
@@ -95,6 +96,8 @@ class FakeRouter:
         return JSONResponse({"success": True})
 
     async def unload(self, request: Any) -> JSONResponse:
+        if self.fail_unload:
+            return JSONResponse({"error": "unload failed"}, status_code=500)
         mid = str((await request.json())["model"])
         self.unload_calls.append(mid)
         self._statuses[mid] = "unloaded"
@@ -296,6 +299,36 @@ async def test_ensure_ready_warm_emits_no_start_status(
     assert messages == []
 
 
+async def test_ensure_ready_recovery_clears_previous_error(
+    router_server: tuple[FakeRouter, str],
+    tmp_path: Path,
+) -> None:
+    """A previous error (e.g. transient failure) is cleared when ensure_ready succeeds."""
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / f"{QWEN_ID}.gguf").touch()
+    _router, url = router_server
+    runtime, _sup = make_runtime(
+        url, local_snapshot(model="Absent-Model.gguf"), models_dir=models_dir
+    )
+    with pytest.raises(LlmRuntimeError):
+        await runtime.ensure_ready()
+    status = await runtime.status()
+    assert status.state == "error"
+    assert status.error is not None
+    assert runtime._error is not None
+
+    # Rebuild with a valid model and re-run ensure_ready:
+    await runtime.rebuild(local_snapshot(model=f"{QWEN_ID}.gguf"))
+    # Manually simulate a stale _error if ensure_ready is called without rebuild:
+    runtime._error = "stale error message"
+    await runtime.ensure_ready()
+    assert runtime._error is None
+    status = await runtime.status()
+    assert status.state == "loaded"
+    assert status.error is None
+
+
 # ── D4: idle watchdog ────────────────────────────────────────────────────────
 
 
@@ -416,6 +449,57 @@ async def test_watchdog_tick_unloads_deterministically(
     await runtime._tick()
     assert router.unload_calls == [QWEN_ID]
     assert runtime._state == "unloaded"
+
+
+async def test_idle_unload_failure_does_not_latch_error_state(
+    router_server: tuple[FakeRouter, str],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """I2: router failure on idle-unload must not permanently latch error state in status()."""
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / f"{QWEN_ID}.gguf").touch()
+    router, url = router_server
+    runtime, _sup = make_runtime(
+        url,
+        local_snapshot(
+            **{
+                "inference.local.idle_unload_seconds": 1,
+                "inference.local.stop_server_after_idle_seconds": 3600,
+            }
+        ),
+        models_dir=models_dir,
+    )
+    await runtime.ensure_ready()
+    status = await runtime.status()
+    assert status.state == "loaded"
+    assert status.error is None
+    assert runtime._error is None
+
+    # Router unload fails (e.g. 500 / timeout):
+    router.fail_unload = True
+    runtime._last_used = time.monotonic() - 100.0
+
+    with caplog.at_level("WARNING", logger="vesta.inference.runtime"):
+        await runtime._tick()
+
+    # Warning logged, error state NOT permanently latched:
+    assert any("llm.idle_unload_failed" in r.getMessage() for r in caplog.records)
+    assert runtime._error is None
+    assert runtime._state == "loaded"  # remained loaded since unload failed
+    status = await runtime.status()
+    assert status.state == "loaded"
+    assert status.error is None
+
+    # Next tick after router recovers successfully unloads:
+    router.fail_unload = False
+    await runtime._tick()
+    assert router.unload_calls == [QWEN_ID]
+    assert runtime._state == "unloaded"
+    status = await runtime.status()
+    assert status.state == "unloaded"
+    assert status.error is None
 
 
 # ── status ───────────────────────────────────────────────────────────────────
@@ -601,6 +685,35 @@ async def test_explicit_unload(router_server: tuple[FakeRouter, str]) -> None:
     await runtime.unload()
     assert router.unload_calls == [QWEN_ID]
     assert runtime._state == "unloaded"
+
+
+async def test_explicit_unload_failure_does_not_latch_error_state(
+    router_server: tuple[FakeRouter, str],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Explicit unload router failure logs a warning and marks unloaded without latching error."""
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / f"{QWEN_ID}.gguf").touch()
+    router, url = router_server
+    runtime, _sup = make_runtime(url, local_snapshot(), models_dir=models_dir)
+    await runtime.ensure_ready()
+    status = await runtime.status()
+    assert status.state == "loaded"
+    assert status.error is None
+    assert runtime._error is None
+
+    router.fail_unload = True
+    with caplog.at_level("WARNING", logger="vesta.inference.runtime"):
+        await runtime.unload()
+
+    assert any("llm.unload_failed" in r.getMessage() for r in caplog.records)
+    assert runtime._error is None
+    assert runtime._state == "unloaded"
+    status = await runtime.status()
+    assert status.state == "unloaded"
+    assert status.error is None
 
 
 # ── models.py helpers (D11 + RAM estimate) ───────────────────────────────────
