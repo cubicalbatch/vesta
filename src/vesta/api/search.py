@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from vesta import config as app_config
 from vesta.api.answer import _parse_scope
 from vesta.api.state import AppState, app_state
+from vesta.api.zims import DocumentOut, MediaOut
 from vesta.config.capabilities import compute_capabilities
 from vesta.retrieval import (
     API_ALLOW_PROFILE_OVERRIDE,
@@ -253,11 +254,11 @@ async def _enrich_cards_with_media(db: Any, cards: list[SourceCardResponse]) -> 
     for c in cards:
         ref = media_by_zim_path.get(c.zim_id, {}).get(c.path)
         if ref is not None:
-            c.media = {
-                "video_path": ref.video_path,
-                "poster_path": ref.poster_path,
-                "duration": ref.duration,
-            }
+            c.media = MediaOut(
+                video_path=ref.video_path,
+                poster_path=ref.poster_path,
+                duration=ref.duration,
+            ).model_dump()
 
 
 async def _enrich_cards_with_documents(db: Any, cards: list[SourceCardResponse]) -> None:
@@ -289,13 +290,13 @@ async def _enrich_cards_with_documents(db: Any, cards: list[SourceCardResponse])
     for c in cards:
         ref = doc_by_zim_path.get(c.zim_id, {}).get(c.path)
         if ref is not None:
-            c.document = {
-                "doc_path": ref.doc_path,
-                "title": ref.title,
-                "description": ref.description,
-                "author": ref.author,
-                "doc_mime": ref.doc_mime,
-                "url": ref.url,
-            }
+            c.document = DocumentOut(
+                doc_path=ref.doc_path,
+                title=ref.title,
+                description=ref.description,
+                author=ref.author,
+                doc_mime=ref.doc_mime,
+                url=ref.url,
+            ).model_dump()
             if ref.title:
                 c.title = ref.title

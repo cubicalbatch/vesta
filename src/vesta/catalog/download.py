@@ -566,8 +566,8 @@ async def _checkpoint(
 def _msg(written: int, total: int, action: str) -> str:
     if total > 0:
         pct = written * 100 // total
-        return f"{action}: {written}/{total} bytes ({pct}%)"
-    return f"{action}: {written} bytes"
+        return f"{action}: {pct}% ({written // (1024 * 1024)} MB / {total // (1024 * 1024)} MB)"
+    return f"{action}: {written // (1024 * 1024)} MB"
 
 
 # Register the built-in download job type at import.
