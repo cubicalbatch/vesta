@@ -34,6 +34,10 @@ from vesta.config.settings import setting
 
 GOLDEN_DIR = Path(__file__).resolve().parent / "golden"
 
+#: The loadable set names. Anything else is a typo (e.g. ``"fixture_subsets"``)
+#: and must be rejected, not silently expanded to the full pinned-archive run.
+GOLDEN_SET_NAMES: tuple[str, ...] = ("full", "fixture_subset")
+
 #: The slices. ``out_of_corpus`` is the abstention slice.
 #: ``reformulation`` is a seventh slice:
 #: direct terms fail, a synonym / broader term / successor title succeeds.
@@ -254,6 +258,9 @@ def load_fixture_set() -> GoldenSet:
 
 def load_set(name: str = "full") -> GoldenSet:
     """Load a named golden set: ``full`` (default) or ``fixture_subset``."""
+    if name not in GOLDEN_SET_NAMES:
+        known = ", ".join(repr(n) for n in GOLDEN_SET_NAMES)
+        raise ValueError(f"unknown golden set {name!r}; valid sets: {known}")
     if name == "fixture_subset":
         return load_fixture_set()
     return load_full_set()
@@ -308,6 +315,7 @@ __all__ = [
     "EVAL_JUDGE_MODEL",
     "EVAL_REGRESSION_EPSILON",
     "GOLDEN_DIR",
+    "GOLDEN_SET_NAMES",
     "SLICES",
     "GoldenEntry",
     "GoldenSet",

@@ -25,7 +25,7 @@ from vesta import config as app_config
 from vesta.api import eval as eval_api
 from vesta.db.connection import Database
 from vesta.db.migrations import run_migrations
-from vesta.eval.golden import load_set
+from vesta.eval.golden import GOLDEN_SET_NAMES, load_set
 from vesta.eval.metrics import LatencyPercentiles, RunMetrics
 from vesta.eval.runner import PipelineRunner
 from vesta.retrieval.profiles import load_profile
@@ -220,3 +220,45 @@ async def test_run_unknown_profile_is_404(app_client: httpx.AsyncClient) -> None
     )
     assert resp.status_code == 404
     assert "no_such_profile" in resp.json()["detail"]
+
+
+# ── AUDIT_0824 N4: unknown golden_set 422s instead of launching the full run ─
+
+
+@pytest.mark.asyncio
+async def test_run_unknown_golden_set_is_422(app_client: httpx.AsyncClient) -> None:
+    """POST /api/eval/run with a typo'd golden_set must 422 naming the valid
+    sets — pre-fix it silently launched the full pinned-archive run and pinned
+    it under the misspelled name."""
+    resp = await app_client.post(
+        "/api/eval/run",
+        json={"profile": "lexical", "golden_set": "fixture_subsets"},
+    )
+    assert resp.status_code == 422
+    detail = str(resp.json()["detail"])
+    assert "fixture_subsets" in detail
+    for valid in GOLDEN_SET_NAMES:
+        assert valid in detail
+    runs = await app_client.get("/api/eval/runs")
+    assert runs.json() == []  # no placeholder row was pinned under the typo
+
+
+def test_load_set_rejects_unknown_name() -> None:
+    """The loader itself refuses unknown names rather than expanding to full."""
+    with pytest.raises(ValueError, match="valid sets"):
+        load_set("fixture_subsets")
+
+
+@pytest.mark.asyncio
+async def test_run_known_and_default_golden_sets_accepted(
+    app_client: httpx.AsyncClient,
+) -> None:
+    """Known subset names still resolve past validation; unset still defaults
+    to ``full`` (the request reaches the route instead of 422ing)."""
+    ok = await app_client.post(
+        "/api/eval/run",
+        json={"profile": "no_such_profile", "golden_set": "fixture_subset"},
+    )
+    assert ok.status_code == 404  # profile check reached → golden_set accepted
+    default = await app_client.post("/api/eval/run", json={"profile": "no_such_profile"})
+    assert default.status_code == 404  # unset golden_set passed validation too

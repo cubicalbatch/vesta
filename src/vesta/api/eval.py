@@ -20,12 +20,17 @@ from typing import Any
 
 import aiosqlite
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from vesta import config as app_config
 from vesta.api.state import AppState, app_state
 from vesta.config.capabilities import compute_capabilities
-from vesta.eval.golden import EVAL_ARCHIVE_CHECKSUM, EVAL_ARCHIVE_PATH, load_set
+from vesta.eval.golden import (
+    EVAL_ARCHIVE_CHECKSUM,
+    EVAL_ARCHIVE_PATH,
+    GOLDEN_SET_NAMES,
+    load_set,
+)
 from vesta.eval.runner import (
     EvalStore,
     PipelineRunner,
@@ -205,8 +210,18 @@ class EvalRunRequest(BaseModel):
     """``POST /api/eval/run`` body. ``profile`` defaults to the active profile."""
 
     profile: str | None = None
-    golden_set: str = "full"  # "full" (pinned archive) or "fixture_subset"
+    golden_set: str = "full"
     notes: str = ""
+
+    @field_validator("golden_set")
+    @classmethod
+    def _known_golden_set(cls, v: str) -> str:
+        """Reject typos (``fixture_subsets``) instead of silently launching the
+        full pinned-archive run under the misspelled name (AUDIT_0824 N4)."""
+        if v not in GOLDEN_SET_NAMES:
+            known = ", ".join(GOLDEN_SET_NAMES)
+            raise ValueError(f"unknown golden_set {v!r}; valid sets: {known}")
+        return v
 
 
 class EvalRunResponse(BaseModel):
