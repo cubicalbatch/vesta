@@ -9,7 +9,7 @@
 	// checkbox list. "Continue" batch-starts the acquisition chain (download →
 	// register → index at depth 1) for every selected entry, then advances.
 	// Step 2 — Set up AI: optional LLM — point at an existing endpoint, download
-	// a GGUF (RAM-tuned recommendation), or skip.
+	// a GGUF (curated recommendation), or skip.
 	//
 	// This is composition, not new logic: the acquisition chain, curated-to-
 	// live-catalog-row matching, and the install-cost line are all Catalog's,
@@ -18,7 +18,6 @@
 	import { catalogApi } from '$lib/api/catalog';
 	import { zimsApi } from '$lib/api/zims';
 	import { modelsApi, type ModelPreset } from '$lib/api/models';
-	import { systemApi } from '$lib/api/system';
 	import { setupApi } from '$lib/api/setup';
 	import { settingsApi } from '$lib/api/settings';
 	import { zimsStore } from '$lib/stores/zims.svelte';
@@ -70,7 +69,6 @@
 	let manualBusy = $state(false);
 
 	// ── LLM (step 2) ───────────────────────────────────────────────────────────
-	let ramBytes = $state<number | null>(null);
 	let presets = $state<ModelPreset[]>([]);
 	let presetsError = $state(false);
 	let llmChoice = $state<'remote' | 'download' | 'skip'>('download');
@@ -244,13 +242,9 @@
 		acquisitionManager.reconcile();
 	});
 
-	// Step 2 data — fetched once on mount. Both degrade silently (the page still
+	// Preset data — fetched once on mount. It degrades silently (the page still
 	// renders; the download option just shows fewer/no presets).
 	$effect(() => {
-		systemApi
-			.hardware()
-			.then((h) => (ramBytes = h.ram_total_bytes))
-			.catch(() => {});
 		modelsApi
 			.presets()
 			.then((r) => (presets = r.presets))
@@ -264,9 +258,6 @@
 	const featured = $derived(selectFeatured(curated));
 	const secondary = $derived(selectSecondary(curated));
 	const hasSelection = $derived(selectedKeys.size > 0);
-
-	// Default preset (Qwen 4B).
-	const defaultPreset = $derived(presets[0] ?? null);
 
 	// Seed the default selection once presets land.
 	$effect(() => {
@@ -333,8 +324,8 @@
 		modelJob != null && !TERMINAL_JOB_STATUSES.has(modelJob.status)
 	);
 
-	// The preset the user has highlighted (or default Qwen 4B preset) — drives the action button's state
-	// (Download vs Already downloaded).
+	// The preset the user has highlighted (or the first preset) — drives the
+	// action button's state (Download vs Already downloaded).
 	const selectedPreset = $derived(
 		selectedPresetId !== null
 			? (presets.find((p) => p.id === selectedPresetId) ?? presets[0] ?? null)

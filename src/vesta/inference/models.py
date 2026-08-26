@@ -1,9 +1,7 @@
 """Curated GGUF model presets for the first-run LLM wizard.
 
 Shipped as data so the wizard can show model cards (name, size, description, RAM
-recommendation) with no network — the download URL is baked in. The wizard's
-"recommended for your machine" hint comes from :func:`recommend_preset`, which
-picks based on detected RAM.
+recommendation) with no network — the download URL is baked in.
 
 Each preset maps to a single GGUF file on HuggingFace. The download job fetches
 the ``url`` and writes it to ``data/models/<filename>``; the API endpoint then
@@ -105,11 +103,6 @@ def preset_by_filename(filename: str) -> ModelPreset | None:
     return _BY_FILENAME.get(Path(filename).name)
 
 
-def recommend_preset(ram_total_bytes: int = 0) -> ModelPreset:
-    """The preset recommended for the detected RAM."""
-    return _PRESETS[0]
-
-
 def thinking_for_filename(filename: str) -> ThinkingMode:
     """Thinking mode for any GGUF filename — preset table first, stem heuristic.
 
@@ -166,6 +159,5 @@ __all__ = [
     "model_presets",
     "preset_by_filename",
     "preset_by_id",
-    "recommend_preset",
     "thinking_for_filename",
 ]
