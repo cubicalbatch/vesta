@@ -230,6 +230,70 @@ async def test_delete_index_drops_the_cli_resume_sidecar(
     assert not sidecar.exists(), "the wiped archive's resume sidecar must not survive"
 
 
+@pytest.mark.parametrize("status", ["queued", "running", "paused"])
+async def test_delete_index_refuses_while_index_job_pending(
+    app_client_with_zim: tuple[httpx.AsyncClient, int],
+    status: str,
+) -> None:
+    """AUDIT_0824 S2: a non-terminal ``index_zim`` job targeting the archive
+    races the wipe (a queued build would re-create index state over the
+    emptied tables; a mid-flight wipe leaves it writing into a store whose
+    compat record says "un-indexed"), so the wipe must refuse with 409 and
+    leave the indexed state untouched.
+
+    Seeds the job row directly, like the trigger-idempotence test above: the
+    fixture's real build fails fast and could be terminal by the time the
+    DELETE lands.
+    """
+    client, zim_id = app_client_with_zim
+    app = client._transport.app  # type: ignore[attr-defined]
+    db = app.state.vesta.db  # type: ignore[attr-defined]
+    async with db.write() as conn:
+        # Index state a wipe would have destroyed.
+        await conn.execute(
+            "UPDATE zims SET index_depth=2, index_status='complete' WHERE id=?",
+            (zim_id,),
+        )
+        cur = await conn.execute(
+            "INSERT INTO jobs(type, target, params, status, progress, total, "
+            "created_at, updated_at) VALUES('index_zim', ?, '{}', ?, 0, 0, "
+            "'2026-01-01T00:00:00', '2026-01-01T00:00:00')",
+            (str(zim_id), status),
+        )
+        job_id = int(cur.lastrowid)
+
+    resp = await client.delete(f"/api/zims/{zim_id}/index")
+    assert resp.status_code == 409
+    assert f"job {job_id}" in resp.json()["detail"] and status in resp.json()["detail"]
+
+    # Nothing was wiped: the archive still reads as fully indexed.
+    body = (await client.get(f"/api/zims/{zim_id}/index")).json()
+    assert body["depth"] == 2 and body["status"] == "complete"
+
+
+async def test_delete_index_allows_terminal_jobs(
+    app_client_with_zim: tuple[httpx.AsyncClient, int],
+) -> None:
+    """The guard only covers the non-terminal window: a finished/failed/
+    cancelled build never races the wipe, so deletion proceeds normally."""
+    client, zim_id = app_client_with_zim
+    app = client._transport.app  # type: ignore[attr-defined]
+    db = app.state.vesta.db  # type: ignore[attr-defined]
+    async with db.write() as conn:
+        await conn.execute(
+            "INSERT INTO jobs(type, target, params, status, progress, total, "
+            "created_at, updated_at, finished_at) VALUES('index_zim', ?, '{}', "
+            "'done', 0, 0, '2026-01-01T00:00:00', '2026-01-01T00:00:00', "
+            "'2026-01-01T00:00:00')",
+            (str(zim_id),),
+        )
+
+    resp = await client.delete(f"/api/zims/{zim_id}/index")
+    assert resp.status_code == 200 and resp.json()["depth"] == 0
+    body = (await client.get(f"/api/zims/{zim_id}/index")).json()
+    assert body["depth"] == 0 and body["status"] == "none"
+
+
 async def test_status_and_delete_reject_unknown_archive_404(
     app_client_with_zim: tuple[httpx.AsyncClient, int],
 ) -> None:

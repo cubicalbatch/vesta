@@ -609,11 +609,40 @@ async def delete_index(zim_id: int, state: AppState = Depends(app_state)) -> dic
     ``index_meta`` is cleared too: after the wipe the archive is genuinely
     un-indexed, and the dense source must skip it as "no index" rather than
     find a stale compat record over empty tables.
+    Refuses with 409 while a non-terminal ``index_zim`` job targets this
+    archive (AUDIT_0824 S2) — see the comment at the check below.
     """
+    if state.runner is None:
+        raise HTTPException(status_code=503, detail="runner not ready")
+    await _zim_exists_or_404(state.db, zim_id)
+    # AUDIT_0824 S2: a non-terminal ``index_zim`` job targeting this archive
+    # races the wipe — a queued build starts after it and re-creates index
+    # state over tables the user just emptied; a mid-flight wipe leaves the
+    # build writing into a store whose compat record and zims row both say
+    # "un-indexed" (M15's acquire-time row revalidation only refuses terminal
+    # rows, so it cannot see this). Hold the same per-zim lock as
+    # trigger_index so a trigger cannot slip a submit between this check and
+    # the end of the wipe.
+    async with _index_trigger_lock(zim_id):
+        pending = await _find_pending_index_job(state, zim_id)
+        if pending is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"an index build for this archive is {pending.status} "
+                    f"(job {pending.id}); wait for it to finish or cancel it first"
+                ),
+            )
+        await _wipe_index_state(state, zim_id)
+    return {"ok": True, "zim_id": zim_id, "depth": 0}
+
+
+async def _wipe_index_state(state: AppState, zim_id: int) -> None:
+    """The body of :func:`delete_index` once the pending-job guard has passed.
+    Callers hold ``_index_trigger_lock(zim_id)`` across guard + wipe."""
     from vesta.index import reseed_indexed_state
     from vesta.vectors import get_store
 
-    await _zim_exists_or_404(state.db, zim_id)
     store = get_store()
     if store is not None:
         await store.delete_by_zim(zim_id)
@@ -635,7 +664,6 @@ async def delete_index(zim_id: int, state: AppState = Depends(app_state)) -> dic
 
     with contextlib.suppress(OSError):
         (Path(config.get(config.DATA_DIR)) / f".index_progress_{zim_id}.json").unlink()
-    return {"ok": True, "zim_id": zim_id, "depth": 0}
 
 
 @router.get("/api/zims/{zim_id}/index", response_model=IndexStatusOut)
