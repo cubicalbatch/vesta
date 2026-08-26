@@ -171,6 +171,19 @@ class IndexZimJob:
             await _run_build(
                 job, params, zim_id=zim_id, depth=depth, db=db, registry=registry, store=store
             )
+        except asyncio.CancelledError:
+            # A server-side pause/cancel (jobs/runner) delivers task
+            # cancellation at whatever await the build is parked on, so the
+            # loop-top cooperative ``job.cancelled()`` check inside
+            # ``_run_build`` never runs and cannot stamp the archive row.
+            # Without this arm the zims row stayed 'running' forever — and
+            # reseed_indexed_state counts 'running' as indexed, silently
+            # serving a partial build's vectors. Stamp resumable-paused (both
+            # arms converge; the checkpoint holds the resume position) and
+            # re-raise so the runner finishes its own paused/cancelled
+            # bookkeeping.
+            await _pause_running_build(db, zim_id)
+            raise
         except Exception:
             # A failed build is surfaced on the archive row, not just the job
             # row (08: index_status includes 'error'; the checkpoint keeps the
@@ -443,6 +456,22 @@ async def _set_index_status(
     vals.append(zim_id)
     async with db.write() as conn:
         await conn.execute(f"UPDATE zims SET {', '.join(sets)} WHERE id=?", vals)
+
+
+async def _pause_running_build(db: Database, zim_id: int) -> None:
+    """Downgrade a live 'running' archive row to resumable 'paused'.
+
+    Conditional so a cancellation landing before the build ever stamped
+    'running' cannot clobber an unrelated status (e.g. a previous build's
+    'complete'). index_progress keeps its last batch-committed mirror — the
+    checkpoint high-water mark matches it, and resetting it would make the
+    UI lie about how far the paused build actually got.
+    """
+    async with db.write() as conn:
+        await conn.execute(
+            "UPDATE zims SET index_status='paused' WHERE id=? AND index_status='running'",
+            (zim_id,),
+        )
 
 
 async def _reset_articles(db: Database, zim_id: int) -> None:

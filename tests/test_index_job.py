@@ -18,6 +18,7 @@ That exercises these load-bearing properties:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections.abc import Mapping
 from pathlib import Path
@@ -27,11 +28,13 @@ import numpy as np
 import pytest
 import pytest_asyncio
 
+import vesta.index
 from vesta import config
 from vesta.db.connection import Database
 from vesta.db.migrations import run_migrations
-from vesta.index import bind_coordinator, bind_runtime, set_indexed_state
+from vesta.index import bind_coordinator, bind_runtime, reseed_indexed_state, set_indexed_state
 from vesta.index.job import _INDEX_FMT_VERSION, IndexZimJob
+from vesta.jobs.runner import JobRunner
 from vesta.jobs.types import RESUME_CHECKPOINT_KEY
 from vesta.vectors import bind_store
 from vesta.vectors.contracts import IndexMeta
@@ -433,6 +436,78 @@ async def test_cancel_marks_paused_and_keeps_checkpoint(rig: _Rig) -> None:
     assert (await rig.store.stats()).total_rows == 0
     # The pool was torn down, not left running.
     assert _FakePool.instances[-1].stopped
+
+
+async def _submit_parked_build(
+    rig: _Rig, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Database, JobRunner, int]:
+    """Start a real index_zim build through the JobRunner and return once it is
+    parked mid-batch with the archive row stamped 'running'."""
+    gate = asyncio.Event()
+    real_embed = rig.encoder.embed
+
+    async def gated_embed(texts: list[str], *, kind: str) -> list[np.ndarray]:
+        out = await real_embed(texts, kind=kind)
+        await gate.wait()  # park mid-build like a real batch in flight
+        return out
+
+    monkeypatch.setattr(rig.encoder, "embed", gated_embed)
+    r = JobRunner(rig.db)
+    await r.start()
+    jid = await r.submit("index_zim", None, {"zim_id": 1, "depth": 1})
+    while not rig.encoder.embed_calls:
+        await asyncio.sleep(0)
+    assert await _zims_status(rig) == "running"
+    return rig.db, r, jid
+
+
+async def _poll_status(r: JobRunner, jid: int, status: str) -> bool:
+    rec = None
+    for _ in range(100):
+        await asyncio.sleep(0.005)
+        rec = await r.get(jid)
+        if rec is not None and rec.status == status:
+            return True
+    return False
+
+
+@pytest.mark.asyncio
+async def test_server_pause_mid_build_stamps_zims_paused_not_running(
+    rig: _Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AUDIT_0824 M13: the runner's pause button sets the flag and then cancels
+    the task outright, so CancelledError lands at whatever await the build is
+    parked on — the loop-top ``job.cancelled()`` check never runs. The archive
+    row must still leave 'running': reseed counts 'running' as indexed and
+    would silently serve a partial build's vectors."""
+    _, r, jid = await _submit_parked_build(rig, monkeypatch)
+    try:
+        assert await r.pause(jid)
+        assert await _poll_status(r, jid, "paused")
+        assert await _zims_status(rig) == "paused"
+        # And the seed query must not mistake the partial build for an index.
+        await reseed_indexed_state(rig.db)
+        assert vesta.index._ANY_INDEXED is False
+    finally:
+        await r.stop()
+
+
+@pytest.mark.asyncio
+async def test_server_cancel_mid_build_stamps_zims_paused_not_running(
+    rig: _Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same unwind path as a server pause (both converge on task cancellation);
+    the job row goes terminal 'cancelled', the archive row still must not stay
+    'running'."""
+    _, r, jid = await _submit_parked_build(rig, monkeypatch)
+    try:
+        assert await r.cancel(jid)
+        assert await _poll_status(r, jid, "cancelled")
+        assert await _zims_status(rig) == "paused"
+        await reseed_indexed_state(rig.db)
+        assert vesta.index._ANY_INDEXED is False
+    finally:
+        await r.stop()
 
 
 @pytest.mark.asyncio
