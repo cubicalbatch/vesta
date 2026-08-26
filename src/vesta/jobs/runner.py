@@ -89,7 +89,12 @@ class JobRunner:
             _log.info("jobs.resumed", extra={"count": len(rows)})
 
     async def stop(self) -> None:
-        """Cancel every running task so the process can exit cleanly."""
+        """Cancel every running task so the process can exit cleanly.
+
+        Shutdown cancels stamp live jobs ``paused`` (checkpoint intact) rather
+        than terminally cancelled, so the next ``start()``/``resume()`` picks
+        them up instead of every clean restart forfeiting the checkpoint.
+        """
         self._stopping = True
         tasks = [s.task for s in self._runs.values() if s.task is not None]
         for task in tasks:
@@ -248,7 +253,14 @@ class JobRunner:
         try:
             await sem.acquire()
         except asyncio.CancelledError:
-            await self._finish(job_id, "cancelled")
+            if self._stopping:
+                # Shutdown cancel, not a user cancel: keep the job resumable
+                # so a later start()/resume() picks it up instead of the row
+                # dying terminally on every clean restart.
+                await self._set_status(job_id, "paused")
+                await self._publish_status(job_id, "paused")
+            else:
+                await self._finish(job_id, "cancelled")
             return
         try:
             if self._stopping:
@@ -284,7 +296,9 @@ class JobRunner:
             # Land the newest pending checkpoint before the status flip so a
             # paused/cancelled job resumes from the true last offset.
             await self._flush_checkpoint(state)
-            if state.pause_requested:
+            if state.pause_requested or self._stopping:
+                # A user pause or a graceful-shutdown cancel both keep the job
+                # resumable; only an explicit user cancel is terminal.
                 await self._set_status(job_id, "paused")
                 await self._publish_status(job_id, "paused")
             else:

@@ -17,7 +17,12 @@ from vesta.db.connection import Database
 from vesta.db.migrations import run_migrations
 from vesta.jobs.handle import JobHandleImpl
 from vesta.jobs.runner import JobRunner, _RunState
-from vesta.jobs.types import RESUME_CHECKPOINT_KEY, JobHandle, register_job_type
+from vesta.jobs.types import (
+    RESUME_CHECKPOINT_KEY,
+    JobHandle,
+    JobRecord,
+    register_job_type,
+)
 
 
 @pytest.fixture
@@ -297,6 +302,79 @@ async def test_resume_actually_continues_from_persisted_checkpoint(
         from vesta.jobs.types import JOB_TYPES
 
         JOB_TYPES.pop("resume_probe", None)
+
+
+@pytest.mark.asyncio
+async def test_graceful_stop_preserves_resumable_row(tmp_db_path: Path) -> None:
+    """AUDIT_0824 M14: ``runner.stop()`` must not terminal-cancel live jobs.
+
+    A graceful shutdown stamps a running job ``paused`` with its checkpoint
+    intact (never terminally ``cancelled``), so a fresh runner can resume it
+    from the checkpoint instead of restarting from zero."""
+    config.configure(env={})
+    probe = _ResumeProbe()
+    register_job_type(probe)
+    try:
+        # First "process": run, then shut down gracefully mid-flight.
+        db1 = Database(str(tmp_db_path), busy_timeout_ms=2000)
+        await db1.start()
+        async with db1.write() as conn:
+            await run_migrations(conn)
+        r1 = JobRunner(db1)
+        await r1.start()
+        jid = await r1.submit("resume_probe", None, {"total": 500, "delay": 0.001})
+        await _wait_running_with_checkpoint(r1, jid)
+
+        await r1.stop()  # graceful shutdown while the job is mid-run
+        stopped = await r1.get(jid)
+        await db1.stop()
+
+        assert stopped is not None
+        # Resumable-paused, NOT terminal-cancelled; finished_at stays open.
+        assert stopped.status == "paused"
+        assert stopped.finished_at is None
+        assert stopped.checkpoint is not None
+        stopped_i = json.loads(stopped.checkpoint)["i"]
+        assert stopped_i >= 2
+
+        # Second "process": fresh runner against the same DB.
+        db2 = Database(str(tmp_db_path), busy_timeout_ms=2000)
+        await db2.start()
+        r2 = JobRunner(db2)
+        await r2.start()  # paused rows stay parked until an explicit resume
+        parked = await r2.get(jid)
+        assert parked is not None and parked.status == "paused"
+        assert await r2.resume(jid) is True
+        rec = None
+        for _ in range(400):
+            await asyncio.sleep(0.005)
+            rec = await r2.get(jid)
+            if rec and rec.status in {"done", "error", "cancelled"}:
+                break
+        await r2.stop()
+        await db2.stop()
+
+        assert rec is not None
+        assert rec.status == "done"
+        # Two runs: first fresh (from 0), second resumed from the exact
+        # checkpoint the shutdown flushed — not restarted from zero.
+        assert probe.resumed_from[0] == 0
+        assert probe.resumed_from[1] == stopped_i
+    finally:
+        from vesta.jobs.types import JOB_TYPES
+
+        JOB_TYPES.pop("resume_probe", None)
+
+
+async def _wait_running_with_checkpoint(r: JobRunner, jid: int) -> JobRecord:
+    """Wait until ``jid`` is running with at least one flushed checkpoint."""
+    rec = None
+    for _ in range(100):
+        await asyncio.sleep(0.005)
+        rec = await r.get(jid)
+        if rec is not None and rec.status == "running" and rec.checkpoint is not None:
+            return rec
+    raise AssertionError(f"job {jid} never reached running-with-checkpoint: {rec!r}")
 
 
 # ── checkpoint throttling + progress-publish status cache (AUDIT_0822 P3) ─────
