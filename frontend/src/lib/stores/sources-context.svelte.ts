@@ -12,8 +12,6 @@ const KEY = Symbol('answer-sources');
 export class SourcesContext {
 	list = $state<SourceCard[]>([]);
 	citations = $state<CitationSpan[]>([]);
-	/** answer.citations.min_span_score — below this a chip renders "weakly supported". */
-	minSpanScore = $state<number | null>(null);
 	/** Card index most recently clicked/focused via a citation chip. */
 	focused = $state<number | null>(null);
 	/** Bumped on every focus() so listeners can react even to the same id twice. */
@@ -24,12 +22,6 @@ export class SourcesContext {
 		return this.citations
 			.filter((s) => s.card_id === cardId)
 			.sort((a, b) => b.score - a.score)[0];
-	}
-
-	isWeak(cardId: number): boolean {
-		const span = this.spanForCard(cardId);
-		if (!span || this.minSpanScore == null) return false;
-		return span.score < this.minSpanScore;
 	}
 
 	focus(cardId: number) {

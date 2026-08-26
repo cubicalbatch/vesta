@@ -68,20 +68,20 @@ itself is contract-tested (`tests/test_sse_protocol*.py` + recorded fixtures).
 > `answer_reset` will concatenate the old and new answers (the exact bug this
 > fixes) but will not crash — the event is purely additive to the stream.
 
-> **2026-08-02 amendment (precision fix 2 — additive, non-breaking).**
+> **2026-08-02 amendment (precision fix 2 — additive, non-breaking); wording
+> corrected 2026-08-26.**
 > `citations` gained an `answer_text` field. Inline `[n]` citation markers in
-> the generated answer refer to PASSAGE numbers (one per retrieved passage),
-> not the CARD numbers the UI displays (one per article) — multiple passages
-> can share a card, so the numbers diverge. `answer_text`, when non-null, is
-> the final answer text after `vesta.answer.citations.renumber_inline_citations`
-> has rewritten every `[n]` marker to the correct card number (and collapsed
-> duplicates the remap produced). Streaming makes in-flight rewriting
-> impossible, so this is the only place the corrected text is available — it
-> is also the exact text the `citations.spans` character offsets are computed
-> against. Clients SHOULD replace their accumulated token text with
-> `answer_text` when present (for both display and persistence); a client
-> that ignores it keeps showing passage-numbered citations, which is today's
-> status quo, not a regression.
+> the generated answer refer to CARD numbers (one per article): the agent is
+> prompted with its cards numbered `[1]`..`[n]` (first-seen order), so a
+> marker in the answer is already a valid card number — there is NO
+> passage→card rewriting step (an earlier version of this amendment described
+> a `renumber_inline_citations` pass that does not exist on the current path).
+> Streaming makes any in-flight adjustment impossible; `answer_text`, when
+> non-null, is simply the FINAL answer text — the exact text the
+> `citations.spans` character offsets are computed against. Clients SHOULD
+> replace their accumulated token text with `answer_text` when present (for
+> both display and persistence); a client that ignores it loses nothing on
+> today's path.
 
 > **Evidence-first agent flow (additive — no new event).** The streaming agent
 > (`POST /api/chat`) is evidence-first: the raw question is searched before the
@@ -144,8 +144,8 @@ event: error       data: {code, message, recoverable}       # terminal on fatal
    far, this event fires first. Clients discard all accumulated `token` text
    for this turn and start fresh. Zero or more per response; never emitted for
    a genuine continuation (the answer keeps growing, not restarting).
-5. **`citations` comes after all tokens** — post-hoc alignment is computed on
-   the full answer (~10 ms, zero extra tokens). Its `answer_text` field
+5. **`citations` comes after all tokens** — citation spans are synthesized
+   from the full answer (~10 ms, zero extra tokens). Its `answer_text` field
    (2026-08-02 amendment), when present, is the authoritative final text.
 6. **`trace` is the last data event** — the full retrieval + answer trace.
 7. **`done` terminates the stream** on success. No more events after it.
@@ -209,7 +209,7 @@ same way (discard and restart).
       "answer_span": [0, 42],
       "card_id": 1,
       "passage_span": [120, 180],
-      "score": 0.68
+      "score": 1.0
     }
   ],
   "answer_text": "The Battle of Hastings was fought in 1066 [1]."
@@ -218,26 +218,26 @@ same way (discard and restart).
 - `answer_span`: `[start, end]` character offsets into `answer_text` (or, if
   `answer_text` is null, the concatenated answer per the `token` rule above).
 - `card_id`: 0-based index into the `sources.cards` array. In `answer_text`,
-  inline citation markers are `[card_id + 1]` — already rewritten from the raw
-  passage numbers the model was prompted with (see the 2026-08-02 amendment
-  above).
+  inline citation markers are `[card_id + 1]` — the agent is prompted with its
+  cards numbered from 1 (first-seen order), so markers are card numbers by
+  construction.
 - `passage_span`: `[start, end]` character offsets into the source passage's
   text, or `null` if only document-level alignment was possible. Enables
   click-to-highlight.
 - `answer_text` (2026-08-02 amendment, additive, nullable): the final answer
-  text after inline `[n]` citation markers are rewritten from passage indices
-  to card indices and duplicate markers produced by the remap are collapsed.
-  `null` when no rewrite happened (e.g. no citable spans). This is the text
-  `answer_span` offsets are computed against — clients SHOULD replace their
-  accumulated token text with it (for both display and persistence) rather
-  than slicing spans out of their own token concatenation, which can diverge
-  from this text once markers are renumbered/collapsed.
-- `score`: n-gram overlap ratio (0..1). Below `answer.citations.min_span_score`
-  the span is "weakly supported" (a UI treatment, not a deletion).
+  text — the exact text `answer_span` offsets are computed against. `null`
+  when the answer ended up empty. Clients SHOULD replace their accumulated
+  token text with it (for both display and persistence) rather than slicing
+  spans out of their own token concatenation.
+- `score`: constant `1.0`. A marker is an authoritative card citation, not an
+  n-gram alignment, so there is nothing to estimate; the retired
+  `answer.citations.min_span_score` "weakly supported" treatment was removed
+  by migration 0012 and clients MUST NOT key any UI off `score`.
 
-**Citation validity is 100% by construction**: a citation to something
-not retrieved cannot exist, because citations are derived by post-hoc span
-alignment against the retrieved passages.
+**Citation validity is 100% by construction**: a citation to something not
+retrieved cannot exist, because each marker is validated against the retrieved
+cards and any `[n]` outside the valid card range is dropped rather than
+relabeled.
 
 ### `trace`
 ```json

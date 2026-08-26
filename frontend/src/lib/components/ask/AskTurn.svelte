@@ -7,7 +7,6 @@
 	import { formatTurnStatus } from '$lib/answer/status';
 	import type { SourceCard as SourceCardT } from '$lib/types';
 	import { provideSources } from '$lib/stores/sources-context.svelte';
-	import { settingsValuesStore } from '$lib/stores/settings.svelte';
 	import { readerStore } from '$lib/stores/reader.svelte';
 	import { modelStore } from '$lib/stores/model.svelte';
 	import Markdown from '$lib/markdown/Markdown.svelte';
@@ -40,8 +39,6 @@
 	$effect(() => {
 		sources.list = answerState.sources;
 		sources.citations = answerState.citations;
-		const raw = settingsValuesStore.values['answer.citations.min_span_score'];
-		sources.minSpanScore = raw ? Number(raw) : null;
 	});
 
 	$effect(() => {
@@ -89,9 +86,6 @@
 	);
 	const approxTokens = $derived(
 		Math.round(answerState.text.split(/\s+/).filter(Boolean).length * 1.3)
-	);
-	const wellSupported = $derived(
-		answerState.citations.filter((c) => sources.minSpanScore == null || c.score >= sources.minSpanScore).length
 	);
 
 	function copyAnswer() {
@@ -208,8 +202,7 @@
 		{#if answerState.done && !answerState.error}
 			<div class="mt-5 flex flex-wrap items-center gap-3 font-mono text-xs text-faint">
 				<span>{model}</span>
-				<span>~{approxTokens} tokens</span>
-				{#if answerState.citations.length > 0}<span>{wellSupported} of {answerState.citations.length} citations well-supported</span>{/if}
+				{#if answerState.citations.length > 0}<span>{answerState.citations.length} citations</span>{/if}
 				<div class="ml-auto flex gap-1">
 					<button type="button" class="inline-grid size-7 place-items-center rounded-md hover:bg-surface-muted" onclick={copyAnswer} title="Copy answer">
 						<Copy class="size-3.5" />

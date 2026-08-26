@@ -13,19 +13,12 @@
 
 {#each ids as id, k (id)}
 	{@const src = resolved[k]}
-	{@const weak = sources.isWeak(id - 1)}
 	<button
 		type="button"
-		class="citation-chip align-super mx-0.5 -translate-y-px rounded-sm border px-1 text-[11px] font-bold leading-none transition-colors data-[pending=true]:opacity-40 {weak
-			? 'border-warning/25 bg-warning-soft text-warning'
-			: 'border-accent/22 bg-accent-soft text-accent-soft-text hover:bg-accent hover:text-white'}"
+		class="citation-chip align-super mx-0.5 -translate-y-px rounded-sm border border-accent/22 bg-accent-soft px-1 text-[11px] font-bold leading-none text-accent-soft-text transition-colors hover:bg-accent hover:text-white data-[pending=true]:opacity-40"
 		data-pending={!src}
 		data-card-id={id - 1}
-		title={src
-			? weak
-				? `${src.title} — weakly supported`
-				: src.title
-			: 'source not yet loaded'}
+		title={src ? src.title : 'source not yet loaded'}
 		onclick={() => src && sources.focus(id - 1)}
 	>
 		{id}
