@@ -16,16 +16,13 @@ objects. This router never decides ranking; it exposes raw material only.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import urllib.parse
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from vesta.api.state import AppState, app_state
-from vesta.db.connection import Database
 from vesta.jobs.types import JobRecord
 from vesta.zim.reader import EntryNotFound
 from vesta.zim.types import EntryPath, ExtractedArticle
@@ -65,18 +62,6 @@ def _archive_or_404(state: AppState, zim_id: int) -> Any:
         raise HTTPException(status_code=404, detail="archive not found") from exc
 
 
-async def _zim_exists_or_404(db: Database, zim_id: int) -> None:
-    """The DB twin of :func:`_archive_or_404` for endpoints that touch index
-    state before (or without) opening the archive itself: raise the standard
-    404 when no ``zims`` row carries this id."""
-    async with (
-        db.read() as conn,
-        conn.execute("SELECT 1 FROM zims WHERE id=?", (zim_id,)) as cur,
-    ):
-        if await cur.fetchone() is None:
-            raise HTTPException(status_code=404, detail="archive not found")
-
-
 class ArchiveOut(BaseModel):
     id: int
     uuid: str
@@ -110,33 +95,8 @@ class ScanResultOut(BaseModel):
     total: int
 
 
-class IndexEstimateRequest(BaseModel):
-    depth: int = 1  # 1..3
-
-
-class IndexEstimateOut(BaseModel):
-    depth: int
-    articles: int
-    seconds_low: float
-    seconds_expected: float
-    seconds_high: float
-    disk_bytes_low: int
-    disk_bytes_expected: int
-    disk_bytes_high: int
-    calibrated: bool
-
-
 class IndexTriggerRequest(BaseModel):
     depth: int = 1
-
-
-class IndexStatusOut(BaseModel):
-    zim_id: int
-    depth: int
-    status: str
-    progress: int
-    total: int
-    embedding_model: str | None = None
 
 
 class SectionOut(BaseModel):
@@ -505,37 +465,6 @@ async def list_documents(zim_id: int, state: AppState = Depends(app_state)) -> d
     }
 
 
-@router.post("/api/zims/{zim_id}/index/estimate", response_model=IndexEstimateOut)
-async def estimate_index(
-    zim_id: int, body: IndexEstimateRequest, state: AppState = Depends(app_state)
-) -> dict[str, object]:
-    """Calibrated time + disk estimate before committing to an index build."""
-    depth = body.depth
-    if depth < 1 or depth > 3:
-        raise HTTPException(status_code=400, detail="depth must be 1..3")
-    async with (
-        state.db.read() as conn,
-        conn.execute("SELECT article_count FROM zims WHERE id=?", (zim_id,)) as cur,
-    ):
-        row = await cur.fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="archive not found")
-    from vesta.index.estimate import initial_estimate
-
-    est = initial_estimate(int(row["article_count"]), depth)
-    return IndexEstimateOut(
-        depth=depth,
-        articles=est.articles_total,
-        seconds_low=est.seconds_low,
-        seconds_expected=est.seconds_expected,
-        seconds_high=est.seconds_high,
-        disk_bytes_low=est.disk_bytes_low,
-        disk_bytes_expected=est.disk_bytes_expected,
-        disk_bytes_high=est.disk_bytes_high,
-        calibrated=est.calibrated,
-    ).model_dump()
-
-
 async def _find_pending_index_job(state: AppState, zim_id: int) -> JobRecord | None:
     """The most recent non-terminal ``index_zim`` job targeting ``zim_id``, if any.
 
@@ -608,95 +537,6 @@ async def trigger_index(
             params={"zim_id": zim_id, "depth": depth, "owner": "server"},
         )
     return {"zim_id": zim_id, "depth": depth, "job_id": job_id}
-
-
-@router.delete("/api/zims/{zim_id}/index")
-async def delete_index(zim_id: int, state: AppState = Depends(app_state)) -> dict[str, object]:
-    """Lower an archive to depth 0: delete its vectors + compat record.
-    Lowering depth deletes vectors and **never touches the ZIM**.
-
-    Not a job — the wipe is one SQL round-trip per dim table, so it runs inline.
-    ``index_meta`` is cleared too: after the wipe the archive is genuinely
-    un-indexed, and the dense source must skip it as "no index" rather than
-    find a stale compat record over empty tables.
-    Refuses with 409 while a non-terminal ``index_zim`` job targets this
-    archive (AUDIT_0824 S2) — see the comment at the check below.
-    """
-    if state.runner is None:
-        raise HTTPException(status_code=503, detail="runner not ready")
-    await _zim_exists_or_404(state.db, zim_id)
-    # AUDIT_0824 S2: a non-terminal ``index_zim`` job targeting this archive
-    # races the wipe — a queued build starts after it and re-creates index
-    # state over tables the user just emptied; a mid-flight wipe leaves the
-    # build writing into a store whose compat record and zims row both say
-    # "un-indexed" (M15's acquire-time row revalidation only refuses terminal
-    # rows, so it cannot see this). Hold the same per-zim lock as
-    # trigger_index so a trigger cannot slip a submit between this check and
-    # the end of the wipe.
-    async with _index_trigger_lock(zim_id):
-        pending = await _find_pending_index_job(state, zim_id)
-        if pending is not None:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"an index build for this archive is {pending.status} "
-                    f"(job {pending.id}); wait for it to finish or cancel it first"
-                ),
-            )
-        await _wipe_index_state(state, zim_id)
-    return {"ok": True, "zim_id": zim_id, "depth": 0}
-
-
-async def _wipe_index_state(state: AppState, zim_id: int) -> None:
-    """The body of :func:`delete_index` once the pending-job guard has passed.
-    Callers hold ``_index_trigger_lock(zim_id)`` across guard + wipe."""
-    from vesta.index import reseed_indexed_state
-    from vesta.vectors import get_store
-
-    store = get_store()
-    if store is not None:
-        await store.delete_by_zim(zim_id)
-    async with state.db.write() as conn:
-        await conn.execute("DELETE FROM index_meta WHERE zim_id=?", (zim_id,))
-        await conn.execute(
-            "UPDATE zims SET index_depth=0, index_status='none', index_progress=0, "
-            "index_total=0, embedding_model=NULL, embedding_dim=NULL WHERE id=?",
-            (zim_id,),
-        )
-    # Recompute the capability flag: if no other archive is indexed, VECTORS
-    # turns off and dense profiles degrade to lexical (degrade-don't-fail).
-    await reseed_indexed_state(state.db)
-    # Drop any detached-CLI resume sidecar: this wipe invalidates its
-    # positional cursor, so a later plain `vesta index --depth d` must start
-    # fresh instead of "resuming" into the emptied store (AUDIT_0824 M8 —
-    # server arm of AUDIT_0822 M8). Best-effort: a missing file is fine.
-    from vesta import config
-
-    with contextlib.suppress(OSError):
-        (Path(config.get(config.DATA_DIR)) / f".index_progress_{zim_id}.json").unlink()
-
-
-@router.get("/api/zims/{zim_id}/index", response_model=IndexStatusOut)
-async def index_status(zim_id: int, state: AppState = Depends(app_state)) -> dict[str, object]:
-    async with (
-        state.db.read() as conn,
-        conn.execute(
-            "SELECT index_depth, index_status, index_progress, index_total, embedding_model "
-            "FROM zims WHERE id=?",
-            (zim_id,),
-        ) as cur,
-    ):
-        row = await cur.fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="archive not found")
-    return IndexStatusOut(
-        zim_id=zim_id,
-        depth=int(row["index_depth"] or 0),
-        status=str(row["index_status"] or "none"),
-        progress=int(row["index_progress"] or 0),
-        total=int(row["index_total"] or 0),
-        embedding_model=row["embedding_model"],
-    ).model_dump()
 
 
 __all__ = ["router"]
