@@ -161,6 +161,15 @@ class SqliteConversationStore:
             rows = await cur.fetchall()
         return [_row_to_conversation(r) for r in rows]
 
+    async def get_conversation(self, conversation_id: int) -> StoredConversation | None:
+        async with self._db.read() as conn:
+            cur = await conn.execute(
+                "SELECT id, title, created_at, updated_at FROM conversations WHERE id=?",
+                (conversation_id,),
+            )
+            row = await cur.fetchone()
+        return _row_to_conversation(row) if row is not None else None
+
     async def delete_conversation(self, conversation_id: int) -> bool:
         # messages cascade via ON DELETE CASCADE (0001_init.sql); foreign_keys
         # is ON on every connection (db/connection.py).

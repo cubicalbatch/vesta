@@ -226,6 +226,22 @@ class TestSqliteConversationStore:
         store = SqliteConversationStore(db)
         assert await store.delete_conversation(999) is False
 
+    @pytest.mark.asyncio
+    async def test_get_conversation_resolves_beyond_list_window(self, db: Database) -> None:
+        """AUDIT_0824 C4: a conversation older than the list window still resolves
+        by id — the old scan of the 500 newest rows 404'd it."""
+        store = SqliteConversationStore(db)
+        oldest = await store.create_conversation("oldest")
+        for i in range(500):
+            await store.create_conversation(f"c{i}")
+        conv = await store.get_conversation(oldest)
+        assert conv is not None
+        assert conv.id == oldest
+        assert conv.title == "oldest"
+        # It sits outside what any 500-row listing can see.
+        assert all(c.id != oldest for c in await store.list_conversations(limit=500))
+        assert await store.get_conversation(999999) is None
+
 
 class TestPruneOldTraces:
     @pytest.mark.asyncio

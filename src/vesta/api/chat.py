@@ -310,13 +310,12 @@ async def get_conversation(
     """Fetch one conversation and its messages (oldest first)."""
     state = app_state(request)
     store = SqliteConversationStore(state.db)
-    convs = await store.list_conversations(limit=500)
-    match = next((c for c in convs if c.id == conversation_id), None)
-    if match is None:
+    conv = await store.get_conversation(conversation_id)
+    if conv is None:
         raise HTTPException(status_code=404, detail=f"conversation {conversation_id} not found")
     messages = await store.list_messages(conversation_id, limit=limit)
     return ConversationDetail(
-        conversation=_to_summary(match),
+        conversation=_to_summary(conv),
         messages=[_to_message_detail(m) for m in messages],
     )
 
