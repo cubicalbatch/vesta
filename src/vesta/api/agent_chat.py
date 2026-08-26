@@ -712,9 +712,7 @@ class TurnResult:
 
     ``cards`` is sorted by ``n`` (first-seen/citation order across every
     ``search`` call in the turn) — exactly the rank order a benchmark driver
-    needs for ``retrieved_paths``. ``all_messages`` is pydantic-ai's message
-    history, needed only by multi-turn callers (the chat route); the
-    single-shot benchmark script ignores it. ``trace`` is the turn's trace
+    needs for ``retrieved_paths``. ``trace`` is the turn's trace
     dict (system/budget/stages) — the non-streaming analogue of the streaming
     path's ``TraceEvent`` payload, so benchmark drivers can merge it into
     their per-question ``trace_json``.
@@ -727,7 +725,6 @@ class TurnResult:
     input_tokens: int = 0
     output_tokens: int = 0
     elapsed_ms: int = 0
-    all_messages: list[ModelMessage] = field(default_factory=list)
     trace: dict[str, Any] = field(default_factory=dict)
 
 
@@ -772,8 +769,8 @@ def _age_rounds(messages: list[ModelMessage], age: int) -> list[ModelMessage]:
     full. Strings at or under ``age`` — steering/dedup notes, short results —
     pass through untouched; the Round-0 pre-seed lives in the user prompt, not
     a tool result, so it is never aged. The input list and its part objects
-    are never mutated: pydantic-ai's canonical history (``all_messages``,
-    traces) stays full-size — only what crosses the wire shrinks.
+    are never mutated: pydantic-ai's canonical history and traces stay
+    full-size — only what crosses the wire shrinks.
     """
     if age <= 0:
         return messages
@@ -827,8 +824,7 @@ class _AgedContextModel(Model[Any]):
     tail's input tokens. This wrapper delegates everything to the inner model
     but passes :func:`_age_rounds`-transformed copies to ``request`` /
     ``request_stream`` / ``count_tokens`` — pydantic-ai's canonical history is
-    never mutated, so ``all_messages``/traces stay faithful while the wire
-    payload shrinks.
+    never mutated, so it stays faithful while the wire payload shrinks.
 
     ``stats`` (observability) accumulates what the trimming did
     per request; measurement only, never a behaviour change.
@@ -2221,7 +2217,6 @@ class _TurnRecoveryState:
     crashed: bool
     answer: str
     usage: RunUsage
-    final_messages: list[ModelMessage]
     overflow_fallbacks: int
     reask: dict[str, Any] = field(default_factory=lambda: {"fired": False, "trigger": None})
 
@@ -2281,7 +2276,6 @@ async def _iter_recovery_events(  # noqa: PLR0912, PLR0915
             st.overflow_fallbacks += 1
         else:
             st.answer = fb.output
-            st.final_messages = fb.all_messages()
             st.usage = st.usage + fb.usage
             # Outcome-first ordering (AUDIT_0824 C5): the reset is owed only
             # when a replacement actually follows — a fallback that itself
@@ -2406,7 +2400,6 @@ async def _iter_recovery_events(  # noqa: PLR0912, PLR0915
                         usage_limits=UsageLimits(request_limit=_REQUEST_LIMIT),
                     )
                     st.answer = retry.output
-                    st.final_messages = retry.all_messages()
                     st.usage = st.usage + retry.usage
                     # Outcome-first ordering (AUDIT_0824 C5): the reset fires
                     # only when the replacement text follows — a skipped plan
@@ -2488,7 +2481,6 @@ async def run_one_turn(
 
             run_usage = RunUsage()
             answer: str = ""
-            final_messages: list[ModelMessage] = message_history or []
             crashed = False
             # Count every context-overflow recovery (main run →
             # no-tool fallback; fallback re-ask itself overflowing; abstention
@@ -2503,7 +2495,6 @@ async def run_one_turn(
                     usage=run_usage,
                 )
                 answer = result.output
-                final_messages = result.all_messages()
             except UsageLimitExceeded:
                 # The model looped to the request cap without converging (a greedy 4b can
                 # repeat already-capped tool calls). Rather than crash with an empty answer,
@@ -2524,7 +2515,6 @@ async def run_one_turn(
                 crashed=crashed,
                 answer=answer,
                 usage=run_usage,
-                final_messages=final_messages,
                 overflow_fallbacks=overflow_fallbacks,
             )
             async for _event in _iter_recovery_events(
@@ -2553,7 +2543,6 @@ async def run_one_turn(
                 input_tokens=st.usage.input_tokens or 0,
                 output_tokens=st.usage.output_tokens or 0,
                 elapsed_ms=elapsed_ms,
-                all_messages=st.final_messages,
                 trace={
                     # Non-streaming analogue of the streaming path's TraceEvent
                     # payload, so benchmark drivers can merge budget/steps into
@@ -2735,7 +2724,6 @@ async def iter_agent_turn_events(  # noqa: PLR0912, PLR0915
                 crashed=crashed,
                 answer=answer,
                 usage=usage,
-                final_messages=[],
                 overflow_fallbacks=overflow_fallbacks,
             )
             async for event in _iter_recovery_events(

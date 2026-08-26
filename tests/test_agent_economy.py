@@ -744,7 +744,7 @@ async def test_context_aging_truncates_old_rounds_only(
 ) -> None:
     """A 4-read conversation: requests after two more rounds see the older
     results truncated to age_tool_chars (+ stub note); the last two rounds
-    always stay full; the canonical history is never mutated."""
+    always stay full."""
     runtime = _aged_runtime()
     _patch_runtime(monkeypatch, runtime)
     seen: list[list[ModelMessage]] = []
@@ -772,10 +772,6 @@ async def test_context_aging_truncates_old_rounds_only(
     assert "TAIL-0" not in final_req and "TAIL-1" not in final_req
     assert "TAIL-2" in final_req and "TAIL-3" not in final_req
     assert "truncated for context economy" in final_req
-    # Canonical history: every executed read's full text survives.
-    canonical = str(result.all_messages)
-    for i in range(3):
-        assert f"TAIL-{i}" in canonical
 
 
 # ── Iteration 5: compact system prompt + search snippet shaping ────────────
