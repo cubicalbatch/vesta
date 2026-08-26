@@ -74,6 +74,13 @@ describe('attributionCellMatches (mirrors api/bench.py _ATTRIBUTION_FILTERS)', (
 			for (const cell of ATTRIBUTION_CELLS) expect(attributionCellMatches(r, cell)).toBe(false);
 		}
 	});
+
+	it('out_of_corpus rows match no cell (no gold source axis)', () => {
+		const r: BenchResultRow = { ...row('h', 'correct', null), capability: 'out_of_corpus' };
+		for (const cell of ATTRIBUTION_CELLS) expect(attributionCellMatches(r, cell)).toBe(false);
+		const rFailed: BenchResultRow = { ...row('i', 'incorrect', null), capability: 'out_of_corpus' };
+		for (const cell of ATTRIBUTION_CELLS) expect(attributionCellMatches(rFailed, cell)).toBe(false);
+	});
 });
 
 describe('computeCompareBuckets (mirrors eval/bench_runner.py compare_runs)', () => {

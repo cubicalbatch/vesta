@@ -2135,10 +2135,10 @@ async def get_bench_run(request: Request, run_id: int) -> BenchRunDetail:
 
 #: attribution-cell → WHERE clause for the per-question results filter.
 _ATTRIBUTION_FILTERS: dict[str, str] = {
-    "correct_source_found": "(verdict='correct' AND source_hit_rank IS NOT NULL)",
-    "correct_source_missed": "(verdict='correct' AND source_hit_rank IS NULL)",
-    "failed_source_found": "(verdict IN ('incorrect','partial') AND source_hit_rank IS NOT NULL)",
-    "failed_source_missed": "(verdict IN ('incorrect','partial') AND source_hit_rank IS NULL)",
+    "correct_source_found": "(verdict='correct' AND source_hit_rank IS NOT NULL AND capability != 'out_of_corpus')",
+    "correct_source_missed": "(verdict='correct' AND source_hit_rank IS NULL AND capability != 'out_of_corpus')",
+    "failed_source_found": "(verdict IN ('incorrect','partial') AND source_hit_rank IS NOT NULL AND capability != 'out_of_corpus')",
+    "failed_source_missed": "(verdict IN ('incorrect','partial') AND source_hit_rank IS NULL AND capability != 'out_of_corpus')",
 }
 
 #: columns selected for per-question results — trace_json is deliberately absent

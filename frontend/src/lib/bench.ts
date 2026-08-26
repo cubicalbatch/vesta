@@ -26,6 +26,7 @@ function isFailed(verdict: string): boolean {
 
 /** Does this per-question row belong to the given attribution cell? */
 export function attributionCellMatches(row: BenchResultRow, cell: AttributionCell): boolean {
+	if (row.capability === 'out_of_corpus') return false;
 	const correct = row.verdict === 'correct';
 	const found = row.source_hit_rank != null;
 	switch (cell) {

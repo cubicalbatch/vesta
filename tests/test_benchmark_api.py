@@ -116,11 +116,17 @@ def _run_record(
     )
 
 
-def _result_row(run_id: int, qid: str, verdict: str, shr: int | None = 1) -> BenchQuestionResult:
+def _result_row(
+    run_id: int,
+    qid: str,
+    verdict: str,
+    shr: int | None = 1,
+    capability: str = "lookup",
+) -> BenchQuestionResult:
     return BenchQuestionResult(
         run_id=run_id,
         question_id=qid,
-        capability="lookup",
+        capability=capability,
         difficulty="easy",
         question_text=f"Question {qid}?",
         expected_answer="42",
@@ -551,6 +557,83 @@ async def test_run_results_paginated_and_filtered(
     # Unknown attribution cell → 400.
     bad = await client.get(f"/api/bench/runs/{run_id}/results", params={"attribution": "nope"})
     assert bad.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_attribution_filter_excludes_out_of_corpus(
+    app_with_db: tuple[httpx.AsyncClient, Any],
+) -> None:
+    """Out-of-corpus rows must be excluded from all 4 attribution 2x2 cells."""
+    client, app = app_with_db
+    from vesta.api.bench import SqliteBenchStore
+
+    store = SqliteBenchStore(app.state.vesta.db)
+    run_id = await store.insert_run(_run_record(system="sources_only"))
+
+    # 4 in-corpus rows covering all 4 matrix cells
+    await store.insert_question_result(
+        run_id, _result_row(run_id, "q_cf", verdict="correct", shr=1, capability="lookup")
+    )
+    await store.insert_question_result(
+        run_id, _result_row(run_id, "q_cm", verdict="correct", shr=None, capability="lookup")
+    )
+    await store.insert_question_result(
+        run_id, _result_row(run_id, "q_ff", verdict="incorrect", shr=2, capability="lookup")
+    )
+    await store.insert_question_result(
+        run_id, _result_row(run_id, "q_fm", verdict="incorrect", shr=None, capability="lookup")
+    )
+
+    # 3 out-of-corpus rows (shr is NULL or 1, verdicts varied) — none should match attribution cells
+    await store.insert_question_result(
+        run_id,
+        _result_row(run_id, "q_ooc_c", verdict="correct", shr=None, capability="out_of_corpus"),
+    )
+    await store.insert_question_result(
+        run_id,
+        _result_row(run_id, "q_ooc_i", verdict="incorrect", shr=None, capability="out_of_corpus"),
+    )
+    await store.insert_question_result(
+        run_id,
+        _result_row(run_id, "q_ooc_p", verdict="partial", shr=None, capability="out_of_corpus"),
+    )
+
+    # Total unfiltered results should be 7
+    all_res = (await client.get(f"/api/bench/runs/{run_id}/results")).json()
+    assert all_res["total"] == 7
+
+    # Each attribution cell drilldown should return exactly 1 row, excluding out_of_corpus
+    cf = (
+        await client.get(
+            f"/api/bench/runs/{run_id}/results", params={"attribution": "correct_source_found"}
+        )
+    ).json()
+    assert cf["total"] == 1
+    assert [r["question_id"] for r in cf["items"]] == ["q_cf"]
+
+    cm = (
+        await client.get(
+            f"/api/bench/runs/{run_id}/results", params={"attribution": "correct_source_missed"}
+        )
+    ).json()
+    assert cm["total"] == 1
+    assert [r["question_id"] for r in cm["items"]] == ["q_cm"]
+
+    ff = (
+        await client.get(
+            f"/api/bench/runs/{run_id}/results", params={"attribution": "failed_source_found"}
+        )
+    ).json()
+    assert ff["total"] == 1
+    assert [r["question_id"] for r in ff["items"]] == ["q_ff"]
+
+    fm = (
+        await client.get(
+            f"/api/bench/runs/{run_id}/results", params={"attribution": "failed_source_missed"}
+        )
+    ).json()
+    assert fm["total"] == 1
+    assert [r["question_id"] for r in fm["items"]] == ["q_fm"]
 
 
 # ── GET /compare — four buckets + shared denominator ────────────────────────
