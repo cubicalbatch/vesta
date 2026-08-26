@@ -1720,7 +1720,7 @@ async def _build_turn(  # noqa: PLR0912, PLR0915
         hardware = _runtime_hardware()
     profile = _resolve_profile(profile_override)
     ret_scope = _parse_scope(scope, state.registry)
-    tool_runtime = _build_tool_runtime(state, sn, ret_scope, profile, question, archive_labels={})
+    tool_runtime = _build_tool_runtime(state, sn, ret_scope, profile, question)
     budget = resolve_budget(sn, hardware, _runtime_window_tokens(sn))
 
     # The model is built at the _make_model seam (so FunctionModel test stubs
@@ -2119,7 +2119,7 @@ def _compact_reask_message(ctx: _TurnContext) -> str | None:
     ``must_include`` spans of one :func:`~vesta.answer.focus.focused_view`
     window over the combined evidence — the reads are the deliberate
     evidence, the pre-seed fills the remaining room by question relevance —
-    and the whole message is ``estimate_tokens``-checked against
+    and the whole message is ``estimate_tokens_for_chars``-checked against
     ``window - output_reserve`` (the same composing char arithmetic as the
     D4 pre-flight fit). ``None`` (degrade-don't-fail, the
     ``_plan_abstain_retry`` precedent) when there is no evidence or nothing
@@ -2451,12 +2451,6 @@ async def run_one_turn(
     available for missing facts and full reads. A harness-side abstention gate
     appends a no-refusal directive when Round-0 retrieval hit, and retries once if
     the model abstains despite evidence.
-
-    A conservative detector may instead run exactly two no-tool,
-    request-limit-one calls
-    when it finds independent legs and the focused
-    prompts meet the combined token/window bound; their answers are joined
-    mechanically. All other turns retain the normal path above.
 
     ``scope`` follows the same convention as the CLI/bench ``--scope`` flag and the
     other benchmark systems (``RetrievalOnlySystem`` et al.) — a raw scope string

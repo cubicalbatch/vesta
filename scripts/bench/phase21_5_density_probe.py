@@ -2,9 +2,9 @@
 """Pre-flight probe — is the 3.0 chars/token floor safe on lfm2.5?
 
 The window plans (D4 pre-seed fit, D5 ledger) enforce with
-``answer.tokens.estimate_tokens`` calibrated on **qwen3.5-4b** (min 3.038
-chars/token over 90 one-shot requests → floor 3.0). A second answer model,
-``lfm2.5-1.2b-instruct@q4_k_m``, whose tokenizer is
+``answer.tokens.estimate_tokens_for_chars`` calibrated on **qwen3.5-4b**
+(min 3.038 chars/token over 90 one-shot requests → floor 3.0). A second
+answer model, ``lfm2.5-1.2b-instruct@q4_k_m``, whose tokenizer is
 not that calibration's subject. If lfm's real density on bench-shaped text
 is **below** 3.0 chars/token, every windowed run on lfm is mismeasured:
 the ledger would admit requests the real window rejects (hard 400s) — a

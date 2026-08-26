@@ -45,7 +45,7 @@ from pydantic_ai.models.function import FunctionModel
 
 from vesta.answer.contracts import AnswerResetEvent, CitationsEvent, TokenEvent, TraceEvent
 from vesta.answer.economy import CONTEXT_PLANS, EconomyBudget, resolve_budget
-from vesta.answer.tokens import estimate_tokens, estimate_tokens_for_chars
+from vesta.answer.tokens import estimate_tokens_for_chars
 from vesta.answer.tools import SearchToolResult
 from vesta.api import agent_chat
 from vesta.config.settings import SettingsSnapshot, all_settings
@@ -368,12 +368,14 @@ def test_8k_fullprompt_wide_ledger_arithmetic() -> None:
     assert seed_est == 4_800  # 6 x 2400 chars at the 3.0 chars/token floor
     # The real prompt-side base: full system prompt + the pre-seed-hit
     # directive + the user-message framing + a representative question.
-    prompt_est = estimate_tokens(
-        agent_chat.SYSTEM_PROMPT
-        + agent_chat._STRONG_EVIDENCE_DIRECTIVE
-        + agent_chat._USER_MESSAGE_HEAD
-        + agent_chat._USER_MESSAGE_TAIL
-        + "x" * 150
+    prompt_est = estimate_tokens_for_chars(
+        len(
+            agent_chat.SYSTEM_PROMPT
+            + agent_chat._STRONG_EVIDENCE_DIRECTIVE
+            + agent_chat._USER_MESSAGE_HEAD
+            + agent_chat._USER_MESSAGE_TAIL
+            + "x" * 150
+        )
     )
     ledger = plan.window_tokens - plan.output_reserve - seed_est - prompt_est
     # Thin but positive: every full read (read_max_chars/3 = 1500 est) blows

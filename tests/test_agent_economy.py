@@ -325,7 +325,6 @@ async def test_stage1_focused_view_keeps_snippet_beyond_32k_window(
         None,
         None,
         "common filler word record",
-        archive_labels={},
     )
     assert rt is not None
 

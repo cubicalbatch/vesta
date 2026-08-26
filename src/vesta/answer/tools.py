@@ -16,22 +16,19 @@ injected callable, the same DI pattern used for ``Deps.vectors``
 ``api/answer.py``'s ``_build_tool_runtime``). The tool runtime never touches
 ``zim/`` or builds a ``Deps`` itself.
 
-:func:`format_search_result` is the answer-layer rendering of a
-:class:`RetrievalResult` as the string the ``search`` tool returns — kept here
-(rather than in ``retrieval/``) because "how much to show the model, in what
-order" is answer policy, not retrieval policy.
+The rendering of a search result for the model is answer policy, not
+retrieval policy — the agent's search driver (``api/agent_chat.py``)
+renders passages itself, card-numbered and budget-capped.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from vesta.retrieval.contracts import (
-        ConfidenceSignals,
-        RetrievalResult,
         ScoredPassage,
         SourceCard,
     )
@@ -49,13 +46,15 @@ _MAX_FULL_ARTICLE_CHARS = 32_000
 class SearchToolResult:
     """The ``search`` tool's structured result.
 
-    ``text`` is what the agent appends to the model's context (unchanged wire
-    shape). ``passages``/``cards``/``confidence`` carry the underlying retrieval
-    result so the agent can merge search-round evidence into source cards and
-    citations instead of discarding everything but the formatted string.
-    ``confidence`` lets a recovery round re-check confidence against what
-    the query actually found. ``trace`` carries the retrieval pipeline trace
-    (per-stage ``duration_ms``) so the answer trace can show where time went.
+    ``text`` is what reaches the model when the search found nothing: the
+    no-passages sentinel plus any appended candidate blocks (the only shape
+    the agent reads back verbatim). When passages exist the agent's search
+    driver re-renders them itself — card-numbered, budget-capped — and
+    re-attaches ``candidates_text``. ``passages``/``cards`` carry the
+    underlying retrieval result so the agent can merge search-round evidence
+    into source cards and citations instead of discarding everything but the
+    formatted string. ``trace`` carries the retrieval pipeline trace (per-stage
+    ``duration_ms``) so the answer trace can show where time went.
     ``candidates_text`` holds any extra candidate-article blocks (term-surfaced
     titles, reformulated-article visibility) that were appended to ``text`` —
     a harness that re-renders ``passages`` instead of using ``text`` verbatim
@@ -71,7 +70,6 @@ class SearchToolResult:
     text: str
     passages: tuple[ScoredPassage, ...] = ()
     cards: tuple[SourceCard, ...] = ()
-    confidence: ConfidenceSignals | None = None
     trace: dict[str, object] | None = None
     candidates_text: str = ""
 
@@ -103,9 +101,9 @@ class ToolRuntime:
     """Holds the injected callables the agent's tools dispatch to.
 
     The composition root (``api/answer.py``) constructs one of these from the
-    live archive registry + retrieval deps and passes it via
-    :attr:`AnswerDeps.tools`. Each callable returns a string ready to append to
-    the model's context — the runtime does no formatting beyond a light envelope.
+    live archive registry + retrieval deps and hands it to the agent chat
+    path. Each callable returns a string ready to append to the model's
+    context — the runtime does no formatting beyond a light envelope.
 
     ``search`` takes ``(query, scope_str)`` and returns formatted passages. The
     scope string is the raw comma-separated zim_ids the model passed (or empty
@@ -127,46 +125,9 @@ class ToolRuntime:
     search_exact: SearchFn | None = None
 
 
-# ── Formatting helpers for the composition root ─────────────────────────────
-
-
-def format_search_result(
-    result: RetrievalResult,
-    *,
-    max_passages: int = 8,
-    archive_labels: Mapping[int, str] | None = None,
-) -> str:
-    """Format a ``RetrievalResult`` as the string the ``search`` tool returns.
-
-    Lives here (not in ``retrieval/``) because the rendering is answer-layer
-    policy: how much to show the model, in what order. The composition root calls
-    this from inside the injected ``search`` callable so ``retrieval/`` stays
-    unaware of the tool protocol.
-
-    ``archive_labels`` (``AnswerDeps.archive_labels``) replaces the opaque
-    ``archive-{zim_id}`` label with a human-readable name when one is known, so
-    a card looks the same wherever the model sees it. ``None``/missing falls
-    back to ``archive-{zim_id}``.
-    """
-    if not result.passages:
-        return "Search returned no passages."
-    labels = archive_labels or {}
-    lines = [f"Search returned {len(result.passages)} passages (showing top {max_passages}):"]
-    for i, sp in enumerate(result.passages[:max_passages]):
-        p = sp.passage
-        parts = p.breadcrumb.split(">")
-        title = parts[0].strip() if parts else p.path
-        archive = labels.get(p.zim_id) or f"archive-{p.zim_id}"
-        lines.append(f'[{i + 1}] {archive} · "{title}"')
-        lines.append(p.text)
-        lines.append("")
-    return "\n".join(lines)
-
-
 __all__ = [
     "ReadArticleFn",
     "SearchFn",
     "SearchToolResult",
     "ToolRuntime",
-    "format_search_result",
 ]

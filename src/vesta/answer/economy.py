@@ -89,7 +89,7 @@ class EconomyBudget:
     #: window covers prompt + completion). 0 when ``window_tokens`` is 0.
     output_reserve: int = 0
     #: Cumulative tool-result insert allowance in ESTIMATED tokens
-    #: (:func:`vesta.answer.tokens.estimate_tokens`). 0 = derive per turn
+    #: (:func:`vesta.answer.tokens.estimate_tokens_for_chars`). 0 = derive per turn
     #: from the window arithmetic (filled in by ``api/agent_chat`` once the
     #: pre-seed exists) or uncapped at ``full``. A user-set value binds.
     tool_budget_tokens: int = 0

@@ -39,7 +39,6 @@ from vesta.answer import ANSWER_STRATEGY, resolve_strategy_name, select_strategy
 from vesta.answer.abstention import ABSTENTION_NO_MATCH
 from vesta.answer.contracts import (
     AnswerContext,
-    AnswerDeps,
     AnswerResetEvent,
     CitationsEvent,
     DoneEvent,
@@ -113,8 +112,8 @@ async def iter_answer_events(
     is contract-tested separately).
 
     ``history`` (09) is the prior conversation as ``(role, content)`` pairs,
-    threaded into both the retrieval pipeline (for conversational rewrite) and
-    the answer context. Defaults empty (single-turn ``/api/answer``).
+    threaded into the retrieval pipeline for conversational rewrite. Defaults
+    empty (single-turn ``/api/answer``).
     """
     # ── Step 1: retrieval ────────────────────────────────────────────────
     capabilities = compute_capabilities()
@@ -195,43 +194,12 @@ async def iter_answer_events(
         # Fall back to sources_only.
         strategy_cls = select_strategy("sources_only")
 
-    archive_labels_map = await _archive_labels(state)
+    ctx = AnswerContext(retrieval=result)
 
-    # 09: build the tool runtime for the agentic loop. The callables adapt the
-    # archive registry + retrieval pipeline to the tool protocol's primitive
-    # signatures — ``answer/`` never imports ``zim/``.
-    tools = _build_tool_runtime(
-        state, sn, ret_scope, retrieval_profile, query, archive_labels=archive_labels_map
-    )
-
-    answer_deps = AnswerDeps(
-        gateway=state.gateway,
-        settings=sn,
-        capabilities=capabilities,
-        tools=tools,
-        archive_labels=archive_labels_map,
-    )
-
-    is_search_term = not _looks_like_question(query)
-    # Convert (role, content) history pairs → ChatMessage for the answer context.
-    from vesta.inference.gateway import ChatMessage
-
-    history_messages = tuple(ChatMessage(role=r, content=c) for r, c in history) if history else ()
-    ctx = AnswerContext(
-        query=query,
-        retrieval=result,
-        is_search_term=is_search_term,
-        history=history_messages,
-    )
-
-    # Construct the strategy. Pass deps if the constructor accepts it.
-    try:
-        instance = strategy_cls(deps=answer_deps)
-    except TypeError:
-        instance = strategy_cls()
+    instance = strategy_cls()
 
     # Yield events from the strategy.
-    async for event in instance.answer(ctx, answer_deps, tr):
+    async for event in instance.answer(ctx, tr):
         yield event
 
 
@@ -303,40 +271,6 @@ def _card_to_dict(c: Any) -> dict[str, Any]:
     }
 
 
-def _looks_like_question(text: str) -> bool:
-    """True when text looks like a question rather than a keyword query."""
-    if text.endswith("?"):
-        return True
-    first_word = text.split(maxsplit=1)[0].lower() if text else ""
-    return first_word in {"what", "who", "how", "when", "where", "why", "which"}
-
-
-async def _archive_labels(state: AppState) -> dict[int, str]:
-    """``zim_id`` -> human-readable archive name, for prompt-visible source
-    labels (replacing the opaque ``archive-{zim_id}`` form).
-
-    ``answer/`` cannot import ``zim/`` (dependency cap), so the API layer reads
-    the ``zims`` table directly and injects the mapping via ``AnswerDeps``.
-    Prefers the registry's ``title``; falls back to ``corpus_label`` when the
-    title is empty. Any failure degrades to an empty dict (every label falls
-    back to ``archive-{zim_id}``), never a 500.
-    """
-    try:
-        async with (
-            state.db.read() as conn,
-            conn.execute("SELECT id, title, corpus_label FROM zims WHERE enabled = 1") as cur,
-        ):
-            rows = await cur.fetchall()
-    except Exception:
-        return {}
-    labels: dict[int, str] = {}
-    for zid, title, corpus_label in rows:
-        label = (title or "").strip() or (corpus_label or "").strip()
-        if label:
-            labels[int(zid)] = label
-    return labels
-
-
 def _concurrency_bound(sn: Any) -> int:
     """The retrieval fan-out semaphore size from settings (mirrors ``api/search``).
 
@@ -354,7 +288,7 @@ def _concurrency_bound(sn: Any) -> int:
 def _resolve_stopwords(sn: Any) -> frozenset[str]:
     """The query pipeline's own stopword list, for the ``read_article`` tool's
     focused-view budgeting (iter 17). Resolved here in the composition root
-    because ``AnswerDeps.settings`` isn't in scope from inside the tool
+    because the settings snapshot isn't in scope from inside the tool
     closure."""
     from vesta.config import QUERY_STOPWORDS_LIST
 
@@ -783,8 +717,6 @@ def _build_tool_runtime(
     scope: RetScope,
     profile: Any,
     question: str,
-    *,
-    archive_labels: dict[int, str],
 ) -> Any:
     """Construct the :class:`~vesta.answer.tools.ToolRuntime` for the pydantic-ai agent.
 
@@ -808,7 +740,7 @@ def _build_tool_runtime(
     """
     if state.registry is None:
         return None
-    from vesta.answer.tools import SearchToolResult, ToolRuntime, format_search_result
+    from vesta.answer.tools import SearchToolResult, ToolRuntime
 
     registry = state.registry
     capabilities = compute_capabilities()
@@ -879,7 +811,13 @@ def _build_tool_runtime(
                     sn=sn,
                 )
 
-            text = format_search_result(result, archive_labels=archive_labels)
+            # The agent's search driver (``agent_chat._do_search``) re-renders
+            # passages itself — card-numbered, budget-capped — so the full
+            # rendering never reaches the model. ``SearchToolResult.text`` is
+            # read back only when the pool is empty: this no-passages
+            # sentinel, plus any candidate blocks appended below (the N10
+            # empty-pool path).
+            text = "" if result.passages else "Search returned no passages."
             candidates_text = ""
             if appended_cards:
                 # Model visibility for the appended articles: the pre-seed
@@ -937,7 +875,6 @@ def _build_tool_runtime(
                 text=text,
                 passages=result.passages,
                 cards=result.cards,
-                confidence=result.confidence,
                 trace=result.trace.to_dict(),
                 candidates_text=candidates_text,
             )

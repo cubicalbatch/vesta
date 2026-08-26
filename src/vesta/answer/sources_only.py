@@ -18,7 +18,6 @@ from pydantic import BaseModel
 
 from vesta.answer.contracts import (
     AnswerContext,
-    AnswerDeps,
     AnswerEvent,
     DoneEvent,
     SourcesEvent,
@@ -40,14 +39,12 @@ class SourcesOnlyStrategy:
     class Params(BaseModel):
         """No tunable params — this strategy just returns what retrieval found."""
 
-    def __init__(self, params: Params | None = None, deps: AnswerDeps | None = None) -> None:
+    def __init__(self, params: Params | None = None) -> None:
         self._params = params or self.Params()
-        self._deps = deps
 
     async def answer(
         self,
         ctx: AnswerContext,
-        deps: AnswerDeps | None = None,
         tr: Trace | None = None,
     ) -> AsyncIterator[AnswerEvent]:
         """Emit sources, then trace, then done. No LLM call."""

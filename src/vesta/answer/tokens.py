@@ -20,8 +20,9 @@ tool-call envelopes), which biases every estimate further upward — the safe
 direction.
 
 The seam is swappable by design: if a future runtime exposes llama-server's
-``/tokenize``, an exact counter can replace :func:`estimate_tokens` behind
-the same signature without touching any caller.
+``/tokenize``, an exact counter can replace
+:func:`estimate_tokens_for_chars` behind the same signature without touching
+any caller.
 """
 
 from __future__ import annotations
@@ -37,28 +38,14 @@ import math
 CHARS_PER_TOKEN = 3.0
 
 
-def estimate_tokens(text: str) -> int:
-    """Estimate the token count of ``text`` (ceil; never below the calibration).
-
-    Pure, allocation-free, and conservative: ``ceil(len(text) /
-    CHARS_PER_TOKEN)`` with the ratio rounded down, so the estimate never
-    under-states the calibration set's true counts and carries the chat-
-    template overhead as free safety margin.
-    """
-    if not text:
-        return 0
-    return math.ceil(len(text) / CHARS_PER_TOKEN)
-
-
 def estimate_tokens_for_chars(chars: int) -> int:
-    """Token estimate for a known character count — the same conservative
-    ceil as :func:`estimate_tokens`, without materializing text. Component
-    char ceilings compose exactly under it: a total bounded in chars bounds
-    the single ceil of the whole (splitting only over-counts, never under).
+    """Token estimate for a known character count — the conservative
+    ``ceil(chars / CHARS_PER_TOKEN)`` with the ratio rounded down, so the
+    estimate never under-states the calibration set's true counts and carries
+    the chat-template overhead as free safety margin. Component char ceilings
+    compose exactly under it: a total bounded in chars bounds the single ceil
+    of the whole (splitting only over-counts, never under).
     """
     if chars <= 0:
         return 0
     return math.ceil(chars / CHARS_PER_TOKEN)
-
-
-__all__ = ["CHARS_PER_TOKEN", "estimate_tokens", "estimate_tokens_for_chars"]

@@ -15,7 +15,6 @@ from httpx import ASGITransport, AsyncClient
 
 from vesta.answer.contracts import (
     AnswerContext,
-    AnswerDeps,
     AnswerResetEvent,
     CitationsEvent,
     CitationSpan,
@@ -196,11 +195,11 @@ class TestSourcesOnlyStrategy:
         from vesta.answer.sources_only import SourcesOnlyStrategy
 
         retrieval = _make_test_retrieval()
-        ctx = AnswerContext(query="test", retrieval=retrieval, is_search_term=False)
+        ctx = AnswerContext(retrieval=retrieval)
         strategy = SourcesOnlyStrategy()
 
         events = []
-        async for ev in strategy.answer(ctx, AnswerDeps(), Trace()):
+        async for ev in strategy.answer(ctx, Trace()):
             events.append(ev)
 
         assert isinstance(events[0], SourcesEvent)

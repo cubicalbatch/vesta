@@ -1,4 +1,4 @@
-"""``answer.tokens.estimate_tokens`` safety properties.
+"""``answer.tokens.estimate_tokens_for_chars`` safety properties.
 
 The estimator backs window-budget arithmetic: an under-estimate is
 a hard context-window 400 and a discarded transcript, so these tests pin the
@@ -15,7 +15,7 @@ import math
 
 import pytest
 
-from vesta.answer.tokens import CHARS_PER_TOKEN, estimate_tokens
+from vesta.answer.tokens import CHARS_PER_TOKEN, estimate_tokens_for_chars
 
 #: (request chars, endpoint-reported input tokens) from run 46 one-shot turns
 #: (``phase19-4-off``, qwen3.5-4b@q4_k_s on the pinned endpoint). Chars are
@@ -36,12 +36,12 @@ _CALIBRATION_PAIRS: list[tuple[int, int]] = [
     "n",
     [0, 1, 2, 3, 7, 100, 3_333, 90_000],
 )
-def test_estimate_tokens_matches_ceil_ratio(n: int) -> None:
-    """The estimate is exactly ceil(chars / ratio) and empty text is 0."""
+def test_estimate_tokens_for_chars_matches_ceil_ratio(n: int) -> None:
+    """The estimate is exactly ceil(chars / ratio) and non-positive chars are 0."""
     expected = 0 if n == 0 else math.ceil(n / CHARS_PER_TOKEN)
-    assert estimate_tokens("x" * n) == expected
+    assert estimate_tokens_for_chars(n) == expected
     if n > 0:
-        assert estimate_tokens("x" * n) >= 1
+        assert estimate_tokens_for_chars(n) >= 1
 
 
 def test_never_under_estimates_calibration_envelope() -> None:
@@ -50,12 +50,12 @@ def test_never_under_estimates_calibration_envelope() -> None:
     assert observed_min >= CHARS_PER_TOKEN
 
     for chars, tokens in _CALIBRATION_PAIRS:
-        assert estimate_tokens("x" * chars) >= tokens, (chars, tokens)
+        assert estimate_tokens_for_chars(chars) >= tokens, (chars, tokens)
 
 
 def test_monotone_non_decreasing() -> None:
     prev = 0
     for n in range(0, 2_000, 97):
-        est = estimate_tokens("x" * n)
+        est = estimate_tokens_for_chars(n)
         assert est >= prev
         prev = est

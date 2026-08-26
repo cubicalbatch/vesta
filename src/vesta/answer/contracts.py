@@ -11,18 +11,14 @@ module cap; do NOT exceed). It must not import ``api/`` or ``index/``
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from vesta.config.capabilities import Capability
 from vesta.retrieval.contracts import RetrievalResult, SourceCard
 
 if TYPE_CHECKING:
-    from vesta.answer.tools import ToolRuntime
-    from vesta.config.capabilities import CapabilitySet
-    from vesta.config.settings import SettingsSnapshot
-    from vesta.inference.gateway import ChatMessage, Gateway
     from vesta.retrieval.trace import Trace
 
 
@@ -184,49 +180,11 @@ AnswerEvent = (
 class AnswerContext:
     """Everything an answer strategy needs for one question.
 
-    ``retrieval`` is the retrieval output (passages, cards, confidence, trace).
-    ``query`` is the normalised user question. ``is_search_term`` distinguishes
-    a bare-term lookup from a question (different prompt preamble).
-
-    ``history`` carries the prior conversation as ``(role, content)`` pairs for
-    multi-turn chat. Defaulted empty so single-turn callers are unaffected —
-    ``sources_only`` ignores it; the chat path consumes it.
+    ``retrieval`` is the retrieval output (passages, cards, confidence, trace)
+    — the sole input the registered strategy (``sources_only``) consumes.
     """
 
-    query: str
     retrieval: RetrievalResult
-    is_search_term: bool
-    history: tuple[ChatMessage, ...] = ()
-
-
-@dataclass
-class AnswerDeps:
-    """Dependency-injection container for answer strategies.
-
-    Components receive deps through their constructor — never by importing
-    singletons. The composition root (``main.py``) constructs
-    one of these and passes it to the strategy constructor.
-
-    ``tools`` is the :class:`~vesta.answer.tools.ToolRuntime` the pydantic-ai
-    agent's ``search``/``read_article`` tools dispatch through. ``None`` outside
-    a composition root that wired the agent (e.g. a bare unit test or the
-    ``sources_only`` path). Typed under ``TYPE_CHECKING`` so the field stays
-    narrow — the concrete callables are built by the API layer, which CAN import
-    ``zim/`` and ``retrieval/``.
-
-    ``archive_labels`` maps ``zim_id`` to a human-readable archive name (its
-    registry title, falling back to its corpus label). ``answer/`` must not
-    import ``zim/`` (dependency cap), so the API layer reads the ``zims`` table
-    directly and injects the mapping here. An empty dict
-    (the default) means every prompt-visible archive label falls back to the
-    opaque ``archive-{zim_id}`` form.
-    """
-
-    gateway: Gateway | None = None
-    settings: SettingsSnapshot | None = None
-    capabilities: CapabilitySet = frozenset()
-    tools: ToolRuntime | None = None
-    archive_labels: Mapping[int, str] = field(default_factory=dict)
 
 
 # ── Strategy Protocol ───────────────────────────────────────────────────────
@@ -245,14 +203,11 @@ class AnswerStrategy(Protocol):
 
     requires: ClassVar[frozenset[Capability]]
 
-    def answer(
-        self, ctx: AnswerContext, deps: AnswerDeps, tr: Trace
-    ) -> AsyncIterator[AnswerEvent]: ...
+    def answer(self, ctx: AnswerContext, tr: Trace) -> AsyncIterator[AnswerEvent]: ...
 
 
 __all__ = [
     "AnswerContext",
-    "AnswerDeps",
     "AnswerEvent",
     "AnswerResetEvent",
     "AnswerStrategy",
