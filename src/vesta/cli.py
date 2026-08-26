@@ -700,7 +700,9 @@ async def _cmd_bench_run(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR
         return 0
 
     overrides = _build_apply_overrides(args)
-    settings_set = _parse_set_pairs(args)  # the --set pairs, for config_json
+    # The --set pairs land verbatim in the run's config_json; a secret pair
+    # (e.g. inference.llm.api_key=…) must not persist its value.
+    settings_set = {k: v for k, v in _parse_set_pairs(args).items() if not config.is_secret(k)}
     async with _open_runtime(
         args.data_dir,
         with_gateway=True,
@@ -856,7 +858,7 @@ async def _cmd_bench_run(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR
                 run_group=run_group,
                 label=label,
                 scope=args.scope or "",
-                config_snapshot=dict(config.snapshot().values),
+                config_snapshot=config.strip_secret_values(config.snapshot().values),
                 economy=args.economy,
                 context_profile=args.context_profile,
                 settings_set=(settings_set or None),
@@ -1791,7 +1793,7 @@ async def _eval_run(state: AppState, args: argparse.Namespace) -> int:
             golden=golden,
             metrics=metrics,
             results=results,
-            settings_snapshot=dict(config.snapshot().values),
+            settings_snapshot=config.strip_secret_values(config.snapshot().values),
             archive_path=str(EVAL_ARCHIVE_PATH.default),
             archive_checksum=str(EVAL_ARCHIVE_CHECKSUM.default),
             notes="cli",

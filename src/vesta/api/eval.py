@@ -358,7 +358,7 @@ async def _run_to_completion(
         golden = load_set(body.golden_set)
         runner = LivePipelineRunner(state, profile)
         metrics, results = await evaluate_profile(profile, runner, golden)
-        snapshot = app_config.snapshot().values
+        snapshot = app_config.strip_secret_values(app_config.snapshot().values)
         record = _build_record(
             profile,
             golden,

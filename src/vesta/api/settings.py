@@ -56,6 +56,7 @@ class SettingSchemaOut(BaseModel):
     max: float | None = None
     choices: list[object] | None = None
     hot: bool
+    secret: bool = False
 
 
 class SettingsValues(BaseModel):
@@ -75,6 +76,7 @@ def _schema_dict(s: SettingSchema) -> SettingSchemaOut:
         max=s.max,
         choices=list(s.choices) if s.choices is not None else None,
         hot=s.hot,
+        secret=s.secret,
     )
 
 
@@ -87,10 +89,14 @@ async def get_schema() -> dict[str, object]:
 
 @router.get("")
 async def get_settings() -> dict[str, object]:
-    """Current resolved values for every setting (snapshot pinned for the call)."""
+    """Current resolved values for every setting (snapshot pinned for the call).
+
+    Secret settings (API keys, the auth password) come back as
+    ``config.SECRET_MASK`` when configured, never their stored value — this
+    response lands in browser tabs, devtools, and copy-paste.
+    """
     snap = config.snapshot()
-    values = {key: snap.values[key] for key in snap.values}
-    return {"values": values}
+    return {"values": config.redact_values(snap.values)}
 
 
 @router.put("")
@@ -109,6 +115,11 @@ async def put_settings(
         descriptor = registry.get(key)
         if descriptor is None:
             raise HTTPException(status_code=400, detail=f"unknown setting {key!r}")
+        if descriptor.secret and raw.strip() in ("", config.SECRET_MASK):
+            # A secret arrives blank or masked when a client round-trips the
+            # GET values untouched — that means "leave the stored value as
+            # is", never "wipe it". Only a fresh non-masked string replaces.
+            continue
         try:
             value = config.validate_and_coerce(descriptor, raw)
         except ValueError as exc:
@@ -130,7 +141,7 @@ async def put_settings(
         await rebuild_runtime(changed=set(coerced))
     snap = config.snapshot()
     return {
-        "values": {key: snap.values[key] for key in snap.values},
+        "values": config.redact_values(snap.values),
         "applied": sorted(coerced),
     }
 

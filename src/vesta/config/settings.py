@@ -53,6 +53,9 @@ class Setting(Generic[T]):
     max: float | None = None
     choices: tuple[object, ...] | None = None
     hot: bool = True
+    #: Credential-like value (API key, password): GET redacts it, PUT treats
+    #: blank/masked as "unchanged", persisted run snapshots drop it entirely.
+    secret: bool = False
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,7 @@ class SettingSchema:
     max: float | None = None
     choices: tuple[object, ...] | None = None
     hot: bool = True
+    secret: bool = False
 
 
 # The registry stores Setting[Any] (invariance makes Setting[int] !<: Setting[object]);
@@ -86,6 +90,7 @@ def setting(
     max: float | None = None,
     choices: tuple[object, ...] | None = None,
     hot: bool = True,
+    secret: bool = False,
 ) -> Setting[T]:
     """Declare a setting and register it. Called at module import time.
 
@@ -109,6 +114,7 @@ def setting(
         max=max,
         choices=choices,
         hot=hot,
+        secret=secret,
     )
     existing = _REGISTRY.get(key)
     if existing is not None and existing != descriptor:
@@ -132,6 +138,7 @@ def schema() -> list[SettingSchema]:
                 max=s.max,
                 choices=s.choices,
                 hot=s.hot,
+                secret=s.secret,
             )
         )
     return out
@@ -140,6 +147,33 @@ def schema() -> list[SettingSchema]:
 def all_settings() -> Mapping[str, Setting[Any]]:
     """Read-only view of the registry (used by the resolver)."""
     return MappingProxyType(_REGISTRY)
+
+
+#: What GET /api/settings returns in place of a configured secret's value.
+#: Chosen to be obviously not-a-key; PUT accepts it back as "unchanged".
+SECRET_MASK = "********"
+
+
+def is_secret(key: str) -> bool:
+    """Whether the named declared setting carries credential-like material."""
+    d = _REGISTRY.get(key)
+    return d is not None and d.secret
+
+
+def redact_values(values: Mapping[str, object]) -> dict[str, object]:
+    """Copy of ``values`` safe to serve: every non-empty secret becomes
+    :data:`SECRET_MASK`. Non-secrets and unset secrets pass through as-is."""
+    return {
+        key: SECRET_MASK if is_secret(key) and str(value) else value
+        for key, value in values.items()
+    }
+
+
+def strip_secret_values(values: Mapping[str, object]) -> dict[str, object]:
+    """Copy of ``values`` with secret keys removed — for persisted pins such
+    as run ``config_json`` snapshots that outlive the process and get served
+    back by run-detail endpoints."""
+    return {key: value for key, value in values.items() if not is_secret(key)}
 
 
 # ── Resolution ──────────────────────────────────────────────────────────────

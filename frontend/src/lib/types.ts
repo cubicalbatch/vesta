@@ -597,4 +597,7 @@ export interface SettingSchemaItem {
 	max: number | null;
 	choices: string[] | null;
 	hot: boolean;
+	/** Credential-like (API key / password): GET returns `********` when set;
+	 *  PUT treats blank or the mask as "leave the stored value unchanged". */
+	secret: boolean;
 }

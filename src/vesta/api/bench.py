@@ -1939,7 +1939,9 @@ async def _run_to_completion(
                 run_group=run_group,
                 label=body.label or "",
                 scope=body.scope or "",
-                config_snapshot=dict(app_config.snapshot().values),
+                # Persisted pins get served back by run-detail endpoints:
+                # never embed credential material in the snapshot.
+                config_snapshot=app_config.strip_secret_values(app_config.snapshot().values),
                 judge_concurrency=judge_concurrency,
                 judge_shares_endpoint=judge_shares_endpoint,
                 repeats=repeats,

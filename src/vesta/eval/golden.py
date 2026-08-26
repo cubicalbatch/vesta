@@ -161,8 +161,9 @@ EVAL_JUDGE_API_KEY = setting(
     "",
     group="Judge Inference / LLM",
     help="API key for the judge endpoint. Empty for local or unauthenticated "
-    "endpoints. Stored as-is; this is a local single-user appliance.",
+    "endpoints. Leave blank or unchanged when saving to keep the stored key.",
     hot=True,
+    secret=True,
 )
 EVAL_JUDGE_MODEL = setting(
     "eval.judge.model",

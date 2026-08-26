@@ -30,6 +30,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
+from vesta.config.settings import strip_secret_values
 from vesta.eval.golden import SLICES, GoldenEntry, GoldenSet, load_set
 from vesta.eval.metrics import (
     LatencyPercentiles,
@@ -118,7 +119,10 @@ class RunRecord:
             "golden_hash": self.golden_hash,
             "archive_path": self.archive_path,
             "archive_checksum": self.archive_checksum,
-            "settings_snapshot": dict(self.settings_snapshot),
+            # Single choke point for both persistence and serve-back: the
+            # settings snapshot is a public run-detail field, so credential
+            # material never enters the serialized blob.
+            "settings_snapshot": strip_secret_values(self.settings_snapshot),
             "git_sha": self.git_sha,
             "machine_id": self.machine_id,
             "notes": self.notes,

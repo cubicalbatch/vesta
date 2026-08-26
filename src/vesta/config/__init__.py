@@ -25,12 +25,16 @@ from vesta.config.resolution import (
     validate_and_coerce,
 )
 from vesta.config.settings import (
+    SECRET_MASK,
     Setting,
     SettingSchema,
     SettingsSnapshot,
     all_settings,
+    is_secret,
+    redact_values,
     schema,
     setting,
+    strip_secret_values,
 )
 
 # ── Server & Storage settings ─────────────────────────────────────────────
@@ -54,7 +58,7 @@ SERVER_PORT = setting(
     help="TCP port to listen on.",
     min=1,
     max=65535,
-    hot=False,
+    hot=False,  # requires restart
 )
 SERVER_AUTH_PASSWORD = setting(
     "server.auth.password",
@@ -62,8 +66,9 @@ SERVER_AUTH_PASSWORD = setting(
     "",
     group="Server",
     help="Optional single password for exposure beyond localhost. Empty = "
-    "no auth. Stored as-is; this is a local single-user appliance.",
+    "no auth. Leave blank or unchanged when saving to keep the stored password.",
     hot=True,
+    secret=True,
 )
 DATA_DIR = setting(
     "data.dir",
@@ -212,6 +217,7 @@ __all__ = [
     "QUERY_LADDER_ENABLED",
     "QUERY_STOPWORDS_ENABLED",
     "QUERY_STOPWORDS_LIST",
+    "SECRET_MASK",
     "SERVER_AUTH_PASSWORD",
     "SERVER_HOST",
     "SERVER_PORT",
@@ -228,6 +234,8 @@ __all__ = [
     "compute_capabilities",
     "configure",
     "get",
+    "is_secret",
+    "redact_values",
     "register_probe",
     "reset_for_test",
     "resolution",
@@ -236,5 +244,6 @@ __all__ = [
     "setting",
     "settings",
     "snapshot",
+    "strip_secret_values",
     "validate_and_coerce",
 ]

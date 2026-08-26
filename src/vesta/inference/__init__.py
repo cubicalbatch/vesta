@@ -65,8 +65,9 @@ INFERENCE_LLM_API_KEY = setting(
     "",
     group="Inference / LLM",
     help="API key for the remote endpoint. Empty for local or unauthenticated "
-    "endpoints. Stored as-is; this is a local single-user appliance.",
+    "endpoints. Leave blank or unchanged when saving to keep the stored key.",
     hot=True,
+    secret=True,
 )
 INFERENCE_LLM_MODEL = setting(
     "inference.llm.model",

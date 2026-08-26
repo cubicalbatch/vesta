@@ -2,9 +2,11 @@
 	// Generic control-mapping
 	// Settings" → "Control mapping"): bool -> toggle, bounded int/float ->
 	// slider + readout, unbounded int/float -> number input, string+choices ->
-	// select, string -> text (mono if the key ends path/url/dir/model).
-	// `hot: false` appends the restart note to help text. Dumb/presentational —
-	// the parent page owns the draft value and the dirty/error state.
+	// select, string -> text (mono if the key ends path/url/dir/model;
+	// `secret` items render as password inputs — their draft value is the
+	// server's mask anyway). `hot: false` appends the restart note to help
+	// text. Dumb/presentational — the parent page owns the draft value and the
+	// dirty/error state.
 	import type { SettingSchemaItem } from '$lib/types';
 	import { humanizeKey, isMonoStringKey } from '$lib/settings-groups';
 	import { settingLabel, settingHelp } from '$lib/settings-copy';
@@ -111,7 +113,7 @@
 			/>
 		{:else}
 			<input
-				type="text"
+				type={item.secret ? 'password' : 'text'}
 				name={item.key}
 				{value}
 				onchange={(e) => onChange(item.key, (e.target as HTMLInputElement).value)}

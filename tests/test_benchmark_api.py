@@ -358,6 +358,91 @@ async def test_run_and_list(
 
 
 @pytest.mark.asyncio
+async def test_run_config_snapshot_excludes_secrets(
+    app_with_db: tuple[httpx.AsyncClient, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AUDIT_0824 N3: the settings snapshot pinned into a run's config_json is
+    served back verbatim by GET /api/bench/runs/{id} — a configured API key
+    must never appear in it (write path, storage, or detail response)."""
+    client, _app = app_with_db
+    data_dir = Path(os.environ["data.dir"])
+    dataset_path = data_dir / "tiny_bench.json"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "name": "tiny",
+                "version": 1,
+                "questions": [
+                    {
+                        "id": "q1",
+                        "question": "What is 42?",
+                        "capability": "lookup",
+                        "difficulty": "easy",
+                        "slice": "core",
+                        "expected_behavior": "answer",
+                        "answer": "42",
+                        "sources": [
+                            {
+                                "zim": "wikipedia_en_top_nopic_2026-06.zim",
+                                "article_title": "A",
+                                "article_path": "A",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # Configure an API key as the UI would, then start a run. The judge key is
+    # used as the canary so the PUT doesn't trigger a runtime rebuild.
+    put = await client.put(
+        "/api/settings", json={"values": {"eval.judge.api_key": "sk-leak-canary"}}
+    )
+    assert put.status_code == 200, put.text
+
+    async def _fake_run_benchmark(**kwargs: Any) -> list[BenchRunRecord]:
+        # insert_run only claims the pre-seeded id; persist content via update_run.
+        store = kwargs["store"]
+        run_id = await store.insert_run(_run_record(system="sources_only"))
+        record = replace(
+            _run_record(system="sources_only"),
+            id=run_id,
+            config_json={"settings_snapshot": dict(kwargs["config_snapshot"])},
+        )
+        await store.update_run(run_id, record)
+        return [record]
+
+    monkeypatch.setattr("vesta.api.bench.make_judge_llm", lambda _state, _m: (None, None))
+    monkeypatch.setattr("vesta.api.bench.run_benchmark", _fake_run_benchmark)
+
+    resp = await client.post(
+        "/api/bench/run",
+        json={
+            "systems": ["sources_only"],
+            "models": ["model-a"],
+            "dataset": str(dataset_path),
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    run_id = int(resp.json()["run_ids"][0])
+
+    # Background task owns the row; wait for it to land (as test_run_and_list does).
+    deadline = asyncio.get_event_loop().time() + 15.0
+    while asyncio.get_event_loop().time() < deadline:
+        detail = (await client.get(f"/api/bench/runs/{run_id}")).json()
+        if detail["status"] != "running":
+            break
+        await asyncio.sleep(0.1)
+    assert "sk-leak-canary" not in json.dumps(detail["config_json"])
+    stored_snapshot = detail["config_json"].get("settings_snapshot")
+    assert isinstance(stored_snapshot, dict)
+    # …and non-secret pins still land, so runs stay comparable.
+    assert any(k.startswith("answer.") or k.startswith("retrieval.") for k in stored_snapshot)
+
+
+@pytest.mark.asyncio
 async def test_run_invalid_system_400(
     app_with_db: tuple[httpx.AsyncClient, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -857,6 +942,9 @@ async def test_concurrent_groups_serialize_on_gate(monkeypatch: pytest.MonkeyPat
 
         def snapshot(self) -> _StubConfig:
             return self
+
+        def strip_secret_values(self, values: Any) -> dict[str, Any]:
+            return dict(values)
 
     monkeypatch.setattr("vesta.api.bench.app_config", _StubConfig())
     monkeypatch.setattr("vesta.api.bench.make_judge_llm", lambda _state, _m: (None, None))

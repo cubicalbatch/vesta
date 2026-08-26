@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import os
+import sqlite3
+from contextlib import closing
+from pathlib import Path
+
+import httpx
 import pytest
 
 from vesta import config
@@ -139,3 +146,127 @@ def test_get_without_configure_raises() -> None:
             config.get(config.SERVER_HOST)
     finally:
         config.configure(env={})
+
+
+# ── Secret redaction (AUDIT_0824 N3) ───────────────────────────────────────
+
+
+def _register_secret_settings() -> None:
+    """Import the owning modules so their settings join the registry."""
+    import vesta.eval.golden
+    import vesta.inference  # noqa: F401
+
+
+def test_credential_settings_flagged_secret_in_schema() -> None:
+    _register_secret_settings()
+    items = {i.key: i for i in config.schema()}
+    for key in ("inference.llm.api_key", "eval.judge.api_key", "server.auth.password"):
+        assert key in items, f"{key} must be declared"
+        assert items[key].secret is True, f"{key} must be marked secret"
+    # Non-credential knobs stay public.
+    assert items["server.port"].secret is False
+
+
+def test_redact_and_strip_helpers_leave_inputs_untouched() -> None:
+    _register_secret_settings()
+    values: dict[str, object] = {
+        "inference.llm.api_key": "sk-live",
+        "eval.judge.api_key": "",
+        "server.port": 8080,
+    }
+    assert config.redact_values(values) == {
+        "inference.llm.api_key": config.SECRET_MASK,
+        "eval.judge.api_key": "",
+        "server.port": 8080,
+    }
+    assert config.strip_secret_values(values) == {
+        "server.port": 8080,
+    }
+    assert values["inference.llm.api_key"] == "sk-live"
+
+
+@pytest.mark.asyncio
+async def test_get_and_put_settings_mask_configured_secrets(
+    app_client: httpx.AsyncClient,
+) -> None:
+    _register_secret_settings()
+    resp = await app_client.put(
+        "/api/settings",
+        json={
+            "values": {
+                "inference.llm.api_key": "sk-live-inference",
+                "eval.judge.api_key": "sk-live-judge",
+            }
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["values"]["inference.llm.api_key"] == config.SECRET_MASK
+    assert body["values"]["eval.judge.api_key"] == config.SECRET_MASK
+
+    got = (await app_client.get("/api/settings")).json()["values"]
+    assert got["inference.llm.api_key"] == config.SECRET_MASK
+    assert got["eval.judge.api_key"] == config.SECRET_MASK
+    assert "sk-live" not in json.dumps(got)
+
+
+@pytest.mark.asyncio
+async def test_put_blank_or_masked_secret_preserves_stored_value(
+    app_client: httpx.AsyncClient,
+) -> None:
+    _register_secret_settings()
+    await app_client.put("/api/settings", json={"values": {"inference.llm.api_key": "sk-keep-me"}})
+
+    def stored_value() -> str | None:
+        db_path = Path(os.environ["data.dir"]) / "vesta.db"
+        with closing(sqlite3.connect(db_path)) as conn:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = 'inference.llm.api_key'"
+            ).fetchone()
+        return None if row is None else str(row[0])
+
+    # Blank and masked round-trips are no-ops, never wipes.
+    for unchanged in ("", config.SECRET_MASK):
+        resp = await app_client.put(
+            "/api/settings", json={"values": {"inference.llm.api_key": unchanged}}
+        )
+        assert resp.status_code == 200
+        assert "inference.llm.api_key" not in resp.json()["applied"]
+        assert stored_value() == "sk-keep-me"
+
+    # A fresh value replaces the stored one.
+    resp = await app_client.put(
+        "/api/settings", json={"values": {"inference.llm.api_key": "sk-replaced"}}
+    )
+    assert resp.status_code == 200
+    assert stored_value() == "sk-replaced"
+
+
+def test_eval_run_config_json_strips_secret_snapshot_values() -> None:
+    from vesta.eval.metrics import LatencyPercentiles, RunMetrics
+    from vesta.eval.runner import RunRecord
+
+    rec = RunRecord(
+        id=0,
+        started_at="t",
+        profile_name="p",
+        profile_hash="h",
+        profile_yaml="",
+        golden_hash="",
+        archive_path="",
+        archive_checksum="",
+        settings_snapshot={
+            "inference.llm.api_key": "sk-secret-eval",
+            "server.port": 8080,
+        },
+        git_sha="",
+        machine_id="",
+        metrics=RunMetrics({}, LatencyPercentiles(), False, (), 0),
+        per_query=(),
+    )
+    cfg = rec.to_config_json()
+    assert "sk-secret-eval" not in json.dumps(cfg)
+    snapshot = cfg["settings_snapshot"]
+    assert isinstance(snapshot, dict)
+    # Non-secret pins survive — runs stay comparable.
+    assert snapshot["server.port"] == 8080
