@@ -115,6 +115,18 @@ class TestExtractSpans:
                 "How was the brand name \u2018Nembutal\u2019 derived, and who coined it?",
                 ["Nembutal"],
             ),
+            (
+                "It\u2019s believed that 'Nembutal' was used widely.",
+                ["Nembutal"],
+            ),
+            (
+                "Have you seen Prince Rupert\u2019s Drop?",
+                ["Prince Rupert\u2019s Drop"],
+            ),
+            (
+                "The article refers to 'Rupert\u2019s drop' as notable.",
+                ["Rupert\u2019s drop"],
+            ),
             ("", []),
             ("   ", []),
             ("napoleon emperor", []),
@@ -197,6 +209,33 @@ class TestExtractSpans:
             assert len(spans) == expected["len"]
         if "prefix" in expected:
             assert spans[: len(expected["prefix"])] == expected["prefix"]
+
+    def test_curly_apostrophes_and_straight_quotes(self) -> None:
+        """Verify curly apostrophes inside entities, openers, and straight quotes."""
+        # 1. Multi-token entity containing curly apostrophe
+        assert extract_spans("Have you seen Prince Rupert\u2019s Drop?") == [
+            "Prince Rupert\u2019s Drop"
+        ]
+
+        # 2. Single-token capitalized entity with curly possessive stripped
+        assert extract_spans("What did Rupert\u2019s experiment show?") == ["Rupert"]
+
+        # 3. Sentence opener with curly apostrophe ("It's") dropped without shadowing entity
+        assert extract_spans("It\u2019s believed that 'Nembutal' was used widely.") == ["Nembutal"]
+
+        # 4. Straight-quoted span containing a curly apostrophe
+        assert extract_spans("The article refers to 'Rupert\u2019s drop' as notable.") == [
+            "Rupert\u2019s drop"
+        ]
+
+        # 5. Straight quote containing digits (verifies \u2019 is not matched as literal characters)
+        assert extract_spans("The event took place in '2019' according to reports.") == ["2019"]
+
+        # 6. Straight quote directly adjacent to curly apostrophe without whitespace is rejected
+        from vesta.retrieval.impls.title_entity_suggest import _QUOTED_RE
+
+        assert _QUOTED_RE.findall("it\u2019'quoted'") == []
+        assert _QUOTED_RE.findall("'quoted'\u2019s") == []
 
 
 # ── Source behaviour: capping, gating, emission ──────────────────────────────

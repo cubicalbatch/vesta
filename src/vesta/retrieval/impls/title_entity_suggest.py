@@ -75,7 +75,7 @@ _LDQ, _RDQ = "\u201c", "\u201d"  # double curly quotes
 
 #: One capitalized token: starts uppercase, then word chars / apostrophes /
 #: hyphens (``COVID-19``, ``Rupert's``, ``McClintock``).
-_CAP_TOKEN = "[A-Z][\\w'\\u2019-]*"
+_CAP_TOKEN = rf"[A-Z][\w'{_RQ}-]*"
 
 #: Lowercase particles that legitimately sit *inside* a capitalized entity
 #: (``University of Toronto``, ``Vincent van Gogh``, ``Ibn Battuta``). A
@@ -92,7 +92,7 @@ _CAP_RUN_RE = re.compile(rf"\b{_CAP_TOKEN}(?:\s+{_CAP_TOKEN}|\s+{_CONNECTOR}\s+{
 _QUOTED_RE = re.compile(
     rf'[{_LDQ}"]([^{_LDQ}{_RDQ}"]{{2,80}})[{_RDQ}"]'
     rf"|[{_LQ}]([^{_LQ}{_RQ}]{{2,80}})[{_RQ}]"
-    rf"|(?<![\w'\\u2019])'([^']{{2,80}})'(?![\w'\\u2019])"
+    rf"|(?<![\w'{_LQ}{_RQ}])'([^']{{2,80}})'(?![\w'{_LQ}{_RQ}])"
 )
 
 #: Words that only carry their capital from opening a sentence/question
@@ -205,7 +205,7 @@ _MAX_SPAN_CHARS = 60
 def _sentence_starts(text: str) -> frozenset[int]:
     """Character offsets where a sentence (so a fresh capitalization) begins."""
     starts = {0}
-    for m in re.finditer(r"[.!?][\"'\u2019\u201d)]*\s+", text):
+    for m in re.finditer(rf"[.!?][\"\'{_LQ}{_RQ}{_LDQ}{_RDQ})]*\s+", text):
         starts.add(m.end())
     return frozenset(starts)
 
