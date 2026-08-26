@@ -27,7 +27,6 @@ REQUIRED_KEYS = {
     "capability",
     "difficulty",
     "slice",
-    "level",
     "tags",
     "expected_behavior",
     "answer",
@@ -38,14 +37,19 @@ REQUIRED_KEYS = {
     "closed_book",
     "oracle",
     "status",
+    # 'level' is intentionally absent: the loader (_parse_question) defaults it
+    # to 3, so authored datasets legitimately omit it.
 }
 
 
 def extract(archive: Archive, path: str) -> str:
-    raw = read_entry_sync(archive, path)
-    if raw.is_redirect:
-        return ""
-    return extract_article(raw.content, path=path, title=raw.title).text
+    try:
+        raw = read_entry_sync(archive, path)
+        if raw.is_redirect:
+            raw = read_entry_sync(archive, raw.redirect_target)
+        return extract_article(raw.content, path=raw.path, title=raw.title).text
+    except Exception:
+        return ""  # reported per-fact as "could not extract", never fatal
 
 
 def normalize(s: str) -> str:
@@ -78,9 +82,12 @@ def main() -> int:  # noqa: PLR0912, PLR0915 — one branch per validation check
             if qid in seen_ids:
                 failures.append(f"{qid}: duplicate id")
             seen_ids.add(qid)
-            level = q.get("level")
+            try:
+                level = int(q.get("level", 3))
+            except (TypeError, ValueError):
+                level = None
             if level not in (1, 2, 3):
-                failures.append(f"{qid}: invalid level {level!r} (must be 1, 2, or 3)")
+                failures.append(f"{qid}: invalid level {q.get('level')!r} (must be 1, 2, or 3)")
             cap = q.get("capability")
             srcs = q.get("sources") or []
             exp_beh = q.get("expected_behavior", "answer")
@@ -98,6 +105,21 @@ def main() -> int:  # noqa: PLR0912, PLR0915 — one branch per validation check
                 expected_src = 1
                 if len(srcs) != expected_src:
                     failures.append(f"{qid}: {len(srcs)} sources (expected {expected_src})")
+            for i, src in enumerate(srcs):
+                if not isinstance(src, dict):
+                    failures.append(f"{qid}: source[{i}] must be an object")
+                    continue
+                missing_src = {"zim", "article_title", "article_path"} - set(src)
+                if missing_src:
+                    failures.append(f"{qid}: source[{i}] missing keys {sorted(missing_src)}")
+                    continue
+                bad_types = [
+                    k
+                    for k in ("zim", "article_title", "article_path")
+                    if not isinstance(src[k], str) or not src[k]
+                ]
+                if bad_types:
+                    failures.append(f"{qid}: source[{i}] non-string/empty {sorted(bad_types)}")
 
             subs = q.get("sub_facts") or []
             if cap not in ("buried_fact", "adversarial_abstention") and len(subs) < 2:
@@ -118,7 +140,11 @@ def main() -> int:  # noqa: PLR0912, PLR0915 — one branch per validation check
                 if not fact:
                     failures.append(f"{qid}: sub_fact[{i}] empty fact")
                     continue
-                path = srcs[idx].get("article_path", "")
+                src = srcs[idx]
+                if not isinstance(src, dict) or not isinstance(src.get("article_path"), str):
+                    failures.append(f"{qid}: sub_fact[{i}] source[{idx}] invalid")
+                    continue
+                path = src["article_path"]
                 text = extract(archive, path)
                 if not text:
                     failures.append(f"{qid}: could not extract {path!r}")
