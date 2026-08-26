@@ -679,6 +679,27 @@ async def _run_cell(  # noqa: PLR0912, PLR0915
                     )
                 )
 
+        # M12 poison guard: a cell where EVERY question errored (e.g. the
+        # gateway failed to build and each system returned "no LLM gateway
+        # configured") measured nothing. Stamping such a run 'complete'
+        # lands a clean-looking poisoned row that later comparisons trust —
+        # mark it failed like a fatal cell error instead of grading empty
+        # answers.
+        all_errors = [outputs[q.id].error for q in questions]
+        if n_q and all(all_errors):
+            distinct = "; ".join(sorted({e for e in all_errors if e}))[:300]
+            reason = f"all {n_q} questions errored: {distinct}"
+            ended = now_iso()
+            failed_record = replace(
+                record,
+                finished_at=ended,
+                status="failed",
+                abort_reason=reason,
+                config_json={**record.config_json, "abort_reason": reason},
+            )
+            await store.update_run(run_id, failed_record)
+            return failed_record
+
         scored: list[ScoredQuestion] = []
         if generates_answers:
             sem = asyncio.Semaphore(max(1, judge_concurrency))

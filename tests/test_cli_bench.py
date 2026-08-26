@@ -268,6 +268,45 @@ async def test_bench_compare_refuses_dataset_mismatch(
     assert "dataset mismatch" in out
 
 
+@pytest.mark.asyncio
+async def test_open_runtime_logs_registry_start_failure(
+    tmp_path: Path, monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AUDIT_0824 M12: a registry-start failure is logged, not swallowed —
+    a silent dead registry is what let poisoned all-zero eval rows persist."""
+
+    async def _boom(self: Any) -> Any:
+        raise RuntimeError("zim dir exploded")
+
+    monkeypatch.setattr(cli.ArchiveRegistry, "start", _boom)
+    try:
+        async with _open_runtime(str(tmp_path)):
+            pass
+    finally:
+        monkeypatch.undo()
+    assert "zim.scan_failed" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_open_runtime_logs_gateway_build_failure(
+    tmp_path: Path, monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AUDIT_0824 M12: a gateway that fails to build is logged (mirrors
+    main.py's lifespan) instead of silently yielding gateway=None."""
+    import vesta.inference as inference_mod
+
+    def _boom(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("no llama-server binary")
+
+    monkeypatch.setattr(inference_mod, "build_gateway_from_settings", _boom)
+    try:
+        async with _open_runtime(str(tmp_path), with_gateway=True) as state:
+            assert state.gateway is None
+    finally:
+        monkeypatch.undo()
+    assert "inference.gateway_failed" in capsys.readouterr().out
+
+
 def test_bench_umbrella_surface(capsys: pytest.CaptureFixture[str]) -> None:
     """`vesta bench` exposes the 8 documented subcommands; `run` its flags.
 

@@ -370,6 +370,64 @@ async def test_failed_cell_persists_abort_reason(store) -> None:
 
 
 @pytest.mark.asyncio
+async def test_all_errored_cell_not_stamped_complete(store) -> None:
+    """AUDIT_0824 M12: a cell where every question failed on a missing LLM
+    gateway must land as status='failed', never 'complete' — a complete row of
+    empty answers would pass later comparisons as clean."""
+
+    class NoGatewaySUT:
+        name = "nogw"
+        answer_model = "model-a"
+        profile_name = "profile-x"
+        profile_hash = "phash"
+
+        async def run_one(self, q: BenchQuestion) -> QuestionOutput:
+            return QuestionOutput(
+                answer_text="",
+                retrieved_paths=(),
+                abstained=True,
+                error="no LLM gateway configured",
+                trace={},
+            )
+
+    qs = (_q("q1"), _q("q2"))
+    records = await run_benchmark(
+        dataset=_dataset(qs),
+        questions=qs,
+        systems=[NoGatewaySUT()],
+        store=store,
+        judge=FakeJudge(),
+        judge_model="judge-b",
+    )
+    rec = records[0]
+    assert rec.status == "failed"
+    assert rec.abort_reason is not None
+    assert "all 2 questions errored" in rec.abort_reason
+    assert "no LLM gateway configured" in rec.abort_reason
+    # The failure (and its reason) survives a reload from the DB.
+    got = await store.get_run(rec.id)
+    assert got is not None
+    assert got.status == "failed"
+    assert got.abort_reason is not None and "all 2 questions errored" in got.abort_reason
+
+
+@pytest.mark.asyncio
+async def test_partial_error_cell_still_completes(store) -> None:
+    """AUDIT_0824 M12: the all-errored guard must not overreach — one failing
+    question among healthy ones stays a normal completed run."""
+    qs = (_q("q1"), _q("q2"))
+    records = await run_benchmark(
+        dataset=_dataset(qs),
+        questions=qs,
+        systems=[FailSUT("q1")],
+        store=store,
+        judge=FakeJudge(),
+        judge_model="judge-b",
+    )
+    assert records[0].status == "complete"
+
+
+@pytest.mark.asyncio
 async def test_first_failed_cell_cancels_sibling_cells(store) -> None:
     """AUDIT_0824 M3: one failed cell must not abandon the matrix to orphaned
     background tasks. Sibling cells are cancelled, and after the caller marks

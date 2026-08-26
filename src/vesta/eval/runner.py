@@ -296,6 +296,18 @@ async def evaluate_profile(
             )
         )
     metrics = _reduce_metrics(results)
+    if results and all(not r.retrieved_paths for r in results):
+        # M12 poison guard: a dead registry / empty corpus returns no paths
+        # for EVERY query without any capability drop (the title-based
+        # sources carry empty ``requires``), so the trace-derived degraded
+        # flag reads clean and an all-zero recall row persists looking
+        # legitimate. A run that measured nothing is stamped degraded so
+        # compare()'s degradation guard refuses it against a clean baseline.
+        metrics = replace(
+            metrics,
+            degraded=True,
+            degraded_components=(*metrics.degraded_components, "no_candidates"),
+        )
     return metrics, tuple(results)
 
 

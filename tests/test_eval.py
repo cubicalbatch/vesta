@@ -317,6 +317,32 @@ class TestRunner:
         forced = compare(baseline, candidate, force=True)
         assert forced.degraded_guard is None  # --force overrides
 
+    @pytest.mark.asyncio
+    async def test_empty_corpus_run_stamped_degraded(self) -> None:
+        """AUDIT_0824 M12: a dead registry / empty corpus returns no paths for
+        EVERY query with no capability drop recorded (the title-based sources
+        carry empty ``requires``) — the run must not read clean."""
+        gs = _golden([_entry("e1", "q", ["A"])])
+        profile = _any_profile()
+        metrics, results = await evaluate_profile(profile, FakeRunner({}), gs)  # type: ignore[arg-type]
+        assert len(results) == 1
+        assert metrics.degraded is True
+        assert "no_candidates" in metrics.degraded_components
+
+    @pytest.mark.asyncio
+    async def test_poisoned_run_refused_by_degradation_guard(self) -> None:
+        """AUDIT_0824 M12: an all-zero poisoned row vs a clean baseline must
+        trip compare()'s degraded guard instead of skewing the delta."""
+        gs = _golden([_entry("e1", "q", ["A"])])
+        profile = _any_profile()
+        clean_m, clean_r = await evaluate_profile(profile, FakeRunner({"q": ["A"]}), gs)
+        poison_m, poison_r = await evaluate_profile(profile, FakeRunner({}), gs)
+        baseline = _record(profile, gs, clean_m, clean_r)
+        candidate = _record(profile, gs, poison_m, poison_r)
+        assert clean_m.degraded is False
+        assert poison_m.degraded is True
+        assert compare(baseline, candidate).degraded_guard is not None
+
     def test_parse_sweep_clones_profile_per_value(self) -> None:
         profile = load_profile("lexical")
         assert profile is not None

@@ -1608,8 +1608,12 @@ async def _open_runtime(  # noqa: PLR0915
         read_pool_size=int(config.get(config.ZIM_READ_POOL_SIZE)),
         cluster_cache_mb=int(config.get(config.ZIM_CLUSTER_CACHE_MB)),
     )
-    with contextlib.suppress(Exception):
+    try:
         await registry.start()
+    except Exception as exc:
+        # A registry that failed to open must not boot silently: eval/bench
+        # over zero open archives produces poisoned all-zero rows (M12).
+        structlog.get_logger(__name__).warning("zim.scan_failed", error=repr(exc))
     bind_registry(registry)
     encoders = build_manager_from_settings(config.snapshot(), model_dir=ddir / "models")
     bind_manager(encoders)
@@ -1655,8 +1659,12 @@ async def _open_runtime(  # noqa: PLR0915
         try:
             gateway, supervisor = build_gateway_from_settings(config.snapshot(), data_dir=ddir)
             bind_gateway(gateway, supervisor)
-        except Exception:
+        except Exception as exc:
             gateway = None
+            # Mirrors main.py's lifespan: a gateway that failed to build is
+            # logged, not swallowed — every LLM system would otherwise error
+            # per question with no visible cause (M12).
+            structlog.get_logger(__name__).warning("inference.gateway_failed", error=repr(exc))
 
     try:
         yield AppState(
