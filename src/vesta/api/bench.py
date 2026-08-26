@@ -83,7 +83,7 @@ from vesta.inference import (
     INFERENCE_LLM_ENDPOINT_URL,
     INFERENCE_LLM_MODEL,
 )
-from vesta.retrieval.profiles import resolve_profile
+from vesta.retrieval.profiles import resolve_profile_from_settings
 
 
 async def _find_archive_by_name(state: AppState, zim: str) -> Any:
@@ -348,7 +348,7 @@ class RetrievalOnlySystem(_BaseSystem):
         except RuntimeError:
             sn = None
         capabilities = compute_capabilities()
-        retrieval_profile = _resolve_profile(self._profile)
+        retrieval_profile = _resolve_profile(self._profile, snapshot=sn)
         ret_scope = _parse_scope(self._scope, self._state.registry)
         rewriter = _build_rewriter(self._state, sn)
         deps = Deps(
@@ -1793,7 +1793,7 @@ def _profile_hash(name: str) -> str:
     """
     if not name:
         return ""
-    p = resolve_profile(name)
+    p = resolve_profile_from_settings(name, fallback_to_default=False)
     if p is None:
         raise HTTPException(status_code=404, detail=f"profile {name!r} not found")
     return str(getattr(p, "hash", "") or "")

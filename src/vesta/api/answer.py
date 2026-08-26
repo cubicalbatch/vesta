@@ -51,11 +51,11 @@ from vesta.answer.contracts import (
 )
 from vesta.api.state import AppState, app_state
 from vesta.config.capabilities import compute_capabilities
-from vesta.retrieval import RETRIEVAL_MAX_ARCHIVES_CONCURRENT, RETRIEVAL_PROFILES
+from vesta.retrieval import RETRIEVAL_MAX_ARCHIVES_CONCURRENT
 from vesta.retrieval.contracts import RetrievalResult, ScoredPassage, SourceCard
 from vesta.retrieval.contracts import Scope as RetScope
 from vesta.retrieval.pipeline import Deps, NoCandidatesError, run_pipeline
-from vesta.retrieval.profiles import RetrievalProfile, resolve_profile
+from vesta.retrieval.profiles import RetrievalProfile, resolve_profile_from_settings
 from vesta.vectors import get_store as get_vector_store
 
 if TYPE_CHECKING:
@@ -123,7 +123,7 @@ async def iter_answer_events(
     except RuntimeError:
         sn = None
 
-    retrieval_profile = _resolve_profile(profile_override)
+    retrieval_profile = _resolve_profile(profile_override, snapshot=sn)
     if retrieval_profile is None:
         yield ErrorEvent(
             code="no_profile", message="no retrieval profile could be resolved", recoverable=False
@@ -705,28 +705,11 @@ def _format_term_candidates(
     return "\n".join(lines)
 
 
-def _resolve_profile(profile_override: str | None) -> Any:
+def _resolve_profile(profile_override: str | None, snapshot: Any = None) -> Any:
     """Resolve the retrieval profile (user-saved first, then built-in)."""
-    from vesta.retrieval import RETRIEVAL_ACTIVE_PROFILE
-    from vesta.retrieval.profiles import load_profile, load_user_profiles
-
-    name = profile_override
-    if not name:
-        try:
-            name = str(app_config.get(RETRIEVAL_ACTIVE_PROFILE))
-        except Exception:
-            name = "lexical"
-    if not name:
-        name = "lexical"
-
-    try:
-        users = load_user_profiles(str(app_config.get(RETRIEVAL_PROFILES)))
-    except Exception:
-        users = {}
-    resolved = resolve_profile(name, users)
-    if resolved is not None:
-        return resolved
-    return load_profile("lexical")
+    return resolve_profile_from_settings(
+        profile_override, snapshot=snapshot, fallback_to_default=True
+    )
 
 
 def _build_rewriter(state: AppState, sn: Any) -> Any:

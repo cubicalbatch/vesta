@@ -45,10 +45,9 @@ from vesta.eval.runner import (
 from vesta.eval.runner import (
     machine_id as _runner_machine_id,
 )
-from vesta.retrieval import RETRIEVAL_PROFILES
 from vesta.retrieval.contracts import Scope as RetScope
 from vesta.retrieval.pipeline import Deps, NoCandidatesError, run_pipeline
-from vesta.retrieval.profiles import RetrievalProfile, resolve_profile
+from vesta.retrieval.profiles import RetrievalProfile, resolve_profile_from_settings
 from vesta.vectors import get_store as get_vector_store
 
 router = APIRouter(prefix="/api/eval", tags=["eval"])
@@ -322,14 +321,8 @@ def _resolve_profile(state: AppState, name: str) -> RetrievalProfile | None:
     into a 404; there is no silent fallback (an unset name is defaulted by
     the caller before this is reached).
     """
-    try:
-        blob = str(app_config.get(RETRIEVAL_PROFILES))
-        from vesta.retrieval.profiles import load_user_profiles
-
-        users = load_user_profiles(blob)
-    except Exception:
-        users = {}
-    return resolve_profile(name, users)
+    del state
+    return resolve_profile_from_settings(name, fallback_to_default=False)
 
 
 def _placeholder_record(

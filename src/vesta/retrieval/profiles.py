@@ -22,12 +22,15 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 from pydantic import BaseModel, ValidationError
 
 from vesta.retrieval.registry import resolve
+
+if TYPE_CHECKING:
+    from vesta.config.settings import Setting, SettingsSnapshot
 
 _PROFILES_DIR = Path(__file__).resolve().parent / "profiles"
 
@@ -191,7 +194,10 @@ def parse_profile_text(yaml_text: str, *, default_name: str | None = None) -> Re
     when the document omits ``name`` (built-in files fall back to their
     filename); a user-saved profile must name itself explicitly.
     """
-    data = yaml.safe_load(yaml_text)
+    try:
+        data = yaml.safe_load(yaml_text)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid profile YAML: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError("profile YAML must map to a dict")
     name = data.get("name") or default_name
@@ -306,7 +312,7 @@ def load_user_profiles(blob: str) -> dict[str, RetrievalProfile]:
             continue
         try:
             out[str(name)] = parse_profile_text(yaml_text, default_name=str(name))
-        except ValueError:
+        except (ValueError, yaml.YAMLError):
             continue
     return out
 
@@ -320,3 +326,72 @@ def resolve_profile(
     if user_profiles is not None and name in user_profiles:
         return user_profiles[name]
     return BUILTIN_PROFILES.get(name)
+
+
+def _get_setting(setting_obj: Setting[Any], snapshot: SettingsSnapshot | None) -> Any:
+    if snapshot is not None:
+        try:
+            return snapshot.get(setting_obj)
+        except Exception:
+            return setting_obj.default
+    from vesta import config as app_config
+
+    try:
+        return app_config.get(setting_obj)
+    except Exception:
+        return setting_obj.default
+
+
+def resolve_profile_from_settings(
+    name: str | None = None,
+    *,
+    snapshot: SettingsSnapshot | None = None,
+    fallback_to_default: bool = True,
+    default_name: str = "lexical",
+    user_profiles: dict[str, RetrievalProfile] | None = None,
+) -> RetrievalProfile | None:
+    """Resolve a retrieval profile against user-saved and built-in profiles.
+
+    Unified helper for API routes, CLI, and pipeline runners (AUDIT_0824 L6).
+
+    Resolution semantics:
+    1. If ``name`` is provided and non-empty:
+       Lookup in ``user_profiles`` (loaded from the ``retrieval.profiles`` setting
+       or snapshot if not explicitly provided), then in ``BUILTIN_PROFILES``.
+       If found, return it.
+       If not found and ``fallback_to_default`` is True, fall back to ``default_name``.
+       If not found and ``fallback_to_default`` is False, return ``None``.
+    2. If ``name`` is omitted or empty (``None`` or ``""``):
+       If ``fallback_to_default`` is True:
+         Read ``retrieval.active_profile`` from settings or snapshot (default: "hybrid").
+         Lookup active profile in user profiles, then built-ins.
+         If found, return it.
+         If not found, fall back to ``default_name`` ("lexical").
+       If ``fallback_to_default`` is False:
+         Return ``None``.
+    """
+    from vesta.retrieval import RETRIEVAL_ACTIVE_PROFILE, RETRIEVAL_PROFILES
+
+    if user_profiles is None:
+        blob = str(_get_setting(RETRIEVAL_PROFILES, snapshot) or "")
+        user_profiles = load_user_profiles(blob)
+
+    target_name = (name or "").strip()
+    if target_name:
+        resolved = resolve_profile(target_name, user_profiles)
+        if resolved is not None:
+            return resolved
+        if not fallback_to_default:
+            return None
+        return resolve_profile(default_name, user_profiles) or load_profile(default_name)
+
+    if not fallback_to_default:
+        return None
+
+    active_name = str(_get_setting(RETRIEVAL_ACTIVE_PROFILE, snapshot) or "").strip()
+    if active_name:
+        resolved = resolve_profile(active_name, user_profiles)
+        if resolved is not None:
+            return resolved
+
+    return resolve_profile(default_name, user_profiles) or load_profile(default_name)

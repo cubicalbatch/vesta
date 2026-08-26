@@ -87,7 +87,7 @@ from vesta.retrieval.profiles import (
     BUILTIN_PROFILES,
     RetrievalProfile,
     load_profile,
-    resolve_profile,
+    resolve_profile_from_settings,
 )
 from vesta.vectors import VECTORS_OVERSAMPLE, VECTORS_QUANTIZER, bind_store
 from vesta.vectors.sqlite_vec_store import SqliteVecStore
@@ -1712,7 +1712,7 @@ async def _open_runtime(  # noqa: PLR0915
 def _resolve_profile(state: AppState, name: str) -> RetrievalProfile:
     """Resolve a profile name (user-saved shadow builtins); unknown → clean exit."""
     del state  # registry not needed for profile resolution
-    p = resolve_profile(name)
+    p = resolve_profile_from_settings(name, fallback_to_default=False)
     if p is None:
         known = ", ".join(sorted(BUILTIN_PROFILES))
         raise SystemExit(f"profile {name!r} not found; known profiles: {known}")

@@ -24,14 +24,11 @@ from vesta.retrieval import (
     API_ALLOW_PROFILE_OVERRIDE,
     RETRIEVAL_ACTIVE_PROFILE,
     RETRIEVAL_MAX_ARCHIVES_CONCURRENT,
-    RETRIEVAL_PROFILES,
 )
 from vesta.retrieval.pipeline import Deps, NoCandidatesError, run_pipeline
 from vesta.retrieval.profiles import (
     RetrievalProfile,
-    load_profile,
-    load_user_profiles,
-    resolve_profile,
+    resolve_profile_from_settings,
 )
 from vesta.vectors import get_store as get_vector_store
 from vesta.zim import bind_registry  # noqa: F401 — ensures capability probe is registered
@@ -200,16 +197,7 @@ def _resolve_retrieval_profile(name: str) -> RetrievalProfile | None:
     name (04-dev-console.md). Falls back to ``lexical`` only if the name matches
     nothing — preserving the fallback behaviour for an unknown name.
     """
-    try:
-        users = load_user_profiles(str(app_config.get(RETRIEVAL_PROFILES)))
-    except Exception:
-        users = {}
-    resolved = resolve_profile(name, users)
-    if resolved is not None:
-        return resolved
-    # Unknown name: fall back to lexical rather than 500'ing (matches prior
-    # behaviour; ``profile_name`` in the response still reports what resolved).
-    return load_profile("lexical")
+    return resolve_profile_from_settings(name, fallback_to_default=True)
 
 
 def _resolve_profile_name(profile: str | None) -> str:
