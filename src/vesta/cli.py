@@ -766,19 +766,21 @@ async def _cmd_bench_run(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR
 
         needs_judge = any(s != "retrieval_only" for s in systems)
         judge_model = (args.judge_model or str(config.get(EVAL_JUDGE_MODEL))) if needs_judge else ""
+        # Same endpoint sourcing as `bench verify`: _build_apply_overrides maps
+        # --judge-endpoint onto eval.judge.endpoint_url before the runtime
+        # opens, so the configured value already carries the CLI override —
+        # pass it straight to the clamp instead of gating on the flag.
         answer_endpoint = str(config.get(INFERENCE_LLM_ENDPOINT_URL))
-        judge_endpoint = str(config.get(EVAL_JUDGE_ENDPOINT_URL)) if args.judge_endpoint else ""
+        judge_endpoint = str(config.get(EVAL_JUDGE_ENDPOINT_URL))
 
         # Per-run LLM overrides handled by settings; the judge needs the model
         # explicit and the endpoint for the concurrency clamp.
         judge, judge_gateway = make_judge_llm(state, judge_model) if needs_judge else (None, None)
 
-        # Judge endpoint override must be reflected in the clamp too.
-        effective_judge_endpoint = args.judge_endpoint or judge_endpoint
         judge_concurrency, shares = resolve_judge_concurrency(
             args.judge_concurrency or int(config.get(BENCH_JUDGE_CONCURRENCY)),
             answer_endpoint=answer_endpoint,
-            judge_endpoint=effective_judge_endpoint,
+            judge_endpoint=judge_endpoint,
         )
         # Build the flat system list = systems x profiles x models.
         sut_list: list[Any] = []

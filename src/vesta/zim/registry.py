@@ -71,9 +71,14 @@ _log = logging.getLogger(__name__)
 #: call gets its own small one-shot executor (:meth:`ArchiveRegistry.
 #: _dispatch_registration`), created per call and shut down after — the same
 #: single-shot shape as ``media.build_media_manifest``'s ``to_thread``, but
-#: hard-capped at 2 so concurrent registrations cannot multiply libzim reader
-#: threads. Two workers never exceed what the 4-worker interactive pool
-#: already assumes about concurrent libzim entry reads.
+#: capped at 2 per registration. That cap is per-pool, not global — yet no N
+#: concurrent registrations can multiply it either: every path into
+#: registration (:meth:`ArchiveRegistry.start`, the scan endpoint, the catalog
+#: download callback) funnels through :meth:`ArchiveRegistry.rescan`, whose
+#: ``_rescan_lock`` serializes scans, so at most one registration executor is
+#: alive at a time and libzim never sees more than 2 mining threads. Two
+#: workers never exceed what the 4-worker interactive pool already assumes
+#: about concurrent libzim entry reads.
 _REGISTRATION_POOL_SIZE = 2
 
 
