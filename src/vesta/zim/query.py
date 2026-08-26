@@ -222,9 +222,11 @@ DEFAULT_STOPWORDS = (
     "here",
 )
 
-# Words that are inert under libzim's parser — stripped pre-query so a user's
+# Tokens that are inert under libzim's parser — stripped pre-query so a user's
 # quotes/booleans don't become literal AND-ed terms that force a 0-result.
-_INERT_TOKENS = frozenset({"and", "or", "not", "near", "xor", "a", "an", "the", "+", "-", "*", '"'})
+# Public: shared with the retrieval-level normalize preparer so both term
+# pipelines drop them on the primary path, not just this ladder's fallback.
+INERT_TOKENS = frozenset({"and", "or", "not", "near", "xor", "a", "an", "the", "+", "-", "*", '"'})
 
 # Splits on anything that is not a unicode letter/digit/underscore. Keeps CJK
 # runs intact (libzim does its own CJK n-gramming).
@@ -239,7 +241,7 @@ def normalize_terms(raw: str) -> list[str]:
     """
     tokens: list[str] = []
     for tok in _TOKEN_RE.findall(raw.lower()):
-        if tok in _INERT_TOKENS:
+        if tok in INERT_TOKENS:
             continue
         tokens.append(tok)
     return tokens
@@ -417,7 +419,7 @@ class QueryPreparer:
 __all__ = [
     "CORE_QUESTION_WORDS",
     "DEFAULT_STOPWORDS",
-    "QUESTION_WORDS",
+    "INERT_TOKENS",
     "QueryPreparer",
     "QueryRung",
     "SearchFn",

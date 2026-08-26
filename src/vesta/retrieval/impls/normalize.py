@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from vesta.config.capabilities import Capability
 from vesta.retrieval.contracts import PreparedQuery
 from vesta.retrieval.registry import register
-from vesta.zim.query import DEFAULT_STOPWORDS, looks_like_question
+from vesta.zim.query import DEFAULT_STOPWORDS, INERT_TOKENS, looks_like_question
 
 if TYPE_CHECKING:
     from vesta.retrieval.trace import Trace
@@ -46,7 +46,10 @@ class Normalize:
     ``zim.query.QueryPreparer``'s stopword rung, but runs unconditionally
     instead of only as a last-resort fallback when a source returns literally
     zero results — a coincidental noise match was silently defeating that
-    fallback's trigger condition.
+    fallback's trigger condition. It also drops libzim-inert boolean/operator
+    tokens (``vesta.zim.query.INERT_TOKENS``), matching what
+    ``zim.query.normalize_terms`` does on the ladder path, so both term
+    pipelines agree on the primary path too.
     """
 
     requires: ClassVar[frozenset[Capability]] = frozenset()
@@ -77,6 +80,15 @@ class Normalize:
             # search with.
             if stripped:
                 terms = stripped
+        # Drop libzim-inert boolean/operator tokens ("not", "near", "xor",
+        # standalone "+"/"-"/"*") — the same set ``zim.query.normalize_terms``
+        # drops on the ladder path. Without this they become literal AND-ed
+        # terms on the primary path ("hotels near the grand canyon" requires a
+        # literal "near"), while the ladder only rescued that on a zero-result
+        # fallback. Same empty-guard as above: never strip down to nothing.
+        inert_stripped = tuple(t for t in terms if t not in INERT_TOKENS)
+        if inert_stripped:
+            terms = inert_stripped
         result = PreparedQuery(
             raw=q.raw,
             terms=terms,
