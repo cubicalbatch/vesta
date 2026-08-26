@@ -651,6 +651,151 @@ async def test_delete_run_rejected_while_group_running(
     assert (await client.get(f"/api/bench/runs/{run_ids[0]}")).status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_second_run_rejected_while_group_running(
+    app_with_db: tuple[httpx.AsyncClient, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AUDIT_0824 B1: ``_drive_answer_events`` swaps the process-global
+    ``state.gateway`` for a per-question recorder; a second group started
+    mid-flight would nest recorders and mis-attribute tokens. POST /run must
+    refuse with 409 while a group executes."""
+    client, _ = app_with_db
+    data_dir = Path(os.environ["data.dir"])
+    dataset_path = data_dir / "tiny_bench.json"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "name": "tiny",
+                "version": 1,
+                "questions": [
+                    {
+                        "id": "q1",
+                        "question": "What is 42?",
+                        "capability": "lookup",
+                        "difficulty": "easy",
+                        "slice": "core",
+                        "expected_behavior": "answer",
+                        "answer": "42",
+                        "sources": [
+                            {
+                                "zim": "wikipedia_en_top_nopic_2026-06.zim",
+                                "article_title": "A",
+                                "article_path": "A",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("vesta.api.bench.make_judge_llm", lambda _state, _m: (None, None))
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    run_ids_box: list[int] = []
+    calls = 0
+
+    async def _fake_run_benchmark(**kwargs: Any) -> list[BenchRunRecord]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            await release.wait()  # hold group 1 mid-flight
+        store = kwargs["store"]
+        records = []
+        for run_id in run_ids_box:
+            rec = await store.get_run(run_id)
+            assert rec is not None
+            final = replace(rec, status="complete", finished_at="2026-01-01T00:01:00+00:00")
+            await store.update_run(run_id, final)
+            records.append(final)
+        return records
+
+    monkeypatch.setattr("vesta.api.bench.run_benchmark", _fake_run_benchmark)
+
+    payload = {
+        "systems": ["sources_only"],
+        "models": ["model-a"],
+        "dataset": str(dataset_path),
+        "judge_model": "judge-b",
+    }
+    first = await client.post("/api/bench/run", json=payload)
+    assert first.status_code == 200
+    run_ids = [int(rid) for rid in first.json()["run_ids"]]
+    run_ids_box.extend(run_ids)
+    await asyncio.wait_for(started.wait(), timeout=5.0)
+
+    # While group 1 executes: a second POST /run is refused.
+    second = await client.post("/api/bench/run", json=payload)
+    assert second.status_code == 409
+    assert "currently executing" in second.json()["detail"]
+
+    release.set()
+    deadline = asyncio.get_event_loop().time() + 15.0
+    detail: dict[str, Any] = {}
+    while asyncio.get_event_loop().time() < deadline:
+        detail = (await client.get(f"/api/bench/runs/{run_ids[0]}")).json()
+        if detail["status"] != "running":
+            break
+        await asyncio.sleep(0.05)
+    assert detail["status"] == "complete"
+
+    # The gate is released once the group finishes: overlap stays impossible.
+    assert bench._RUN_GATE.locked() is False
+
+
+@pytest.mark.asyncio
+async def test_concurrent_groups_serialize_on_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Backstop invariant: even if two groups are driven concurrently, their
+    runners never overlap on ``_RUN_GATE`` — peak concurrent ``run_benchmark``
+    executions is 1, so the global gateway recorder can never nest."""
+
+    class _StubConfig:
+        def __init__(self) -> None:
+            self.values: dict[str, str] = {}
+
+        def snapshot(self) -> _StubConfig:
+            return self
+
+    monkeypatch.setattr("vesta.api.bench.app_config", _StubConfig())
+    monkeypatch.setattr("vesta.api.bench.make_judge_llm", lambda _state, _m: (None, None))
+
+    counts = {"active": 0, "peak": 0}
+
+    async def _fake_run_benchmark(**kwargs: Any) -> list[BenchRunRecord]:
+        counts["active"] += 1
+        counts["peak"] = max(counts["peak"], counts["active"])
+        await asyncio.sleep(0)  # yield: an unlocked gate would interleave here
+        counts["active"] -= 1
+        return []
+
+    monkeypatch.setattr("vesta.api.bench.run_benchmark", _fake_run_benchmark)
+
+    body = bench.BenchRunRequest(systems=["sources_only"], models=["model-a"])
+
+    async def _group(tag: str) -> None:
+        await bench._run_to_completion(
+            state=None,  # type: ignore[arg-type]
+            store=None,  # type: ignore[arg-type]
+            body=body,
+            dataset=None,
+            questions=[],
+            sut_list=[],
+            judge_model="",
+            run_group=tag,
+            run_ids=[1],
+            repeats=1,
+            judge_concurrency=1,
+            judge_shares_endpoint=False,
+        )
+
+    await asyncio.gather(_group("g1"), _group("g2"))
+    assert counts["peak"] == 1
+    assert bench._RUN_GATE.locked() is False
+
+
 # ── Driver event reduction (adapted from the old InProcessAnswerDriver) ─────
 
 

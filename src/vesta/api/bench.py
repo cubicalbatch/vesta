@@ -219,8 +219,8 @@ async def _drive_answer_events(  # noqa: PLR0912
     The gateway is wrapped in a :class:`UsageRecorder` for the duration of the
     call so every LLM round (generation, reformulation, rewrite, tool decisions)
     is attributed to this question's token count. ``state.gateway`` is restored
-    in ``finally`` — the benchmark runs sequentially (pipeline concurrency 1),
-    so the swap is safe.
+    in ``finally`` — cells run at pipeline concurrency 1 and whole groups are
+    serialized by ``_RUN_GATE``, so the swap never nests.
     """
     from vesta.inference.gateway import UsageRecorder
 
@@ -1563,6 +1563,14 @@ router = APIRouter(prefix="/api/bench", tags=["bench"])
 _tasks: dict[str, asyncio.Task[None]] = {}
 _progress: dict[str, dict[int, dict[str, object]]] = {}
 
+#: Serializes group execution across requests: ``_drive_answer_events``
+#: temporarily swaps the process-global ``state.gateway`` for a per-question
+#: ``UsageRecorder``, so two groups running concurrently would nest recorders
+#: and attribute tokens to the wrong run. One worker, one event loop: a module
+#: lock matches the ``_tasks`` registry; POST /run refuses with 409 while it
+#: is held, and this gate is the backstop that keeps overlap unreachable.
+_RUN_GATE = asyncio.Lock()
+
 
 def _metric(metrics: dict[str, object], path: str) -> object:
     """Look a metric up in ``metrics_json`` by dotted path (``answer.strict_accuracy``)."""
@@ -1898,52 +1906,53 @@ async def _run_to_completion(
     judge_shares_endpoint: bool,
 ) -> None:
     """Run the real matrix over the pre-seeded placeholder rows and sweep them."""
-    judge_gateway: Any | None = None
-    try:
-        judge, judge_gateway = make_judge_llm(state, judge_model)
-        store_wrapped = _PreSeededStore(store, run_ids)
+    async with _RUN_GATE:
+        judge_gateway: Any | None = None
+        try:
+            judge, judge_gateway = make_judge_llm(state, judge_model)
+            store_wrapped = _PreSeededStore(store, run_ids)
 
-        def _progress_cb(update: Any) -> None:
-            prog = _progress.get(run_group)
-            if prog is not None:
-                prog[update.run_id] = {
-                    "system": update.system,
-                    "stage": update.stage,
-                    "done": update.done,
-                    "total": update.total,
-                }
+            def _progress_cb(update: Any) -> None:
+                prog = _progress.get(run_group)
+                if prog is not None:
+                    prog[update.run_id] = {
+                        "system": update.system,
+                        "stage": update.stage,
+                        "done": update.done,
+                        "total": update.total,
+                    }
 
-        await run_benchmark(
-            dataset=dataset,
-            questions=questions,
-            systems=sut_list,
-            store=store_wrapped,
-            judge=judge,
-            judge_model=judge_model,
-            run_group=run_group,
-            label=body.label or "",
-            scope=body.scope or "",
-            config_snapshot=dict(app_config.snapshot().values),
-            judge_concurrency=judge_concurrency,
-            judge_shares_endpoint=judge_shares_endpoint,
-            repeats=repeats,
-            max_concurrent=int(BENCH_MAX_CONCURRENT.default),
-            progress=_progress_cb,
-            level=body.level,
-        )
-    except Exception as exc:
-        # Orchestration-level failure (e.g. judge construction): mark every
-        # cell still ``running`` aborted. Completed cells are untouched.
-        reason = f"{type(exc).__name__}: {exc}"
-        for rid in run_ids:
-            with suppress(Exception):
-                await store.mark_aborted(rid, reason)
-    finally:
-        if judge_gateway is not None:
-            with suppress(Exception):
-                await judge_gateway.aclose()
-        _tasks.pop(run_group, None)
-        _progress.pop(run_group, None)
+            await run_benchmark(
+                dataset=dataset,
+                questions=questions,
+                systems=sut_list,
+                store=store_wrapped,
+                judge=judge,
+                judge_model=judge_model,
+                run_group=run_group,
+                label=body.label or "",
+                scope=body.scope or "",
+                config_snapshot=dict(app_config.snapshot().values),
+                judge_concurrency=judge_concurrency,
+                judge_shares_endpoint=judge_shares_endpoint,
+                repeats=repeats,
+                max_concurrent=int(BENCH_MAX_CONCURRENT.default),
+                progress=_progress_cb,
+                level=body.level,
+            )
+        except Exception as exc:
+            # Orchestration-level failure (e.g. judge construction): mark every
+            # cell still ``running`` aborted. Completed cells are untouched.
+            reason = f"{type(exc).__name__}: {exc}"
+            for rid in run_ids:
+                with suppress(Exception):
+                    await store.mark_aborted(rid, reason)
+        finally:
+            if judge_gateway is not None:
+                with suppress(Exception):
+                    await judge_gateway.aclose()
+            _tasks.pop(run_group, None)
+            _progress.pop(run_group, None)
 
 
 # ── Routes ──────────────────────────────────────────────────────────────────
@@ -1954,6 +1963,11 @@ async def run_bench_endpoint(request: Request, body: BenchRunRequest) -> BenchRu
     """Start a run group; returns ``run_group`` + run ids immediately (job-shaped)."""
     state: AppState = app_state(request)
     store = SqliteBenchStore(state.db)
+    if _RUN_GATE.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="another bench run group is currently executing; wait for it to finish",
+        )
 
     dataset_path = body.dataset or str(app_config.get(BENCH_DATASET))
     try:
