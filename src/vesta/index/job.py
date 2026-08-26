@@ -249,6 +249,11 @@ async def _run_build(  # noqa: PLR0912, PLR0915 — the resume/fresh/cancel/pree
         # deletes the old vectors and never touches the ZIM.
         await store.delete_by_zim(zim_id)
         await _reset_articles(db, zim_id)
+        # New article lineage: restart the progress mirror from zero so
+        # GET /api/zims/{id}/index reads 0 until the first batch commits, and
+        # the CLI trust-point gate (cli.py) can't wave a stale sidecar past a
+        # store that was just rebuilt (AUDIT_0822 M8).
+        await _update_index_progress(db, zim_id, 0)
         start_at = 0
         # Zero the cursor NOW, before any batch work: this run's next
         # checkpoint only lands once the first batch has materialized. Dying
@@ -460,8 +465,12 @@ async def _set_index_status(
 
     now = _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat()
     # zims has event timestamps (indexed_at), no generic updated_at (0001_init).
-    sets = ["index_status=?", "index_progress=?"]
-    vals: list[Any] = [status, 0]
+    # index_progress is deliberately NOT touched here (AUDIT_0824 N24): it is
+    # owned by the batch-tick mirror (_update_index_progress) and must survive
+    # status stamps — zeroing on 'complete' erased the final done==total mark,
+    # and zeroing on 'error' hid how far a failed build actually got.
+    sets = ["index_status=?"]
+    vals: list[Any] = [status]
     if depth is not None:
         sets.append("index_depth=?")
         vals.append(depth)

@@ -29,6 +29,7 @@ import pytest
 import pytest_asyncio
 
 import vesta.index
+import vesta.index.job
 from vesta import config
 from vesta.db.connection import Database
 from vesta.db.migrations import run_migrations
@@ -436,6 +437,62 @@ async def test_cancel_marks_paused_and_keeps_checkpoint(rig: _Rig) -> None:
     assert (await rig.store.stats()).total_rows == 0
     # The pool was torn down, not left running.
     assert _FakePool.instances[-1].stopped
+
+
+@pytest.mark.asyncio
+async def test_complete_stamp_keeps_last_real_progress(rig: _Rig) -> None:
+    # AUDIT_0824 N24: every status stamp used to write index_progress=0, so
+    # the 'complete' stamp erased the final done==total mirror the moment the
+    # build finished. Status stamps must leave the tick mirror alone.
+    await IndexZimJob().run(rig.handle, {"zim_id": 1, "depth": 1})
+    row = await rig.zims_row()
+    assert row["index_status"] == "complete"
+    assert int(row["index_progress"] or 0) == len(rig.paths)
+
+
+@pytest.mark.asyncio
+async def test_error_stamp_keeps_partial_progress(
+    rig: _Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Same N24 rule on the failure arm: 'error' records that the build died;
+    # it must not also erase how far it got (the CLI trust-point gate and the
+    # status endpoint both read this mark).
+    monkeypatch.setattr("vesta.index.job._PROGRESS_EVERY", 2)  # tick per batch
+    real_embed = rig.encoder.embed
+
+    async def exploding_embed(texts: list[str], *, kind: str) -> list[np.ndarray]:
+        if len(rig.encoder.embed_calls) >= 1:
+            raise RuntimeError("embedder exploded")
+        return await real_embed(texts, kind=kind)
+
+    monkeypatch.setattr(rig.encoder, "embed", exploding_embed)
+    with pytest.raises(RuntimeError, match="embedder exploded"):
+        await IndexZimJob().run(rig.handle, {"zim_id": 1, "depth": 1})
+    row = await rig.zims_row()
+    assert row["index_status"] == "error"
+    assert 0 < int(row["index_progress"] or 0) < len(rig.paths)
+
+
+@pytest.mark.asyncio
+async def test_fresh_wipe_restarts_the_progress_mirror(
+    rig: _Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # AUDIT_0824 N24 + AUDIT_0822 M8: a fresh rebuild starts a new article
+    # lineage, so the mirror must restart from zero BEFORE any batch tick —
+    # otherwise a stale resume sidecar could pass cli.py's trust-point gate
+    # against a store that was just rebuilt.
+    await IndexZimJob().run(rig.handle, {"zim_id": 1, "depth": 1})  # progress -> total
+    seen: list[int] = []
+    real_mirror = vesta.index.job._update_index_progress
+
+    async def recording_mirror(db: Any, zim_id: int, done: int) -> None:
+        seen.append(done)
+        await real_mirror(db, zim_id, done)
+
+    monkeypatch.setattr(vesta.index.job, "_update_index_progress", recording_mirror)
+    await IndexZimJob().run(rig.handle, {"zim_id": 1, "depth": 1})  # no resume key: fresh
+    assert seen[0] == 0  # lineage wipe resets the mirror first
+    assert seen[-1] == len(rig.paths)
 
 
 async def _submit_parked_build(
