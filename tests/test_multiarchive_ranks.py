@@ -24,6 +24,8 @@ candidate-source test patterns.
 from __future__ import annotations
 
 import asyncio
+import itertools
+import random
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -38,7 +40,7 @@ from vesta.retrieval.contracts import (
     Scope,
 )
 from vesta.retrieval.impls.alias_title_resolve import AliasTitleResolve
-from vesta.retrieval.impls.rrf import RRF
+from vesta.retrieval.impls.rrf import RRF, _rrf_fuse
 from vesta.retrieval.impls.title_suggest import TitleSuggest
 from vesta.retrieval.impls.vector_knn import VectorKnn
 from vesta.retrieval.impls.xapian_fts import XapianFTS
@@ -414,6 +416,62 @@ def test_rrf_union_mode_within_archive_order_ignores_other_archives_volume() -> 
     assert [c.path for c in flipped] == ["B/Q", "B/P"], (
         "an offset fts rank flips the within-archive order the contract forbids"
     )
+
+
+# ── RRF determinism (AUDIT_0824 N41) ─────────────────────────────────────────
+
+
+def _tied_groups() -> dict[FusionKey, list[Candidate]]:
+    """One archive, three sources of 100 disjoint candidates each.
+
+    Every candidate appears in exactly one group, so all candidates sharing a
+    rank are exact RRF-score ties (1/(k + r) each) — the deliberate
+    ``rank_offset`` collisions the built-in profiles construct, at a scale
+    where the downstream ``max_articles=40`` cut lands inside the tie field.
+    """
+    sources = ("xapian_fts", "title_suggest", "title_entity_suggest")
+    return {
+        FusionKey(1, src): [_cand(1, f"A/{src[0]}{i}", i, source=src) for i in range(100)]
+        for src in sources
+    }
+
+
+def test_rrf_tie_order_is_independent_of_group_delivery_order() -> None:
+    """The same candidate groups delivered in any dict insertion order fuse to
+    a byte-identical ranking — including who survives the top-40 truncation."""
+    fuser = RRF(RRF.Params(k=20, across_archives="union"))
+    tr = Trace()
+    groups = _tied_groups()
+
+    reference: list[Candidate] | None = None
+    for perm in itertools.permutations(groups):
+        fused = fuser.fuse({k: groups[k] for k in perm}, tr)
+        if reference is None:
+            reference = fused
+            assert len(fused) == len({c.path for c in fused})
+        else:
+            assert fused == reference, "group delivery order changed the fused ranking"
+
+    # The candidate_articles cap (max_articles=40) cuts inside the tie field:
+    # the survivor set must be stable too.
+    assert reference is not None
+    survivors = [c.path for c in reference[:40]]
+    assert len(survivors) == 40
+    for perm in itertools.permutations(groups):
+        permuted = fuser.fuse({k: groups[k] for k in perm}, tr)
+        assert [c.path for c in permuted[:40]] == survivors
+
+
+def test_rrf_flat_input_is_permutation_invariant() -> None:
+    """_rrf_fuse over one flattened list is invariant under input shuffles —
+    float summation order must not leak into scores or ordering."""
+    flat = [c for cands in _tied_groups().values() for c in cands]
+    base = _rrf_fuse(flat)
+    rng = random.Random(824)
+    for _ in range(25):
+        shuffled = flat[:]
+        rng.shuffle(shuffled)
+        assert _rrf_fuse(shuffled) == base
 
 
 # ── End-to-end: two fake archives through the pipeline ───────────────────────

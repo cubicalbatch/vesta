@@ -49,9 +49,15 @@ def _rrf_fuse(candidates: list[Candidate], k: int = 20) -> list[Candidate]:
     Ties are common (same candidate returned by multiple sources); the RRF score
     naturally sums their contributions. Returns candidates sorted by RRF score
     descending, re-ranked from 0.
+
+    Deterministic under delivery order: contributions are accumulated in a
+    canonically sorted pass (float addition is not associative), duplicate paths
+    keep their smallest ``(rank, source, zim_id)`` representative, and exact
+    score ties are broken by path — so identical inputs fuse identically no
+    matter which concurrent source finished first.
     """
     by_path: dict[str, _CandidateWithScore] = {}
-    for c in candidates:
+    for c in sorted(candidates, key=lambda c: (c.path, c.rank, c.source, c.zim_id)):
         if c.path not in by_path:
             by_path[c.path] = _CandidateWithScore(candidate=c, rrf_score=1.0 / (k + c.rank))
         else:
@@ -61,7 +67,7 @@ def _rrf_fuse(candidates: list[Candidate], k: int = 20) -> list[Candidate]:
                 rrf_score=existing.rrf_score + 1.0 / (k + c.rank),
             )
 
-    sorted_ = sorted(by_path.values(), key=lambda x: x.rrf_score, reverse=True)
+    sorted_ = sorted(by_path.values(), key=lambda x: (-x.rrf_score, x.candidate.path))
 
     result: list[Candidate] = []
     for rank, item in enumerate(sorted_):

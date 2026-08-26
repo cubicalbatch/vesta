@@ -220,15 +220,14 @@ async def run_pipeline(  # noqa: PLR0912,PLR0915
             st.add_outputs({"terms": list(pq.terms), "text": pq.text})
 
     # ── Step 2: CandidateSources (concurrent fan-out) ─────────────────────
-    all_candidates: dict[FusionKey, list[Candidate]] = {}
     sem = deps.semaphore or asyncio.Semaphore(4)
 
-    async def _run_source(pc: ProfileComponent) -> None:
+    async def _run_source(pc: ProfileComponent) -> list[Candidate]:
         cls = resolve_component("candidate_source", pc.impl)
         if cls is None:
-            return
+            return []
         if not _check_capabilities(cls, "candidate_source", pc.impl, capabilities, tr):
-            return
+            return []
         params = _resolve_params(cls, pc.params)
         try:
             instance = cls(
@@ -248,25 +247,32 @@ async def run_pipeline(  # noqa: PLR0912,PLR0915
                 try:
                     instance = cls(params=params) if params is not None else cls()
                 except Exception:
-                    return
+                    return []
             except Exception:
-                return
+                return []
         except Exception:
-            return
+            return []
         async with sem:
             with tr.stage("candidate_source", pc.impl, pc.params) as st:
                 st.add_inputs({"terms": list(pq.terms)})
                 try:
-                    cands = await instance.find(pq, scope, tr)
+                    cands = list(await instance.find(pq, scope, tr))
                 except Exception as exc:
                     st.add_outputs({"error": str(exc)})
                     cands = []
                 st.add_outputs({"candidate_count": len(cands)})
+        return cands
+
+    results = await asyncio.gather(*(_run_source(pc) for pc in profile.sources))
+    # Collect groups in profile order, not coroutine-completion order: fusion
+    # breaks exact score ties by group iteration order, so completion-ordered
+    # dict insertion would flip tied candidates across the downstream
+    # truncation boundary run-to-run on multi-source profiles.
+    all_candidates: dict[FusionKey, list[Candidate]] = {}
+    for cands in results:
         for c in cands:
             k = FusionKey(zim_id=c.zim_id, source=c.source)
             all_candidates.setdefault(k, []).append(c)
-
-    await asyncio.gather(*(_run_source(pc) for pc in profile.sources))
 
     # Agreement signal: Jaccard overlap between the candidate sets
     # produced by distinct sources. Computed here — only the pipeline sees the
