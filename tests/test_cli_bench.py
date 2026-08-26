@@ -302,6 +302,77 @@ async def test_bench_compare_buckets(
 
 
 @pytest.mark.asyncio
+async def test_bench_run_baseline_compare_failure_propagates(
+    cli_db: Database, monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A missing ``bench run --baseline`` comparison fails the CLI command."""
+    from vesta import config as app_config
+
+    @asynccontextmanager
+    async def _fake_open(*_args: object, **_kwargs: object):
+        app_config.configure()
+        yield _fake_state(cli_db)
+
+    async def _fake_run_benchmark(**_kwargs: object) -> list[BenchRunRecord]:
+        return [_run_record(7)]
+
+    monkeypatch.setattr(cli, "_open_runtime", _fake_open)
+    monkeypatch.setattr("vesta.eval.bench_runner.run_benchmark", _fake_run_benchmark)
+    monkeypatch.setattr("vesta.api.bench.make_judge_llm", lambda *_a, **_k: (None, None))
+
+    args = cli._build_parser().parse_args(
+        [
+            "bench",
+            "run",
+            "--limit",
+            "2",
+            "--no-persist",
+            "--model",
+            "stub-model",
+            "--baseline",
+            "999",
+        ]
+    )
+    code = await cli._cmd_bench_run(args)
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "compare: run 999 not found." in out
+
+
+@pytest.mark.asyncio
+async def test_eval_run_baseline_failure_propagates(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """The retrieval command returns a missing-baseline failure to its caller."""
+    profile = load_profile("lexical")
+    assert profile is not None
+
+    async def _fake_evaluate(
+        *_args: object, **_kwargs: object
+    ) -> tuple[object, tuple[object, ...]]:
+        return object(), ()
+
+    async def _failed_baseline(*_args: object, **_kwargs: object) -> int:
+        return 1
+
+    monkeypatch.setattr(cli, "_resolve_profile", lambda *_args: profile)
+    monkeypatch.setattr(cli, "load_set", lambda _name: object())
+    monkeypatch.setattr(cli, "CLIPipelineRunner", lambda _state: object())
+    monkeypatch.setattr(cli, "evaluate_profile", _fake_evaluate)
+    monkeypatch.setattr(cli, "_print_run_report", lambda *_args: None)
+    monkeypatch.setattr(cli, "_print_baseline_delta", _failed_baseline)
+
+    args = SimpleNamespace(
+        profile="lexical",
+        golden="fixture_subset",
+        sweep=None,
+        no_persist=True,
+        baseline="999",
+    )
+    assert await cli._eval_run(SimpleNamespace(), args) == 1
+
+
+@pytest.mark.asyncio
 async def test_bench_compare_refuses_dataset_mismatch(
     cli_db: Database, monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -762,6 +833,19 @@ async def _stub_judge_verdict(
     )
 
 
+async def _stub_judge_incorrect(
+    *,
+    question: BenchQuestion,
+    model_answer: str,
+    abstained: bool,
+    judge: object,
+    judge_model: str,
+) -> Any:
+    from vesta.eval.bench_scoring import Verdict
+
+    return SimpleNamespace(verdict=Verdict.INCORRECT, reason="stub-always-wrong")
+
+
 def _serial_reference_stdout(qs: Sequence[BenchQuestion]) -> str:
     """The pre-P4 serial algorithm's printed lines, computed independently."""
     support: dict[str, bool] = {}
@@ -798,6 +882,8 @@ async def _run_verify_once(
     monkeypatch: MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     extra_args: list[str],
+    *,
+    judge_fn: Any = _stub_judge_verdict,
 ) -> tuple[int, str, bytes, dict[str, Any]]:
     """One full `bench verify` run against the offline fixture; returns exit
     code + stdout + the review md bytes + the review json (minus timestamp)."""
@@ -824,7 +910,7 @@ async def _run_verify_once(
     monkeypatch.setattr("vesta.eval.bench_dataset.load_bench_dataset", lambda _path=None: dataset)
     monkeypatch.setattr("vesta.api.bench.make_judge_llm", lambda *_a, **_k: (None, None))
     monkeypatch.setattr("vesta.api.bench.make_system", _make_system)
-    monkeypatch.setattr("vesta.eval.bench_scoring.judge_verdict", _stub_judge_verdict)
+    monkeypatch.setattr("vesta.eval.bench_scoring.judge_verdict", judge_fn)
     monkeypatch.setattr(cli, "_extract_article", _noop_extract)
 
     run_dir = tmp_path / f"run-{'-'.join(extra_args) or 'defaults'}"
@@ -857,8 +943,9 @@ async def test_bench_verify_output_identical_serial_vs_concurrent(
     defaults = await _run_verify_once(tmp_path, monkeypatch, capsys, [])
 
     for code, stdout, _md, _payload in (serial, wide, defaults):
-        assert code == 0
+        assert code == 1
         assert stdout == expected_stdout  # golden vs the old serial algorithm
+        assert "floor (closed-book, excl lookup) ≤ 20%? 50.0% FAIL" in stdout
     assert serial[2] == wide[2] == defaults[2], "review md must be byte-identical"
     assert serial[3] == wide[3] == defaults[3], "review json must agree (modulo stamp)"
 
@@ -879,6 +966,19 @@ async def test_bench_verify_output_identical_serial_vs_concurrent(
         "incorrect",
     ]
     assert all(questions[q]["oracle"]["verdict"] == "correct" for q in questions)
+
+
+@pytest.mark.asyncio
+async def test_bench_verify_ceiling_failure_propagates(
+    tmp_path: Path, monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An oracle ceiling violation also makes ``bench verify`` fail."""
+    code, stdout, _md, _payload = await _run_verify_once(
+        tmp_path, monkeypatch, capsys, [], judge_fn=_stub_judge_incorrect
+    )
+    assert code == 1
+    assert "ceiling (oracle) ≥ 85%? 0.0% FAIL" in stdout
+    assert "floor (closed-book, excl lookup) ≤ 20%? 0.0% PASS" in stdout
 
 
 def test_bench_verify_flags_parsing() -> None:

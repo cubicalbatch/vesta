@@ -911,9 +911,12 @@ async def _cmd_bench_run(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR
         if args.baseline:
             try:
                 base_id = int(args.baseline)
-                await _cmd_bench_compare(state, base_id, records[0].id)
+                compare_code = await _cmd_bench_compare(state, base_id, records[0].id)
             except (ValueError, IndexError):
                 print(f"warning: could not compare against baseline {args.baseline!r}")
+                return 1
+            if compare_code:
+                return compare_code
         return 0
 
 
@@ -1331,8 +1334,8 @@ async def _cmd_bench_verify(args: argparse.Namespace) -> int:
         _write_verification_review(
             dataset, qs, support, closed, closed_judged, oracle, oracle_judged, answer_model
         )
-
         # Derived checks over active questions.
+        exit_code = 0
         active = [q for q in qs if q.status == "active"]
         if active:
             oracle_correct = sum(
@@ -1344,16 +1347,20 @@ async def _cmd_bench_verify(args: argparse.Namespace) -> int:
                 1 for q in non_lookup if closed_judged[q.id].verdict == Verdict.CORRECT
             )
             floor = cb_correct / len(non_lookup) if non_lookup else 0.0
+            ceiling_passed = ceiling >= 0.85
+            floor_passed = floor <= 0.20
             print(
                 f"ceiling (oracle) ≥ 85%? {ceiling * 100:.1f}% "
-                f"{'PASS' if ceiling >= 0.85 else 'FAIL'}"
+                f"{'PASS' if ceiling_passed else 'FAIL'}"
             )
             print(
                 f"floor (closed-book, excl lookup) ≤ 20%? {floor * 100:.1f}% "
-                f"{'PASS' if floor <= 0.20 else 'FAIL'}"
+                f"{'PASS' if floor_passed else 'FAIL'}"
             )
+            if not ceiling_passed or not floor_passed:
+                exit_code = 1
         print("wrote benchmarks/verification review files (.md + .json).")
-        return 0
+        return exit_code
 
 
 async def _verify_support(
@@ -1827,7 +1834,7 @@ async def _eval_run(state: AppState, args: argparse.Namespace) -> int:
         )
         print(f"\n persisted run id={run_id}")
     if args.baseline:
-        await _print_baseline_delta(
+        return await _print_baseline_delta(
             state, args, profile, golden, runner, metrics=metrics, results=results
         )
     return 0
