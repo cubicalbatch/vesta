@@ -21,6 +21,7 @@
 	$effect(() => {
 		if (!open) return;
 		loading = true;
+		error = null;
 		conversationsApi
 			.list(50)
 			.then((res) => (items = res))
