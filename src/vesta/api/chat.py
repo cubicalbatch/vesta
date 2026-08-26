@@ -29,7 +29,7 @@ from pydantic import BaseModel
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 
 from vesta import config as app_config
-from vesta.answer import CHAT_HISTORY_MAX_TURNS, CHAT_HISTORY_STRATEGY
+from vesta.answer import CHAT_HISTORY_MAX_TURNS
 from vesta.answer.contracts import (
     AnswerResetEvent,
     CitationsEvent,
@@ -160,11 +160,7 @@ async def _run_chat_turn(
     pairs = tuple(
         (m.role, m.content or "") for m in prior if m.role in ("user", "assistant") and m.content
     )
-    history = build_history(
-        pairs,
-        max_turns=_history_max_turns(),
-        strategy=_history_strategy(),
-    )
+    history = build_history(pairs, max_turns=_history_max_turns())
 
     # 2. Persist the user message now — it is known before streaming, so a
     #    mid-stream crash still records the question.
@@ -319,13 +315,6 @@ def _history_max_turns() -> int:
         return max(1, int(app_config.get(CHAT_HISTORY_MAX_TURNS)))
     except Exception:
         return int(CHAT_HISTORY_MAX_TURNS.default)
-
-
-def _history_strategy() -> str:
-    try:
-        return str(app_config.get(CHAT_HISTORY_STRATEGY))
-    except Exception:
-        return str(CHAT_HISTORY_STRATEGY.default)
 
 
 def _to_summary(c: StoredConversation) -> ConversationSummary:

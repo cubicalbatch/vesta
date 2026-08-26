@@ -10,8 +10,8 @@ exactly what the single-turn endpoint already does, plus ``history``.
 This module owns the *pure* history policy and title derivation so it is testable
 without a DB. It must not import ``db`` (``answer/`` is at its 3-dep cap); it
 receives history as ``(role, content)`` string pairs the API layer already
-loaded, and returns the bounded result. ``truncate``/``summarize`` are settings
-(``chat.history.strategy``), not code branches scattered through the request path.
+loaded, and returns the bounded result. The history bound
+(``chat.history.max_turns``) is a setting, not a code branch in the request path.
 
 The actual retrieval + strategy run is NOT done here — it is shared with
 ``GET /api/answer`` via ``iter_answer_events``. This is what keeps chat from
@@ -27,7 +27,6 @@ def build_history(
     prior: Sequence[tuple[str, str]],
     *,
     max_turns: int,
-    strategy: str = "truncate",
 ) -> tuple[tuple[str, str], ...]:
     """Bound ``prior`` conversation per ``chat.history.*`` policy.
 
@@ -38,16 +37,11 @@ def build_history(
     rewriter applies its own smaller ``max_history_turns`` cap on top, so the
     rewrite prompt is bounded twice.
 
-    ``strategy``:
-
-    * ``"truncate"`` — keep the most recent ``max_turns`` entries (default).
-    * ``"summarize"`` — behaves as truncate until an LLM summarizer lands. The
-      setting makes the upgrade a config change, not a code change.
+    ``max_turns`` keeps the most recent entries; older turns are dropped.
     """
     if max_turns <= 0 or not prior:
         return ()
     bounded = list(prior)[-max_turns:]
-    # ``summarize`` currently == ``truncate``; an LLM summarizer may change this.
     return tuple(bounded)
 
 

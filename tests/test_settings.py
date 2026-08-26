@@ -26,13 +26,12 @@ def test_judge_inference_settings_declared() -> None:
 
 
 def test_chat_history_and_trace_settings_declared() -> None:
-    """Chat history and trace retention knobs are registered with defaults, bounds, and choices."""
+    """Chat history and trace retention knobs are registered with defaults and bounds."""
     import vesta.answer  # noqa: F401 — importing registers the chat settings
 
     schema = {s.key: s for s in config.schema()}
     expected: dict[str, tuple[object, str]] = {
         "chat.history.max_turns": (10, "integer"),
-        "chat.history.strategy": ("truncate", "string"),
         "chat.trace_retention_days": (7, "integer"),
     }
     for key, (default, typ) in expected.items():
@@ -46,7 +45,6 @@ def test_chat_history_and_trace_settings_declared() -> None:
 
     assert (schema["chat.history.max_turns"].min, schema["chat.history.max_turns"].max) == (1, 50)
     assert schema["chat.trace_retention_days"].min == 0
-    assert schema["chat.history.strategy"].choices == ("truncate", "summarize")
 
 
 def test_schema_describes_every_declared_setting() -> None:

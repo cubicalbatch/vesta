@@ -51,20 +51,9 @@ CHAT_HISTORY_MAX_TURNS = setting(
     10,
     group="Chat",
     help="Maximum prior turns retained in the prompt for a multi-turn chat. "
-    "Beyond this the chat.history.strategy policy applies.",
+    "Older turns are dropped from the prompt.",
     min=1,
     max=50,
-    hot=True,
-)
-CHAT_HISTORY_STRATEGY = setting(
-    "chat.history.strategy",
-    str,
-    "truncate",
-    group="Chat",
-    help="Policy when chat.history.max_turns is exceeded: 'truncate' (keep the "
-    "most recent turns) or 'summarize' (compress older turns into a summary). "
-    "A setting, not code, so the policy is tunable without touching chat.",
-    choices=("truncate", "summarize"),
     hot=True,
 )
 CHAT_TRACE_RETENTION_DAYS = setting(
@@ -515,7 +504,6 @@ __all__ = [
     "ANSWER_REFORMULATE_TRIGGER_SCORE",
     "ANSWER_STRATEGY",
     "CHAT_HISTORY_MAX_TURNS",
-    "CHAT_HISTORY_STRATEGY",
     "CHAT_TRACE_RETENTION_DAYS",
     "resolve_strategy_name",
     "select_strategy",

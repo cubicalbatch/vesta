@@ -46,12 +46,6 @@ class TestBuildHistory:
         prior = (("user", "hi"), ("assistant", "hello"))
         assert build_history(prior, max_turns=10) == prior
 
-    def test_summarize_strategy_behaves_as_truncate(self) -> None:
-        prior = tuple(("user", f"msg{i}") for i in range(5))
-        truncated = build_history(prior, max_turns=2, strategy="truncate")
-        summarized = build_history(prior, max_turns=2, strategy="summarize")
-        assert truncated == summarized
-
 
 class TestDeriveTitle:
     def test_short_text_is_its_own_title(self) -> None:
