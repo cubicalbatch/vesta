@@ -109,7 +109,6 @@ def _spec(**overrides: Any) -> ModelSpec:
         "passage_prefix": "",
         "normalize": True,
         "pooling": "mean",
-        "license": "mit",
     }
     base.update(overrides)
     return ModelSpec(**base)  # type: ignore[arg-type]

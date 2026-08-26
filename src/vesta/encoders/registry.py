@@ -55,7 +55,6 @@ class ModelSpec:
     passage_prefix: str
     normalize: bool
     pooling: Literal["cls", "mean"]
-    license: str
 
 
 #: Known models, keyed by HF repo id. Settings (``encoders.<role>.model``) hold
@@ -74,7 +73,6 @@ MODEL_SPECS: dict[str, ModelSpec] = {
         passage_prefix="",
         normalize=True,
         pooling="mean",
-        license="mit",
     ),
     "onnx-community/granite-embedding-small-english-r2-ONNX": ModelSpec(
         repo_id="onnx-community/granite-embedding-small-english-r2-ONNX",
@@ -88,7 +86,6 @@ MODEL_SPECS: dict[str, ModelSpec] = {
         passage_prefix="",
         normalize=True,
         pooling="mean",
-        license="apache-2.0",
     ),
     "onnx-community/gte-modernbert-base-ONNX": ModelSpec(
         repo_id="onnx-community/gte-modernbert-base-ONNX",
@@ -102,7 +99,6 @@ MODEL_SPECS: dict[str, ModelSpec] = {
         passage_prefix="",
         normalize=True,
         pooling="mean",
-        license="apache-2.0",
     ),
     "Xenova/ms-marco-MiniLM-L-6-v2": ModelSpec(
         repo_id="Xenova/ms-marco-MiniLM-L-6-v2",
@@ -116,7 +112,6 @@ MODEL_SPECS: dict[str, ModelSpec] = {
         passage_prefix="",
         normalize=False,
         pooling="cls",  # BERT [CLS] pooled classifier head; informational only
-        license="apache-2.0",
     ),
 }
 
