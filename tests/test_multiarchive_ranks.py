@@ -395,6 +395,49 @@ def test_rrf_global_mode_interleaves_with_group_local_ranks() -> None:
     )
 
 
+def test_rrf_global_mode_preserves_cross_archive_identity() -> None:
+    """AUDIT_0824 N42: two archives exposing the identical path must both
+    survive global ``across_archives='rrf'`` fusion, each attributed to its
+    own archive — bare-path keying merged them into one entry and silently
+    dropped the second archive's nomination.
+    """
+    groups = {
+        FusionKey(1, "xapian_fts"): [
+            _cand(1, "Common", 0),
+            _cand(1, "Only1", 1),
+        ],
+        FusionKey(2, "xapian_fts"): [
+            _cand(2, "Common", 0),
+            _cand(2, "Only2", 1),
+        ],
+    }
+    fused = RRF(RRF.Params(k=20, across_archives="rrf")).fuse(groups, Trace())
+
+    # All four candidates survive; the shared path appears once per archive.
+    assert sorted((c.zim_id, c.path) for c in fused) == [
+        (1, "Common"),
+        (1, "Only1"),
+        (2, "Common"),
+        (2, "Only2"),
+    ]
+    # The tied rank-0 hits keep full RRF mass — neither was absorbed into the
+    # other (which would have produced one candidate scored 2/(k+0)).
+    common = {c.zim_id: c.score for c in fused if c.path == "Common"}
+    assert common == {1: 1 / 20, 2: 1 / 20}
+    # Deterministic attribution under any group delivery order.
+    tr = Trace()
+    for perm in itertools.permutations(groups):
+        permuted = RRF(RRF.Params(k=20, across_archives="rrf")).fuse(
+            {k: groups[k] for k in perm}, tr
+        )
+        assert sorted((c.zim_id, c.path) for c in permuted) == [
+            (1, "Common"),
+            (1, "Only1"),
+            (2, "Common"),
+            (2, "Only2"),
+        ]
+
+
 def test_rrf_union_mode_within_archive_order_ignores_other_archives_volume() -> None:
     """Within one archive, fused order must depend only on group-local ranks.
     An fts hit at correct rank 0 outranks a deep suggest-only hit; the same hit

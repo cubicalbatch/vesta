@@ -51,23 +51,32 @@ def _rrf_fuse(candidates: list[Candidate], k: int = 20) -> list[Candidate]:
     descending, re-ranked from 0.
 
     Deterministic under delivery order: contributions are accumulated in a
-    canonically sorted pass (float addition is not associative), duplicate paths
-    keep their smallest ``(rank, source, zim_id)`` representative, and exact
-    score ties are broken by path — so identical inputs fuse identically no
-    matter which concurrent source finished first.
+    canonically sorted pass (float addition is not associative), duplicate
+    ``(zim_id, path)`` pairs keep their smallest ``(rank, source)``
+    representative, and exact score ties are broken by ``(zim_id, path)`` —
+    so identical inputs fuse identically no matter which concurrent source
+    finished first.
+
+    Candidates are keyed by ``(zim_id, path)``, never by bare path: two
+    archives may legitimately expose the same path, and fusing them into one
+    entry would attribute both nominations to a single archive and silently
+    drop the other's downstream extraction.
     """
-    by_path: dict[str, _CandidateWithScore] = {}
-    for c in sorted(candidates, key=lambda c: (c.path, c.rank, c.source, c.zim_id)):
-        if c.path not in by_path:
-            by_path[c.path] = _CandidateWithScore(candidate=c, rrf_score=1.0 / (k + c.rank))
+    by_key: dict[tuple[int, str], _CandidateWithScore] = {}
+    for c in sorted(candidates, key=lambda c: (c.zim_id, c.path, c.rank, c.source)):
+        key = (c.zim_id, c.path)
+        if key not in by_key:
+            by_key[key] = _CandidateWithScore(candidate=c, rrf_score=1.0 / (k + c.rank))
         else:
-            existing = by_path[c.path]
-            by_path[c.path] = _CandidateWithScore(
+            existing = by_key[key]
+            by_key[key] = _CandidateWithScore(
                 candidate=existing.candidate,
                 rrf_score=existing.rrf_score + 1.0 / (k + c.rank),
             )
 
-    sorted_ = sorted(by_path.values(), key=lambda x: (-x.rrf_score, x.candidate.path))
+    sorted_ = sorted(
+        by_key.values(), key=lambda x: (-x.rrf_score, x.candidate.zim_id, x.candidate.path)
+    )
 
     result: list[Candidate] = []
     for rank, item in enumerate(sorted_):
