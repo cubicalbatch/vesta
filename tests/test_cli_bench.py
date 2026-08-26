@@ -249,6 +249,7 @@ async def test_bench_compare_refuses_dataset_mismatch(
     """`vesta bench compare` refuses runs over different datasets (exit 1)."""
     from vesta import cli
     from vesta.api.bench import SqliteBenchStore
+
     store = SqliteBenchStore(cli_db)
     rid_a = await store.insert_run(_run_record(1))
     rec_b = replace(_run_record(2), dataset_hash="other")

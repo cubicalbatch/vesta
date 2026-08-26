@@ -1034,9 +1034,7 @@ async def compare_runs(store: BenchStore, run_a: int, run_b: int) -> CompareResu
     rec_a = await store.get_run(run_a)
     rec_b = await store.get_run(run_b)
     if rec_a is None or rec_b is None:
-        raise IncomparableRuns(
-            f"run {run_a if rec_a is None else run_b} not found"
-        )
+        raise IncomparableRuns(f"run {run_a if rec_a is None else run_b} not found")
     if rec_a.dataset_hash != rec_b.dataset_hash:
         raise IncomparableRuns(
             f"dataset mismatch: run {run_a} dataset_hash={rec_a.dataset_hash[:8]!r} "
