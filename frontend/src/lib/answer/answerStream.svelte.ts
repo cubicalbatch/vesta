@@ -10,7 +10,7 @@ import type { SourcesContext } from '../stores/sources-context.svelte';
 export class AnswerStream {
 	state = $state<AnswerState>(createAnswerState());
 	private sources?: SourcesContext;
-	private timer: ReturnType<typeof setTimeout> | null = null;
+	private timer: ReturnType<typeof setTimeout> | undefined = undefined;
 	private consuming = false;
 
 	constructor(sources?: SourcesContext) {
@@ -26,8 +26,8 @@ export class AnswerStream {
 	}
 
 	reset() {
-		if (this.timer) clearTimeout(this.timer);
-		this.timer = null;
+		clearTimeout(this.timer);
+		this.timer = undefined;
 		this.consuming = false;
 		this.state = createAnswerState();
 		if (this.sources) {
@@ -42,7 +42,7 @@ export class AnswerStream {
 		let i = 0;
 		const step = () => {
 			if (i >= events.length) {
-				this.timer = null;
+				this.timer = undefined;
 				return;
 			}
 			this.apply(events[i]);
@@ -80,7 +80,13 @@ export class AnswerStream {
 
 	stop() {
 		this.consuming = false;
-		if (this.timer) clearTimeout(this.timer);
-		this.timer = null;
+		clearTimeout(this.timer);
+		this.timer = undefined;
+		// An aborted stream never receives the wire's `done` event, but the
+		// turn must still end: without a terminal state the spinner, elapsed
+		// counter and "Generating…" run forever and the follow-up input stays
+		// disabled. Apply the same terminal shape the reducer gives `done`
+		// (and `error`): keep whatever partial content arrived, set done.
+		this.apply({ event: 'done', data: {} });
 	}
 }
