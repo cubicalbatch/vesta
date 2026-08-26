@@ -811,16 +811,23 @@ def aggregate_answer_metrics(results: Sequence[ScoredQuestion]) -> AnswerMetrics
 class ReferencePoints:
     """ceiling=oracle, floor=closed_book, system=this run.
 
+    All four counts are taken over the same *oracle-bearing* subset of
+    questions (``reference_n``); ``total`` is the full run size. Computing
+    them over different subsets would let ``system`` outrun ``ceiling`` and
+    push ``headroom_realised`` above 1 on partially-referenced datasets.
+
     ``headroom_realised`` is the headline: of the accuracy this model could
-    achieve, how much did retrieval + agent deliver? Suppressed (``None``) when
-    the oracle was verified against a different model than the run's answer model
-    or when no oracle reference exists.
+    achieve, how much did retrieval + agent deliver? Suppressed (``None``)
+    when no oracle reference exists or when the oracle was verified against
+    a different model than the run's answer model. It can legitimately
+    exceed 1 only if the run answers an oracle-incorrect question correctly.
     """
 
     ceiling: int
     system: int
     floor: int
     total: int
+    reference_n: int
     headroom_realised: float | None
     retrieval_regressions: int
     suppressed_reason: str = ""
@@ -833,16 +840,22 @@ def _is_correct_verdict(v: object) -> bool:
 def reference_points(results: Sequence[ScoredQuestion], *, answer_model: str) -> ReferencePoints:
     """Compute ceiling/system/floor counts + headroom_realised.
 
-    ``retrieval_regressions`` counts questions the model got right closed-book
-    but wrong with retrieval — context poisoning, invisible in a mean.
+    Ceiling, system, floor, and ``retrieval_regressions`` are all computed
+    over the oracle-bearing subset so the headroom fraction compares like
+    with like; with a fully-referenced dataset that subset is every question.
+    ``retrieval_regressions`` counts questions the model got right
+    closed-book but wrong with retrieval — context poisoning, invisible in
+    a mean.
     """
     total = len(results)
-    ceiling = sum(1 for r in results if _is_correct_verdict(r.question.oracle.get("verdict")))
-    floor = sum(1 for r in results if _is_correct_verdict(r.question.closed_book.get("verdict")))
-    system = sum(1 for r in results if r.verdict == Verdict.CORRECT)
+    referenced = [r for r in results if r.question.oracle]
+    n_reference = len(referenced)
+    ceiling = sum(1 for r in referenced if _is_correct_verdict(r.question.oracle.get("verdict")))
+    floor = sum(1 for r in referenced if _is_correct_verdict(r.question.closed_book.get("verdict")))
+    system = sum(1 for r in referenced if r.verdict == Verdict.CORRECT)
     regressions = sum(
         1
-        for r in results
+        for r in referenced
         if _is_correct_verdict(r.question.closed_book.get("verdict"))
         and r.verdict != Verdict.CORRECT
     )
@@ -877,6 +890,7 @@ def reference_points(results: Sequence[ScoredQuestion], *, answer_model: str) ->
         system=system,
         floor=floor,
         total=total,
+        reference_n=n_reference,
         headroom_realised=headroom,
         retrieval_regressions=regressions,
         suppressed_reason=suppressed_reason,

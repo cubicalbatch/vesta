@@ -448,6 +448,10 @@ def _compute_metrics(
             "system": refs.system,
             "floor": refs.floor,
             "total": refs.total,
+            # Questions the counts above are taken over (oracle-bearing
+            # subset); may be smaller than ``total`` on partially-referenced
+            # datasets.
+            "reference_n": refs.reference_n,
             "headroom_realised": refs.headroom_realised,
             "retrieval_regressions": refs.retrieval_regressions,
             "suppressed_reason": refs.suppressed_reason,

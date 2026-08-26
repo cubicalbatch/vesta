@@ -660,6 +660,58 @@ def test_reference_points_headroom_math() -> None:
     assert rp.retrieval_regressions == 1  # c: closed-book right, retrieval wrong
 
 
+def test_reference_points_partial_oracle_coverage_stays_within_ceiling() -> None:
+    """AUDIT_0824 M16: with oracle on only a subset of questions, ``system``
+    must be counted over that same subset. Counting it over the full run let
+    headroom_realised exceed 1 (here 5/3 ≈ 1.67 before the fix)."""
+    qs = [
+        _q(
+            f"o{i}",
+            oracle={"model": "m", "verdict": "correct"},
+            closed_book={"model": "m", "verdict": "incorrect"},
+        )
+        for i in range(3)
+    ] + [_q(f"u{i}") for i in range(3)]  # no oracle block
+    results = [
+        _scored(qs[0], verdict=Verdict.CORRECT),
+        _scored(qs[1], verdict=Verdict.CORRECT),
+        _scored(qs[2], verdict=Verdict.INCORRECT),
+        # Unreferenced questions: system correct, but they must not inflate
+        # system beyond the oracle ceiling.
+        _scored(qs[3], verdict=Verdict.CORRECT),
+        _scored(qs[4], verdict=Verdict.CORRECT),
+        _scored(qs[5], verdict=Verdict.CORRECT),
+    ]
+    rp = reference_points(results, answer_model="m")
+    assert rp.total == 6
+    assert rp.reference_n == 3
+    assert rp.ceiling == 3
+    assert rp.system == 2  # only the referenced subset counts
+    assert rp.floor == 0
+    assert rp.headroom_realised is not None
+    assert rp.headroom_realised <= 1.0
+    assert rp.headroom_realised == pytest.approx(2 / 3)
+
+
+def test_reference_points_no_oracle_zeroes_reference_counts() -> None:
+    """With zero oracle coverage headroom stays suppressed; ceiling/system/
+    floor/regressions are all taken over the empty reference subset."""
+    qs = [_q("a"), _q("b")]
+    results = [
+        _scored(qs[0], verdict=Verdict.CORRECT),
+        _scored(qs[1], verdict=Verdict.INCORRECT),
+    ]
+    rp = reference_points(results, answer_model="m")
+    assert rp.total == 2
+    assert rp.reference_n == 0
+    assert rp.ceiling == 0
+    assert rp.system == 0
+    assert rp.floor == 0
+    assert rp.retrieval_regressions == 0
+    assert rp.headroom_realised is None
+    assert "no oracle" in rp.suppressed_reason
+
+
 def test_reference_points_suppressed_on_model_mismatch() -> None:
     """Trap 15: an oracle verified against a different model says nothing about
     this run's headroom — headroom_realised is suppressed."""
