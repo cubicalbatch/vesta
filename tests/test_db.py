@@ -89,9 +89,10 @@ async def test_fresh_db_reaches_full_schema(tmp_db_path: Path) -> None:
                 13,
                 14,
                 15,
+                16,
             ]
-        )  # ...+bench_runs +token usage +retire_agentic_settings +retire_single_shot +article_documents +index_leases +messages_conversation_id
-        assert await current_version(conn) == 15
+        )  # ...+bench_runs +token usage +retire_agentic_settings +retire_single_shot +article_documents +index_leases +messages_conversation_id +eval_runs_status
+        assert await current_version(conn) == 16
     tables = await _table_names(db)
     await db.stop()
     assert tables >= EXPECTED_TABLES
@@ -146,14 +147,14 @@ async def test_failed_migration_rolls_back_atomically(
     await db.start()
     async with db.write() as conn:
         applied = await run_migrations(conn)
-        assert len(applied) == 15
-        assert await current_version(conn) == 15
+        assert len(applied) == 16
+        assert await current_version(conn) == 16
 
-        probe_sql = tmp_path / "0016_atomicity_probe.sql"
+        probe_sql = tmp_path / "0017_atomicity_probe.sql"
         monkeypatch.setattr(
             db_migrations,
             "available_migrations",
-            lambda: [(16, "atomicity_probe", probe_sql)],
+            lambda: [(17, "atomicity_probe", probe_sql)],
         )
 
         # First half succeeds (CREATE TABLE), second half errors mid-script.
@@ -165,7 +166,7 @@ async def test_failed_migration_rolls_back_atomically(
         with pytest.raises(MigrationError):
             await run_migrations(conn)
 
-        assert await current_version(conn) == 15  # bump rolled back
+        assert await current_version(conn) == 16  # bump rolled back
         async with conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='m6_atomicity_probe'"
         ) as cur:
@@ -177,8 +178,8 @@ async def test_failed_migration_rolls_back_atomically(
             "INSERT INTO m6_atomicity_probe VALUES (1);\n",
             encoding="utf-8",
         )
-        assert await run_migrations(conn) == [16]
-        assert await current_version(conn) == 16
+        assert await run_migrations(conn) == [17]
+        assert await current_version(conn) == 17
         async with conn.execute("SELECT COUNT(*) FROM m6_atomicity_probe") as cur:
             row = await cur.fetchone()
         assert row is not None and row[0] == 1
@@ -232,9 +233,9 @@ async def test_previous_version_reaches_same_state(tmp_db_path: Path) -> None:
         v2 = await current_version(conn)
     second_tables = await _table_names(db)
     await db.stop()
-    assert v1 == v2 == 15  # 0001-0015: init+aliases+eval pins+vectors+answer_runs+catalog_fts+
+    assert v1 == v2 == 16  # 0001-0016: init+aliases+eval pins+vectors+answer_runs+catalog_fts+
     #                   zim_kind+article_media+bench_runs+token_usage+retire_agentic_settings+retire_single_shot
-    #                   +article_documents+index_leases+messages_conversation_id
+    #                   +article_documents+index_leases+messages_conversation_id+eval_runs_status
     assert first_tables == second_tables
 
 

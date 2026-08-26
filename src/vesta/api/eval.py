@@ -14,8 +14,8 @@ runner, which itself imports only ``retrieval`` and ``config``.
 from __future__ import annotations
 
 import asyncio
-import datetime as _dt
 import json
+from dataclasses import replace
 from typing import Any
 
 import aiosqlite
@@ -31,6 +31,7 @@ from vesta.eval.runner import (
     PipelineRunner,
     RunRecord,
     evaluate_profile,
+    now_iso,
     record_from_row,
 )
 from vesta.eval.runner import (
@@ -75,8 +76,8 @@ class SqliteEvalStore(EvalStore):
             cur = await conn.execute(
                 "INSERT INTO eval_runs(started_at, config_json, metrics_json, "
                 "profile_name, profile_hash, golden_hash, archive_checksum, "
-                "git_sha, machine_id, finished_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "git_sha, machine_id, finished_at, status) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     now,
                     config_json,
@@ -88,6 +89,7 @@ class SqliteEvalStore(EvalStore):
                     record.git_sha,
                     record.machine_id,
                     now,
+                    record.status,
                 ),
             )
             return int(cur.lastrowid) if cur.lastrowid is not None else 0
@@ -104,7 +106,8 @@ class SqliteEvalStore(EvalStore):
             cur = await conn.execute(
                 "UPDATE eval_runs SET config_json=?, metrics_json=?, "
                 "profile_name=?, profile_hash=?, golden_hash=?, archive_checksum=?, "
-                "git_sha=?, machine_id=?, finished_at=? WHERE id=?",
+                "git_sha=?, machine_id=?, started_at=?, finished_at=?, status=? "
+                "WHERE id=?",
                 (
                     config_json,
                     metrics_json,
@@ -115,6 +118,8 @@ class SqliteEvalStore(EvalStore):
                     record.git_sha,
                     record.machine_id,
                     record.started_at,
+                    now_iso(),  # finished_at: stamped when the run lands
+                    record.status,
                     run_id,
                 ),
             )
@@ -143,6 +148,7 @@ def _row_to_record(row: aiosqlite.Row) -> RunRecord:
         config=config,
         metrics_blob=metrics_blob,
         started_at=row["started_at"] or "",
+        status=str(row["status"] or "done"),
         profile_name=row["profile_name"],
         profile_hash=row["profile_hash"],
         golden_hash=row["golden_hash"],
@@ -249,11 +255,14 @@ async def run_eval(
 
     store = SqliteEvalStore(state.db)
     # Insert a placeholder row synchronously so the id exists before we return.
-    placeholder = _placeholder_record(profile, body)
+    # The row is stamped 'running' with the real start time; the background
+    # task overwrites it (status included) when the run lands or fails.
+    started_at = now_iso()
+    placeholder = _placeholder_record(profile, body, started_at=started_at)
     run_id = await store.insert_run(placeholder)
 
     task = asyncio.create_task(
-        _run_to_completion(state, store, profile, body, run_id), name=f"eval-{run_id}"
+        _run_to_completion(state, store, profile, body, run_id, started_at), name=f"eval-{run_id}"
     )
     _tasks[run_id] = task
     return EvalRunResponse(
@@ -308,13 +317,18 @@ def _resolve_profile(state: AppState, name: str) -> RetrievalProfile | None:
     return load_profile("lexical")
 
 
-def _placeholder_record(profile: RetrievalProfile, body: EvalRunRequest) -> RunRecord:
+def _placeholder_record(
+    profile: RetrievalProfile,
+    body: EvalRunRequest,
+    *,
+    started_at: str = "",
+) -> RunRecord:
     from vesta.eval.metrics import LatencyPercentiles, RunMetrics
 
     golden = load_set(body.golden_set)
     return RunRecord(
         id=0,
-        started_at="",
+        started_at=started_at,
         profile_name=profile.name,
         profile_hash=profile.hash,
         profile_yaml="",
@@ -327,6 +341,7 @@ def _placeholder_record(profile: RetrievalProfile, body: EvalRunRequest) -> RunR
         metrics=RunMetrics({}, LatencyPercentiles(), False, (), 0),
         per_query=(),
         notes=body.notes or "running",
+        status="running",
     )
 
 
@@ -336,6 +351,7 @@ async def _run_to_completion(
     profile: RetrievalProfile,
     body: EvalRunRequest,
     run_id: int,
+    started_at: str,
 ) -> None:
     """Run the golden set, then overwrite the placeholder row with the result."""
     try:
@@ -344,32 +360,21 @@ async def _run_to_completion(
         metrics, results = await evaluate_profile(profile, runner, golden)
         snapshot = app_config.snapshot().values
         record = _build_record(
-            profile, golden, metrics, results, snapshot=dict(snapshot), notes=body.notes
+            profile,
+            golden,
+            metrics,
+            results,
+            snapshot=dict(snapshot),
+            notes=body.notes,
+            started_at=started_at,
         )
         await store.update_run(run_id, record)
     except Exception as exc:  # a failed run records its error, never crashes the API
-        from vesta.eval.metrics import LatencyPercentiles, RunMetrics
-
-        golden = load_set(body.golden_set)
-        err = RunMetrics({}, LatencyPercentiles(), False, (), 0)
-        record = _placeholder_record(profile, body)
-        record = RunRecord(
-            id=run_id,
-            started_at=record.started_at,
-            profile_name=profile.name,
-            profile_hash=profile.hash,
-            profile_yaml=record.profile_yaml,
-            golden_hash=record.golden_hash,
-            archive_path=record.archive_path,
-            archive_checksum=record.archive_checksum,
-            settings_snapshot={},
-            git_sha=record.git_sha,
-            machine_id=record.machine_id,
-            metrics=err,
-            per_query=(),
-            notes=f"error: {exc!r}",
+        placeholder = _placeholder_record(profile, body, started_at=started_at)
+        await store.update_run(
+            run_id,
+            replace(placeholder, id=run_id, notes=f"error: {exc!r}", status="error"),
         )
-        await store.update_run(run_id, record)
     finally:
         _tasks.pop(run_id, None)
 
@@ -382,15 +387,15 @@ def _build_record(
     *,
     snapshot: dict[str, object],
     notes: str,
+    started_at: str,
 ) -> RunRecord:
     """Assemble a fully-populated RunRecord for an update_run write."""
     from vesta.eval.runner import RunRecord as _RR
     from vesta.retrieval.profiles import profile_to_yaml
 
-    now = _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat()
     return _RR(
         id=0,
-        started_at=now,
+        started_at=started_at,
         profile_name=profile.name,
         profile_hash=profile.hash,
         profile_yaml=profile_to_yaml(profile),
@@ -416,10 +421,28 @@ def _to_detail(record: RunRecord) -> EvalRunDetail:
         archive_checksum=record.archive_checksum,
         git_sha=record.git_sha,
         machine_id=record.machine_id,
+        status=record.status,
         metrics=record.to_metrics_json(),
         config=record.to_config_json(),
     )
     return detail
 
 
-__all__ = ["LivePipelineRunner", "SqliteEvalStore", "router"]
+async def reconcile_stale_eval_runs(db: Any) -> int:
+    """Mark eval runs orphaned by a process death as ``error`` (startup).
+
+    A ``POST /api/eval/run`` row is job-shaped: inserted with
+    ``status == 'running'`` and owned by an asyncio task in this process's
+    memory. After a restart every still-``running`` row is by definition
+    orphaned — without the status column it would be indistinguishable from a
+    legitimate all-zero retrieval run. Called once at startup alongside
+    :func:`vesta.api.bench.reconcile_stale_bench_runs`.
+
+    Returns how many runs were marked.
+    """
+    async with db.write() as conn:
+        cur = await conn.execute("UPDATE eval_runs SET status='error' WHERE status='running'")
+        return int(cur.rowcount or 0)
+
+
+__all__ = ["LivePipelineRunner", "SqliteEvalStore", "reconcile_stale_eval_runs", "router"]

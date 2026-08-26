@@ -102,6 +102,11 @@ class RunRecord:
     machine_id: str
     metrics: RunMetrics
     per_query: tuple[dict[str, object], ...]
+    #: Lifecycle state of the row: ``running`` while the background task owns
+    #: it, ``done`` on success, ``error`` on failure or process death. Mirrors
+    #: ``BenchRunRecord.status``; defaults to ``done`` so CLI-persisted runs
+    #: (which are complete by the time they are inserted) need not set it.
+    status: str = "done"
     notes: str = ""
 
     def to_config_json(self) -> dict[str, object]:
@@ -139,6 +144,7 @@ def record_from_row(
     archive_checksum: str | None = None,
     git_sha: str | None = None,
     machine_id: str | None = None,
+    status: str = "done",
 ) -> RunRecord:
     """Reconstruct a :class:`RunRecord` from its persisted columns + JSON blobs.
 
@@ -173,6 +179,7 @@ def record_from_row(
         metrics=metrics,
         per_query=per_query,
         notes=str(config.get("notes") or ""),
+        status=status,
     )
 
 

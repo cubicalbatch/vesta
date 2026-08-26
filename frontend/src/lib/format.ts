@@ -33,9 +33,8 @@ export function formatMediaDuration(totalSeconds: number): string {
 
 /** Renders an ISO datetime, or `—` for null/empty/unparseable input — never
  * the literal "Invalid Date" a bare `new Date(x).toLocaleString()` produces.
- * Needed because at least one backend row (eval run started_at — a bug in
- * `SqliteEvalStore.update_run`, src/vesta/api/eval.py: the UPDATE statement
- * never touches the started_at column) can genuinely ship an empty string. */
+ * Rows may legitimately predate a column's backfill, so empty strings can
+ * still arrive from old data. */
 export function formatDate(iso: string | null | undefined): string {
 	if (!iso) return '—';
 	const d = new Date(iso);

@@ -1,0 +1,11 @@
+-- Migration 0016 — eval_runs gains a lifecycle status: running | done | error.
+--
+-- The API path is job-shaped: POST /api/eval/run inserts a placeholder row and
+-- a background task overwrites it (api/eval.py). Until now the row carried no
+-- lifecycle state, so three things went wrong: a failed run was recorded only
+-- in config_json notes and still read as "done" (the DTO default), a process
+-- death mid-run left an unreconcilable placeholder indistinguishable from a
+-- legitimate all-zero run, and nothing marked the transition. This mirrors
+-- bench_runs.status (migration 0009). Existing rows are completed runs — they
+-- land as 'done'.
+ALTER TABLE eval_runs ADD COLUMN status TEXT NOT NULL DEFAULT 'done';

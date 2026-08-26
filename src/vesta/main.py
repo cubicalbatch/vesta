@@ -299,6 +299,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #     aborted at startup.
     await _reconcile_bench_runs(db, log)
 
+    # 6c'. Reconcile golden-set eval runs a dead process left "running":
+    #      same reasoning as 6c — the background task lives only in this
+    #      process's memory, so any such row is orphaned and gets marked
+    #      error at startup.
+    await _reconcile_eval_runs(db, log)
+
     # 6d. Prune per-question benchmark traces past retention, once at startup
     #     (mirrors 6b): verdicts + retrieval + answer text stay forever; only
     #     the bulky trace_json is bounded by bench.trace_retention_days.
@@ -396,6 +402,19 @@ async def _reconcile_bench_runs(db: Database, log: Any) -> None:
             log.info("bench.runs_reconciled", aborted=bench_aborted)
     except Exception as exc:
         log.warning("bench.reconcile_failed", error=repr(exc))
+
+
+async def _reconcile_eval_runs(db: Database, log: Any) -> None:
+    """Mark orphaned "running" eval rows errored (their task died with the
+    process). Failures are logged, never startup-blocking."""
+    try:
+        from vesta.api.eval import reconcile_stale_eval_runs
+
+        errored = await reconcile_stale_eval_runs(db)
+        if errored:
+            log.info("eval.runs_reconciled", errored=errored)
+    except Exception as exc:
+        log.warning("eval.reconcile_failed", error=repr(exc))
 
 
 async def _prune_bench_traces(db: Database, log: Any) -> None:
