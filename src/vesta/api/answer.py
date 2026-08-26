@@ -818,9 +818,10 @@ def _build_tool_runtime(
 
     ``question`` is the live request's query, closed over by ``_read_article``
     below (iter 17) so the model's own ``read_article`` tool call can apply the
-    same focused-view treatment as the other read sites — without widening
-    :class:`~vesta.answer.tools.ReadArticleFn`'s ``(zim_id, path) -> str``
-    contract, which the ``ToolRuntime`` field and every test fake still rely on.
+    same focused-view treatment as the other read sites. Since AUDIT_0824 N11,
+    :class:`~vesta.answer.tools.ReadArticleFn` also takes a keyword-only
+    ``must_include`` snippet — agent_chat passes each card's retrieval snippet
+    so the stage-1 focused window guarantees it survives elision.
     """
     if state.registry is None:
         return None
@@ -973,7 +974,7 @@ def _build_tool_runtime(
         """
         return await _search(query, scope_str, shorten=False, round0=True)
 
-    async def _read_article(zim_id: int, path: str) -> str:
+    async def _read_article(zim_id: int, path: str, *, must_include: str = "") -> str:
         try:
             arc = registry.get(zim_id)
             article = await arc.extract(path)
@@ -993,12 +994,24 @@ def _build_tool_runtime(
             from vesta.answer.focus import focused_view
             from vesta.answer.tools import _MAX_FULL_ARTICLE_CHARS
 
+            # AUDIT_0824 N11: force the card's retrieval-scored snippet into
+            # this FIRST-stage window via ``must_include_spans`` — otherwise,
+            # for articles longer than the 32k cap, the elision can drop the
+            # passage retrieval scored highest and the harness's stage-2
+            # ``find()`` (on the already-elided excerpt, agent_chat's
+            # ``_capped_read``) can never recover it. The span is located on
+            # the FULL text here, before any elision; same probe shape as the
+            # stage-2 re-derivation so both stages agree.
+            probe = must_include.strip()[:200]
+            idx = text.find(probe) if probe else -1
+            must_spans: tuple[tuple[int, int], ...] = ((idx, idx + len(probe)),) if idx >= 0 else ()
             view = focused_view(
                 text,
                 question,
                 _MAX_FULL_ARTICLE_CHARS,
                 breadcrumb=article.title,
                 stopwords=_resolve_stopwords(sn),
+                must_include_spans=must_spans,
             )
             return view.excerpt
         except Exception as exc:

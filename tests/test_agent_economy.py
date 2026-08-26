@@ -118,6 +118,7 @@ class FakeToolRuntime:
         self.search_calls: list[str] = []
         self.search_exact_calls: list[str] = []
         self.read_calls: list[tuple[int, str]] = []
+        self.must_includes: list[str] = []
 
     async def search(self, query: str, scope: str) -> SearchToolResult:
         self.search_calls.append(query)
@@ -127,8 +128,9 @@ class FakeToolRuntime:
         self.search_exact_calls.append(query)
         return self._result
 
-    async def read_article(self, zim_id: int, path: str) -> str:
+    async def read_article(self, zim_id: int, path: str, *, must_include: str = "") -> str:
         self.read_calls.append((zim_id, path))
+        self.must_includes.append(must_include)
         if isinstance(self._article, dict):
             return self._article[path]
         return self._article
@@ -249,6 +251,91 @@ async def test_read_article_window_contains_scored_passage_not_head_cut(
     tool_text = str(seen[1])
     assert "ANS1915" in tool_text
     assert len(tool_text) < len(article)
+
+
+async def test_read_article_threads_card_snippet_into_seam(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AUDIT_0824 N11: the read_article tool passes each card's retrieval
+    snippet to the injected callable as ``must_include`` — that is the only
+    channel through which the composition root's stage-1 focused window can
+    guarantee the snippet survives its 32k elision."""
+    needle = "The ANSN11 marker constant was recorded here."
+    runtime = FakeToolRuntime([_scored(0, "p")], [_card(0, needle)], "article body")
+    _patch_runtime(monkeypatch, runtime)
+
+    def _model(*a: Any, **k: Any) -> FunctionModel:
+        async def stream_fn(messages: list[ModelMessage], info: Any) -> AsyncIterator[Any]:
+            has_return = any(
+                getattr(m, "parts", None) is not None
+                and any(getattr(p, "part_kind", None) == "tool-return" for p in m.parts)
+                for m in messages
+            )
+            if has_return:
+                yield "The constant is recorded [1]."
+            else:
+                yield {0: DeltaToolCall(name="read_article", json_args='{"n": 1}')}
+
+        return FunctionModel(function=_dummy_request, stream_function=stream_fn)
+
+    monkeypatch.setattr(agent_chat, "_make_model", _model)
+    events = [
+        ev
+        async for ev in agent_chat.iter_agent_turn_events(state, ECONOMY_SN, "ultraviolet constant")
+    ]
+
+    assert not [e for e in events if type(e).__name__ == "ErrorEvent"]
+    assert runtime.read_calls == [(1, "a/0")]
+    assert runtime.must_includes == [needle]
+
+
+async def test_stage1_focused_view_keeps_snippet_beyond_32k_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AUDIT_0824 N11: for an article longer than the 32k stage-1 cap whose
+    best snippet lies beyond what question-term focusing naturally selects,
+    threading the card snippet in via ``must_include`` keeps it in the excerpt
+    (and without the thread the naive window really does drop it)."""
+    from vesta.api.answer import _build_tool_runtime
+
+    # Every chunk contains all question terms → identical IDF scores → the
+    # greedy fill walks chunks in document order until the budget is spent,
+    # so anything past ~32k chars is elided unless a must-include span forces
+    # it. The needle carries none of the question terms and sits at ~45k.
+    unit = "Common filler word about the record appears here again. " * 8
+    lead = "LEAD section of the long record. "
+    needle = "Zqxvv ANS2408 buried marker sentence with no overlap terms."
+    article = lead + unit * 100 + needle + " " + unit * 20
+    assert len(article) > 40_000
+    assert article.find(needle) > 32_000
+
+    class _FakeArchive:
+        async def extract(self, path: str) -> Any:
+            return SimpleNamespace(title="Long record", text=article)
+
+    class _FakeRegistry:
+        def get(self, zim_id: int) -> Any:
+            return _FakeArchive()
+
+    fake_state = SimpleNamespace(registry=_FakeRegistry(), db=None, gateway=None)
+    monkeypatch.setattr("vesta.api.answer._build_reformulator", lambda *a, **k: None)
+    rt = _build_tool_runtime(
+        fake_state,
+        ECONOMY_SN,
+        None,
+        None,
+        "common filler word record",
+        archive_labels={},
+    )
+    assert rt is not None
+
+    # Control: without the threaded snippet, the 32k focused window drops it.
+    bare = await rt.read_article(1, "a/0")
+    assert needle not in bare
+
+    # With the card snippet threaded in, stage 1 forces the span in.
+    threaded = await rt.read_article(1, "a/0", must_include=needle)
+    assert needle in threaded
 
 
 # ── Retry slimming ──────────────────────────────────────────────────────────

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from vesta.retrieval.contracts import (
@@ -81,7 +81,21 @@ class SearchToolResult:
 #: real composition root, unlocking evidence merge) — the tool runtime never
 #: touches ``zim/`` or builds a ``Deps`` itself.
 SearchFn = Callable[[str, str], Awaitable["str | SearchToolResult"]]
-ReadArticleFn = Callable[[int, str], Awaitable[str]]
+
+
+class ReadArticleFn(Protocol):
+    """The injected ``read_article`` callable: ``(zim_id, path) -> text``.
+
+    ``must_include`` (keyword-only, default empty) carries the source card's
+    retrieval snippet (AUDIT_0824 N11). The composition root's focused-view
+    read locates it in the FULL article text and forces the span in via
+    ``must_include_spans``, so the snippet survives the 32k stage-1 elision and
+    the harness's stage-2 ``find()`` succeeds on articles longer than that
+    window. Empty means "no snippet to force" — test fakes keep working
+    unchanged by accepting and ignoring it.
+    """
+
+    def __call__(self, zim_id: int, path: str, *, must_include: str = "") -> Awaitable[str]: ...
 
 
 @dataclass

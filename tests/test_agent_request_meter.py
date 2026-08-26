@@ -105,6 +105,7 @@ class FakeToolRuntime:
         )
         self._article = article
         self.read_calls: list[tuple[int, str]] = []
+        self.must_includes: list[str] = []
 
     async def search(self, query: str, scope: str) -> SearchToolResult:
         return self._result
@@ -112,8 +113,9 @@ class FakeToolRuntime:
     async def search_exact(self, query: str, scope: str) -> SearchToolResult:
         return self._result
 
-    async def read_article(self, zim_id: int, path: str) -> str:
+    async def read_article(self, zim_id: int, path: str, *, must_include: str = "") -> str:
         self.read_calls.append((zim_id, path))
+        self.must_includes.append(must_include)
         return self._article
 
 

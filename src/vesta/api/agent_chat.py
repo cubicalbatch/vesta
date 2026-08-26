@@ -1232,10 +1232,14 @@ class _TurnContext:
         via ``must_include_spans``; the span is re-derived by locating the
         snippet in the text because the tool runtime's text is the
         composition root's focused excerpt (elision markers invalidate the
-        original passage char offsets). This was extracted from the
-        ``read_article`` tool closure so the mechanical pre-read makes the
-        EXACT same call. ``read_max_chars`` 0 (the registered default) or an
-        article already under it passes the text through unchanged.
+        original passage char offsets). Since AUDIT_0824 N11 that excerpt's
+        stage-1 window already forced this same snippet in (the seam's
+        ``must_include``), so for articles beyond the stage-1 cap the
+        ``find`` here succeeds instead of silently dropping the passage.
+        This was extracted from the ``read_article`` tool closure so the
+        mechanical pre-read makes the EXACT same call. ``read_max_chars`` 0
+        (the registered default) or an article already under it passes the
+        text through unchanged.
         """
         cap = self.budget.read_max_chars
         if cap and text and len(text) > cap:
@@ -1632,7 +1636,10 @@ class _TurnContext:
             self.read_sources.add(n)
             started = time.monotonic()
             text = self._capped_read(
-                await self.tool_runtime.read_article(card.zim_id, card.path), card
+                await self.tool_runtime.read_article(
+                    card.zim_id, card.path, must_include=card.snippet
+                ),
+                card,
             )
             # Budget check on the final (per-read-capped) length: a read that
             # would overflow is rejected whole — never a truncated partial —
