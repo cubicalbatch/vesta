@@ -203,9 +203,19 @@ class LlamaServerSupervisor:
         # so awaiting it while holding the lock would deadlock (asyncio.Lock is
         # not reentrant).
         while self._restart_task is not None and not self._restart_task.done():
-            with contextlib.suppress(Exception):
+            try:
                 await self._restart_task
-
+            except asyncio.CancelledError:
+                # ``stop()`` cancels the restart task without awaiting it, and
+                # awaiting a cancelled task re-raises CancelledError here.
+                # Swallow it — unless THIS task is itself being cancelled
+                # (client disconnect), in which case propagation is correct.
+                current = asyncio.current_task()
+                if current is not None and current.cancelling():
+                    raise
+                break
+            except Exception:
+                pass
         async with self._lock:
             if self._proc is not None and self._proc.returncode is None:
                 return
@@ -250,7 +260,10 @@ class LlamaServerSupervisor:
         self._watcher_task = asyncio.create_task(self._watch(proc), name="llama-server-watcher")
         try:
             await self._wait_for_health(proc)
-        except Exception:
+        except BaseException:
+            # BaseException, not Exception: a CancelledError delivered
+            # mid-health-wait must still tear down the spawned child, or it
+            # is orphaned holding the port (the exact M3 symptom).
             await self._abort_start(proc)
             raise
 
@@ -439,17 +452,28 @@ class LlamaServerSupervisor:
         _log.error("llama_server.restart_gave_up", extra={"max_attempts": _MAX_RESTARTS})
 
     async def stop(self) -> None:
-        """Clean SIGTERM shutdown (kill is the reliable ``free()``)."""
+        """Clean SIGTERM shutdown (kill is the reliable ``free()``).
+
+        Takes ``self._lock`` so it cannot interleave with an in-flight start:
+        ``_start_and_wait`` assigns ``self._proc`` only *after* the spawn, and
+        both start callers hold the lock across it — a lock-free ``stop()``
+        racing that window would see ``_proc is None``, reap nothing, and leak
+        the freshly-spawned child still holding the port (every later spawn
+        then dies on bind through all retries). The restart task is cancelled
+        *before* the lock is taken: if it holds the lock mid-start, the
+        cancellation unwinds it (its ``_abort_start`` cleanup runs under the
+        lock) and releases.
+        """
         self._crashed = True
         if self._restart_task is not None and not self._restart_task.done():
             self._restart_task.cancel()
-        if self._watcher_task is not None and not self._watcher_task.done():
-            self._watcher_task.cancel()
-        if self._drain_task is not None and not self._drain_task.done():
-            self._drain_task.cancel()
-        if self._proc is not None:
-            await _terminate_and_reap(self._proc)
-        self._proc = None
+        async with self._lock:
+            for task in (self._watcher_task, self._drain_task):
+                if task is not None and not task.done():
+                    task.cancel()
+            if self._proc is not None:
+                await _terminate_and_reap(self._proc)
+            self._proc = None
         _log.info("llama_server.stopped")
 
 

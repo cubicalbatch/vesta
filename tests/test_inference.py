@@ -833,6 +833,161 @@ class TestLlamaServerSupervisor:
         assert all(p.returncode is not None for p in spawned)  # nothing left unreaped
         assert sup._proc is None
 
+    # ── M7: stop() vs in-flight start races ─────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_stop_during_inflight_start_reaps_spawned_child(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """M7 (a): ``stop()`` racing an in-flight start must not leak the
+        child. ``_start_and_wait`` assigns ``_proc`` only *after* the spawn, so
+        a lock-free stop landing in that window reaped nothing and dropped the
+        supervisor with a live child holding the port — every later spawn died
+        on bind through all retries."""
+        import vesta.inference.local as inference_local
+
+        binary = tmp_path / "sleepy-llama-server"
+        binary.write_text("#!/bin/sh\nexec sleep 30\n")
+        binary.chmod(0o755)
+
+        sup = LlamaServerSupervisor(
+            binary_path=str(binary),
+            models_dir=tmp_path / "models",
+            config_dir=tmp_path / "config",
+        )
+        sup._hw_banner = "cpu"  # skip the --list-devices probe spawn
+
+        def healthy(_url: str) -> int:
+            return 200
+
+        monkeypatch.setattr(inference_local, "_check_health", healthy)
+
+        real_exec = asyncio.create_subprocess_exec
+        spawned: list[asyncio.subprocess.Process] = []
+        gate = asyncio.Event()
+
+        async def gated_exec(*argv: str, **kwargs: Any) -> asyncio.subprocess.Process:
+            proc = await real_exec(*argv, **kwargs)
+            spawned.append(proc)
+            # Hold the exec-await boundary open: _proc is still unassigned.
+            await gate.wait()
+            return proc
+
+        monkeypatch.setattr(inference_local.asyncio, "create_subprocess_exec", gated_exec)
+
+        start_task = asyncio.create_task(sup.ensure_running())
+        while not spawned:
+            await asyncio.sleep(0.01)
+        assert sup._proc is None  # child is live but unassigned — the race window
+
+        stop_task = asyncio.create_task(sup.stop())
+        await asyncio.sleep(0.05)  # let stop() reach its blocking point first
+        gate.set()  # release the start; it completes and assigns _proc
+        await asyncio.wait_for(start_task, timeout=5.0)
+        await asyncio.wait_for(stop_task, timeout=10.0)
+
+        assert spawned[0].returncode is not None  # terminated AND reaped — no orphan
+        assert sup._proc is None
+        assert sup._watcher_task is not None and sup._watcher_task.done()
+        assert sup._drain_task is not None and sup._drain_task.done()
+
+    @pytest.mark.asyncio
+    async def test_cancellation_during_start_still_aborts_child(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """M7 (b): a CancelledError delivered mid-health-wait must run the same
+        cleanup as any failed start — the spawned child used to be orphaned
+        because only ``Exception`` was caught."""
+        import vesta.inference.local as inference_local
+
+        binary = tmp_path / "never-healthy-llama-server"
+        binary.write_text("#!/bin/sh\nexec sleep 30\n")
+        binary.chmod(0o755)
+
+        sup = LlamaServerSupervisor(
+            binary_path=str(binary),
+            models_dir=tmp_path / "models",
+            config_dir=tmp_path / "config",
+        )
+        sup._hw_banner = "cpu"
+
+        def hanging_health(_url: str) -> int:
+            time.sleep(30)  # park the poll in its thread; never answers
+            return 0
+
+        monkeypatch.setattr(inference_local, "_check_health", hanging_health)
+
+        real_exec = asyncio.create_subprocess_exec
+        spawned: list[asyncio.subprocess.Process] = []
+
+        async def recording_exec(*argv: str, **kwargs: Any) -> asyncio.subprocess.Process:
+            proc = await real_exec(*argv, **kwargs)
+            spawned.append(proc)
+            return proc
+
+        monkeypatch.setattr(inference_local.asyncio, "create_subprocess_exec", recording_exec)
+
+        start_task = asyncio.create_task(sup.ensure_running())
+        while not spawned or sup._proc is None:
+            await asyncio.sleep(0.01)
+        start_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await start_task
+
+        assert spawned[0].returncode is not None  # aborted, not orphaned
+        assert sup._proc is None
+        assert sup._watcher_task is not None and sup._watcher_task.done()
+        assert sup._drain_task is not None and sup._drain_task.done()
+
+    @pytest.mark.asyncio
+    async def test_stop_cancelling_restart_task_does_not_raise_into_callers(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """M7 (c): when ``stop()`` cancels the live restart task, an
+        ``ensure_running`` caller parked awaiting that task must fall through
+        to a fresh start — the task's CancelledError must not propagate into
+        the caller (it surfaced as a dropped chat connection)."""
+        binary = tmp_path / "fake-llama-server"
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o755)
+
+        sup = LlamaServerSupervisor(
+            binary_path=str(binary),
+            models_dir=tmp_path / "models",
+            config_dir=tmp_path / "config",
+        )
+        sup._hw_banner = "cpu"  # skip the --list-devices probe spawn
+
+        # A restart loop parked in backoff — exactly what _schedule_restart
+        # creates after a crash.
+        async def parked_restart_loop() -> None:
+            await asyncio.sleep(60)
+            async with sup._lock:  # pragma: no cover — never reached; cancelled first
+                pass
+
+        sup._restart_task = asyncio.create_task(parked_restart_loop())
+
+        started = False
+
+        async def fake_start() -> None:
+            nonlocal started
+            started = True
+
+        sup._start_and_wait = fake_start  # type: ignore[method-assign]
+
+        start_task = asyncio.create_task(sup.ensure_running())
+        await asyncio.sleep(0.05)  # let ensure_running park on the restart-task await
+        await sup.stop()  # cancels the restart task out from under the waiter
+
+        # Must NOT raise CancelledError into the ensure_running caller.
+        await asyncio.wait_for(start_task, timeout=5.0)
+        assert started  # fell through to a fresh start attempt
+
 
 class TestInferenceCapabilityProbe:
     def test_probe_returns_empty_without_gateway(self) -> None:
