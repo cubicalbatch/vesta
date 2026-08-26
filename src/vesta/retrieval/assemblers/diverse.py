@@ -77,7 +77,8 @@ class Diverse:
         pool = sorted(scored, key=lambda sp: sp.score, reverse=True)
         if not pool:
             return build_result([], [], q.terms, tr, source="diverse")
-        max_score = pool[0].score or 1.0
+        max_score = pool[0].score
+        min_score = pool[-1].score
 
         selected: list[ScoredPassage] = []
         selected_sets: list[frozenset[str]] = []
@@ -95,7 +96,18 @@ class Diverse:
                     continue
                 if per_archive.get(sp.passage.zim_id, 0) >= self._params.max_per_archive:
                     continue
-                relevance = (sp.score / max_score) if max_score else 0.0
+                # Relevance must be monotone-increasing in the raw score in
+                # any sign regime. ``score / max_score`` INVERTS when every
+                # score is negative (the CROSS_ENCODER-unmet chain ends at
+                # static_pass's raw cosines, which can be negative): the
+                # worst passage then gets the largest quotient and MMR picks
+                # it first. In that regime fall back to a min-max shift,
+                # which maps best → 1.0 and worst → 0.0 regardless of sign.
+                if max_score > 0.0:
+                    relevance = sp.score / max_score
+                else:
+                    span = max_score - min_score
+                    relevance = (sp.score - min_score) / span if span else 1.0
                 redundancy = max(
                     (_similarity(sp_set, s_set) for s_set in selected_sets),
                     default=0.0,

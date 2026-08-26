@@ -295,8 +295,9 @@ class QueryPreparer:
         question-shaped query.
         """
         terms = normalize_terms(raw)
+        stripped = self._strip_stopwords(terms)
         rungs: list[QueryRung] = []
-        if terms:
+        if terms and stripped:
             # Rung 1: every normalized term, AND-ed (libzim's default op).
             rungs.append(
                 QueryRung(
@@ -306,9 +307,8 @@ class QueryPreparer:
                     prefix=None,
                 )
             )
-            stripped = self._strip_stopwords(terms)
             # Rung 2: stopword-stripped terms (only if it actually removed any).
-            if stripped and stripped != terms:
+            if stripped != terms:
                 rungs.append(
                     QueryRung(
                         name="stopword_stripped",
@@ -320,28 +320,31 @@ class QueryPreparer:
             # Rung 3: OR-of-terms — one single-term query per term, unioned. We
             # cannot ask libzim for OR (the operator is inert); issuing one
             # query per term and unioning is the equivalent that works.
-            if stripped:
-                rungs.append(
-                    QueryRung(
-                        name="or_of_terms",
-                        signal="fulltext",
-                        term_sets=tuple((t,) for t in stripped),
-                        prefix=None,
-                    )
+            rungs.append(
+                QueryRung(
+                    name="or_of_terms",
+                    signal="fulltext",
+                    term_sets=tuple((t,) for t in stripped),
+                    prefix=None,
                 )
-                # Rung 4: title/suggestion index — present in every archive
-                # tested, the universal fallback.
-                rungs.append(
-                    QueryRung(
-                        name="title",
-                        signal="title",
-                        term_sets=(),
-                        prefix=" ".join(stripped),
-                    )
+            )
+            # Rung 4: title/suggestion index — present in every archive
+            # tested, the universal fallback.
+            rungs.append(
+                QueryRung(
+                    name="title",
+                    signal="title",
+                    term_sets=(),
+                    prefix=" ".join(stripped),
                 )
+            )
         if not rungs:
-            # Degenerate input (no tokens): fall straight to a title probe on
-            # the raw string so the caller still gets *something* traceable.
+            # Degenerate input — no tokens at all, or nothing but stopwords
+            # (an AND of pure stopwords is junk, and without this branch an
+            # all-stopword query would get NO title fallback while a
+            # token-free one does). Either way: fall straight to a title
+            # probe on the raw string so the caller still gets *something*
+            # traceable.
             rungs.append(QueryRung(name="title", signal="title", term_sets=(), prefix=raw.strip()))
         return rungs
 

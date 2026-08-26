@@ -418,6 +418,58 @@ def test_lead_boost_does_not_affect_non_lead_passages() -> None:
     assert result.passages[0].score == 0.65
 
 
+def test_lead_boost_boosts_leads_in_negative_score_regime() -> None:
+    """AUDIT_0824 N44: when the cross-encoder stage is unmet/disabled, scores
+    are raw static-encoder cosines and can ALL be negative. The old
+    ``score * (1 + boost)`` made a negative lead score MORE negative — the
+    boost acted as a penalty. The boost must still lift the lead to first."""
+    a = LeadBoost(
+        params=LeadBoost.Params(
+            max_per_article=5,
+            boost=0.5,
+            guarantee_top_lead=False,
+            exact_title_boost=False,
+        )
+    )
+    scored = [
+        _sp("body passage one", path="A", ordinal=1, score=-0.40),
+        _sp("lead passage of B", path="B", ordinal=0, is_lead=True, score=-0.50),
+        _sp("body passage two", path="A", ordinal=2, score=-0.45),
+    ]
+    result = a.assemble(scored, _BIG_BUDGET, _pq(), tr=None)  # type: ignore[arg-type]
+    # -0.50 boosted by 0.5 of its magnitude -> -0.25, ahead of -0.40/-0.45.
+    assert result.passages[0].passage.path == "B"
+    assert result.passages[0].score == pytest.approx(-0.25)
+    assert [sp.passage.path for sp in result.passages[1:]] == ["A", "A"]
+
+
+def test_lead_boost_negative_regime_tracks_raw_score_order() -> None:
+    """The sign-safe boost preserves the raw-score ordering in both regimes:
+    the same score gaps produce the same selection whether scores are all
+    positive or all negative."""
+
+    def run(scores: list[float]) -> list[str]:
+        a = LeadBoost(
+            params=LeadBoost.Params(
+                max_per_article=5,
+                boost=0.2,
+                guarantee_top_lead=False,
+                exact_title_boost=False,
+            )
+        )
+        scored = [
+            _sp(f"lead text {i}", path=f"P{i}", ordinal=0, is_lead=True, score=s)
+            for i, s in enumerate(scores)
+        ]
+        result = a.assemble(scored, _BIG_BUDGET, _pq(), tr=None)  # type: ignore[arg-type]
+        return [sp.passage.path for sp in result.passages]
+
+    # Same shape, negated scores: the best raw score (-0.3, closest to
+    # zero) still wins after boosting — ordering tracks raw-score order in
+    # either regime.
+    assert run([-0.3, -0.5, -0.9]) == ["P0", "P1", "P2"]
+
+
 @pytest.mark.parametrize(
     ("guarantee_top_lead", "expect_lead_included"),
     [
@@ -725,6 +777,41 @@ def test_diverse_enforces_max_per_archive() -> None:
     zim_ids = [sp.passage.zim_id for sp in result.passages]
     assert zim_ids.count(1) == 1
     assert 2 in zim_ids
+
+
+def test_diverse_selects_best_first_under_all_negative_scores() -> None:
+    """AUDIT_0824 N44: with an all-negative score pool, ``score / max_score``
+    inverts — the WORST passage gets the largest quotient and MMR picks it
+    first. Selection must stay best-first in any sign regime."""
+    a = Diverse(params=Diverse.Params(max_per_article=10, max_per_archive=10))
+    scored = [
+        _sp(f"distinctive passage number {i} about topic {i}", path=f"P{i}", score=s)
+        for i, s in enumerate([-0.3, -0.9, -0.6])
+    ]
+    result = a.assemble(scored, _BIG_BUDGET, _pq(), tr=None)  # type: ignore[arg-type]
+    assert [sp.passage.path for sp in result.passages] == ["P0", "P2", "P1"]
+
+
+def test_diverse_lambda_one_orders_by_score_under_all_negative_scores() -> None:
+    """With pure relevance (lambda=1.0) the selection order equals the
+    score-descending order even when every score is negative."""
+    a = Diverse(params=Diverse.Params(max_per_article=10, max_per_archive=10, lambda_relevance=1.0))
+    scored = [
+        _sp(f"passage {i} on subject {i}", path=f"P{i}", score=s)
+        for i, s in enumerate([-0.05, -0.80, -0.42, -0.13])
+    ]
+    result = a.assemble(scored, _BIG_BUDGET, _pq(), tr=None)  # type: ignore[arg-type]
+    assert [sp.score for sp in result.passages] == sorted((sp.score for sp in scored), reverse=True)
+
+
+def test_diverse_all_equal_scores_stays_monotone() -> None:
+    """A degenerate all-equal pool (positive or negative) must not crash the
+    zero-span branch and must fall back to input/tie order."""
+    for score in (0.4, -0.4):
+        a = Diverse(params=Diverse.Params(max_per_article=10, max_per_archive=10))
+        scored = [_sp(f"passage {i} on subject {i}", path=f"P{i}", score=score) for i in range(3)]
+        result = a.assemble(scored, _BIG_BUDGET, _pq(), tr=None)  # type: ignore[arg-type]
+        assert len(result.passages) == 3
 
 
 # ── AUDIT_0822 P2: cached bigram/word-set paths vs naive references ──────────

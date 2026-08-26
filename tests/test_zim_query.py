@@ -114,6 +114,33 @@ async def test_title_rung_is_the_universal_fallback(preparer: QueryPreparer) -> 
     assert trace.to_dict()["stages"][0]["outputs"]["chosen_rung"] == "title"
 
 
+async def test_all_stopword_query_gets_the_title_rung_like_a_token_free_query(
+    preparer: QueryPreparer,
+) -> None:
+    """AUDIT_0824 N44: an all-stopword query ("how to") strips to nothing,
+    exactly like a token-free one — so it must get the same degenerate
+    treatment: a single title probe on the raw string, not a stopword-only
+    AND with no fallback."""
+    corpus = {"How to Guide": ["guide", "steps"]}
+    search, suggest = _make(corpus)
+    trace = Trace()
+    hits = await preparer.execute("how to", search, suggest, limit=10, trace=trace)
+    assert hits == ["How to Guide"]
+    stage = trace.to_dict()["stages"][0]
+    assert stage["outputs"]["chosen_rung"] == "title"
+    # Only the title rung ran — no fulltext stopword-only AND.
+    assert "rung.all_terms.hits" not in stage["outputs"]
+
+
+def test_all_stopword_ladder_has_exactly_the_title_rung(preparer: QueryPreparer) -> None:
+    """Same rung shape as the token-free path: one title rung on the raw text."""
+    rungs = preparer.ladder("how to")
+    assert [(r.name, r.signal, r.prefix) for r in rungs] == [("title", "title", "how to")]
+    # And the truly token-free path is unchanged.
+    rungs_empty = preparer.ladder("???")
+    assert [(r.name, r.signal, r.prefix) for r in rungs_empty] == [("title", "title", "???")]
+
+
 async def test_all_terms_rung_short_circuits_when_it_already_matches(
     preparer: QueryPreparer,
 ) -> None:

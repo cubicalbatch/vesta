@@ -128,7 +128,15 @@ class LeadBoost:
         boosted = [
             ScoredPassage(
                 passage=sp.passage,
-                score=sp.score * (1.0 + self._params.boost),
+                # Sign-safe: the boost must move a lead UP the ranking in any
+                # score regime. ``score * (1 + boost)`` makes a NEGATIVE score
+                # more negative — a penalty, not a boost — because raw
+                # static-encoder cosines can be negative whenever the
+                # cross-encoder stage is unmet/disabled (the sigmoid is what
+                # normally rescales scores into (0, 1)). Adding
+                # ``boost * |score|`` boosts toward zero instead; for
+                # non-negative scores this is exactly the old multiplier.
+                score=sp.score + abs(sp.score) * self._params.boost,
                 source_info=f"{sp.source_info}+lead_boost",
             )
             if sp.passage.is_lead
