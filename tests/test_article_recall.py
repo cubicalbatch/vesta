@@ -417,7 +417,6 @@ async def test_cli_dataset_mode_rejects_golden_set_flags(
     for argv, needle in (
         (["bench", "retrieval", "--dataset", str(ds_path), "--profile", "standard"], "--profile"),
         (["bench", "retrieval", "--dataset", str(ds_path), "--sweep", "rrf.k=10"], "--sweep"),
-        (["bench", "retrieval", "--dataset", str(ds_path), "calibrate"], "sub-action"),
     ):
         code = await cli._cmd_eval(parser.parse_args(argv))
         assert code == 2

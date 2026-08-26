@@ -89,39 +89,6 @@ API_ALLOW_PROFILE_OVERRIDE = setting(
     "(dev console and eval harness use this; disable for production).",
     hot=True,
 )
-RETRIEVAL_CONFIDENCE_TOP_SCORE = setting(
-    "retrieval.confidence.top_score",
-    float,
-    0.3,
-    group="Retrieval / Confidence",
-    help="Minimum top passage score before the abstention gate will consider "
-    "answering (abstention gate). Calibrated against the golden set.",
-    min=0.0,
-    max=1.0,
-    hot=True,
-)
-RETRIEVAL_CONFIDENCE_SCORE_DROPOFF = setting(
-    "retrieval.confidence.score_dropoff",
-    float,
-    0.5,
-    group="Retrieval / Confidence",
-    help="Maximum score dropoff ratio before the abstention gate triggers "
-    "(abstention gate). A low ratio means the top passage stands alone (good signal).",
-    min=0.0,
-    max=1.0,
-    hot=True,
-)
-RETRIEVAL_CONFIDENCE_DENSITY = setting(
-    "retrieval.confidence.density",
-    float,
-    0.5,
-    group="Retrieval / Confidence",
-    help="Minimum density (fraction of passages from top article) below which "
-    "abstention is considered (abstention gate). Calibrated against the golden set.",
-    min=0.0,
-    max=1.0,
-    hot=True,
-)
 RETRIEVAL_STAGE_B_CANDIDATES_MAX = setting(
     "retrieval.stage_b.candidates_max",
     int,
@@ -180,17 +147,6 @@ RETRIEVAL_CONTEXT_ORDERING = setting(
     choices=("score_desc", "edges"),
     hot=True,
 )
-RETRIEVAL_CONFIDENCE_AGREEMENT = setting(
-    "retrieval.confidence.agreement",
-    float,
-    0.0,
-    group="Retrieval / Confidence",
-    help="Minimum agreement (Jaccard overlap between source candidate sets) "
-    "below which abstention is considered.",
-    min=0.0,
-    max=1.0,
-    hot=True,
-)
 RETRIEVAL_DENSE_K = setting(
     "retrieval.dense.k",
     int,
@@ -235,10 +191,6 @@ __all__ = [
     "API_ALLOW_PROFILE_OVERRIDE",
     "RETRIEVAL_ACTIVE_PROFILE",
     "RETRIEVAL_CANDIDATES_MAX_ARTICLES",
-    "RETRIEVAL_CONFIDENCE_AGREEMENT",
-    "RETRIEVAL_CONFIDENCE_DENSITY",
-    "RETRIEVAL_CONFIDENCE_SCORE_DROPOFF",
-    "RETRIEVAL_CONFIDENCE_TOP_SCORE",
     "RETRIEVAL_CONTEXT_BUDGET_TOKENS",
     "RETRIEVAL_CONTEXT_MAX_PER_ARTICLE",
     "RETRIEVAL_CONTEXT_ORDERING",

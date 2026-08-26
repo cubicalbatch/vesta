@@ -18,12 +18,11 @@ wire the real DB-backed store and archive registry; the tests wire fakes.
 
 from __future__ import annotations
 
-from vesta.eval import answer_metrics, bench, calibrate, golden, metrics, regression, runner
+from vesta.eval import answer_metrics, bench, golden, metrics, regression, runner
 
 __all__ = [
     "answer_metrics",
     "bench",
-    "calibrate",
     "golden",
     "metrics",
     "regression",

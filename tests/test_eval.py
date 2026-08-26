@@ -2,9 +2,9 @@
 
 Covers: golden-set loading + verification, the metrics (recall/nDCG/MRR/latency/
 degradation guard), the runner (evaluate/compare/sweep/persist with fakes), the
-regression gate (must FAIL a degraded profile — the load-bearing DoD item),
-calibration, and the answer-metrics scaffold. Uses injected fakes so the suite
-is fast and needs no DB or ZIM.
+regression gate (must FAIL a degraded profile — the load-bearing DoD item), and
+the answer-metrics scaffold. Uses injected fakes so the suite is fast and needs
+no DB or ZIM.
 """
 
 from __future__ import annotations
@@ -15,12 +15,6 @@ from typing import Any
 
 import pytest
 
-from vesta.eval.calibrate import (
-    ConfidenceSample,
-    ConfidenceThresholds,
-    escalates,
-    fit_thresholds,
-)
 from vesta.eval.golden import (
     SLICES,
     GoldenEntry,
@@ -428,48 +422,6 @@ def _metrics_record(*, recall10: float) -> RunRecord:
         per_query=(),
         notes="",
     )
-
-
-# ── Calibration ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestCalibration:
-    def test_escalates_on_low_density(self) -> None:
-        s = ConfidenceSample(
-            slice="paraphrase",
-            top_score=None,
-            score_dropoff=None,
-            density=0.1,
-            agreement=0.0,
-            hit=False,
-        )
-        t = ConfidenceThresholds(top_score=0.3, score_dropoff=0.5, density=0.5, agreement=0.0)
-        assert escalates(s, t) is True
-
-    def test_does_not_escalate_on_strong_density(self) -> None:
-        s = ConfidenceSample(
-            slice="entity", top_score=None, score_dropoff=None, density=0.9, agreement=0.0, hit=True
-        )
-        t = ConfidenceThresholds(top_score=0.3, score_dropoff=0.5, density=0.5, agreement=0.0)
-        assert escalates(s, t) is False
-
-    def test_fit_thresholds_reports_achieved_rho(self) -> None:
-        # 10 samples: 3 low-density (escalate), 7 high-density (don't).
-        samples = [
-            ConfidenceSample(
-                slice="entity",
-                top_score=None,
-                score_dropoff=None,
-                density=0.9 if i >= 3 else 0.1,
-                agreement=0.0,
-                hit=i >= 3,
-            )
-            for i in range(10)
-        ]
-        result = fit_thresholds(samples, target_rho=0.25)
-        assert result.sample_count == 10
-        assert 0.0 <= result.achieved_rho <= 1.0
-        assert result.thresholds.density in (0.2, 0.3, 0.4, 0.5, 0.6, 0.7)
 
 
 # ── Bench (hardware is fast; encoder rows are deferred) ──────────────────────

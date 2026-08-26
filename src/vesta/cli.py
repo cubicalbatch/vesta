@@ -62,7 +62,6 @@ from vesta.eval.bench import encoder, extraction, hardware
 from vesta.eval.bench_dataset import BenchDataset
 from vesta.eval.bench_runner import BENCH_SYSTEMS, resolve_matrix_axes
 from vesta.eval.bench_scoring import metric_lookup
-from vesta.eval.calibrate import ConfidenceSample, fit_thresholds
 from vesta.eval.golden import (
     EVAL_ARCHIVE_CHECKSUM,
     EVAL_ARCHIVE_PATH,
@@ -362,7 +361,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 — one parser 
         "action",
         nargs="?",
         default="run",
-        choices=("run", "verify-golden", "calibrate", "regression"),
+        choices=("run", "verify-golden", "regression"),
         help="Eval sub-action.",
     )
     p_hw = bsub.add_parser("hardware", help="Former `vesta bench` — encoder/extraction/latency.")
@@ -1722,8 +1721,6 @@ async def _cmd_eval(args: argparse.Namespace) -> int:
                 f"OK: {len(load_set(args.golden).entries)} golden entries verified against the archive."
             )
             return 0
-        if action == "calibrate":
-            return await _calibrate(state, args)
         if action == "regression":
             return await _regression(state, args)
         return await _eval_run(state, args)
@@ -2092,64 +2089,6 @@ def _print_comparison(comp: Comparison, *, explain: bool) -> None:
                 print(
                     f"  [{q.slice}] {q.query}  (baseline rank {q.baseline_rank} -> {q.candidate_rank})"
                 )
-
-
-# ── `vesta bench retrieval calibrate` ──────────────────────────────────────────────────
-
-
-async def _calibrate(state: AppState, args: argparse.Namespace) -> int:
-    """Fit confidence thresholds against the golden set; report achieved rho."""
-    profile = _resolve_profile(state, args.profile)
-    golden = load_set(args.golden)
-    runner = CLIPipelineRunner(state)
-    metrics, results = await evaluate_profile(profile, runner, golden)
-    samples: list[ConfidenceSample] = []
-    # Lift the confidence signals off each result; here we read the per-query
-    # hit + slice.
-    for r in results:
-        # The full ConfidenceSignals live on the RetrievalResult; the runner kept
-        # only paths+trace. Re-derive a coarse density from the retrieved set as
-        # the depth-0 signal (scores absent). This is honest: calibration at
-        # depth 0 is density-driven.
-        retrieved = r.retrieved_paths
-        from collections import Counter
-
-        c = Counter(retrieved)
-        density = (c.most_common(1)[0][1] / len(retrieved)) if retrieved else 0.0
-        samples.append(
-            ConfidenceSample(
-                slice=r.entry.slice,
-                top_score=None,
-                score_dropoff=None,
-                density=density,
-                agreement=0.0,
-                hit=r.hit_rank is not None,
-            )
-        )
-    del metrics
-    result = fit_thresholds(samples)
-    print("Confidence-gate calibration (target rho ~= 0.25):")
-    print(json.dumps(result.to_dict(), indent=2))
-    # The fitted thresholds are *written to settings*, not just printed.
-    # The four retrieval.confidence.* settings are hot=True, so the running app
-    # picks them up immediately. Caller holds the write transaction.
-    import datetime as _dt
-
-    from vesta.db.settings_store import upsert_setting
-
-    now = _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat()
-    fitted = result.to_dict()["thresholds"]
-    assert isinstance(fitted, dict)  # CalibrationResult.to_dict guarantees this
-    async with state.db.write() as conn:
-        for key, value in fitted.items():
-            await upsert_setting(conn, str(key), str(value), now)
-    async with state.db.read() as conn:
-        from vesta.db.settings_store import load_settings
-
-        config.set_db_values(await load_settings(conn))
-    print("fitted thresholds written to settings:")
-    print(json.dumps(fitted, indent=2))
-    return 0
 
 
 # ── `vesta bench retrieval regression` ─────────────────────────────────────────────────

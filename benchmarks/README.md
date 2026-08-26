@@ -278,7 +278,7 @@ alias** printing a pointer to `vesta bench retrieval` (same flags, same
 
 ```
 uv run vesta bench retrieval [--profile P] [--golden full|fixture_subset]
-  [--baseline B] [--sweep k=v1,v2] [--explain] [action run|verify-golden|calibrate|regression]
+  [--baseline B] [--sweep k=v1,v2] [--explain] [action run|verify-golden|regression]
 ```
 
 ### Dataset mode — the article-recall arms
