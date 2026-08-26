@@ -8,8 +8,10 @@ missing files, and the ``ZIM_FULLTEXT`` capability probe reflects the result.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -19,7 +21,7 @@ from vesta.config.capabilities import Capability, compute_capabilities
 from vesta.db.connection import Database
 from vesta.db.migrations import run_migrations
 from vesta.zim import bind_registry
-from vesta.zim.registry import ArchiveRegistry
+from vesta.zim.registry import ArchiveRegistry, LocalArchive
 
 
 @pytest.fixture
@@ -215,6 +217,64 @@ async def test_media_kind_registers_manifest_even_when_registered_before(tmp_pat
         assert row["video_path"] == "videos/v1abcdeXYZ/video.webm"
         assert row["poster_path"] == "videos/v1abcdeXYZ/video.webp"
         assert row["duration"] == 626  # ISO-8601 "PT10M26S" parsed to seconds
+    finally:
+        bind_registry(None)
+        await db.stop()
+
+
+async def test_concurrent_rescans_register_archive_once(tmp_path: Path) -> None:
+    """Regression (AUDIT_0824 N17): two overlapping rescan() calls — startup
+    scan, POST /api/zims/scan, and the post-download callback can race — must
+    serialize: both complete without error, the archive gets exactly one
+    ``zims`` row, and exactly one scan reports it as added. Without the lock,
+    both scans read the empty ``zims`` table before either INSERT lands and the
+    loser dies on UNIQUE(zims.uuid), aborting its whole loop with a leaked,
+    never-stored archive handle."""
+    zims = tmp_path / "zims"
+    zims.mkdir(parents=True, exist_ok=True)
+    db = Database(str(tmp_path / "vesta.db"), busy_timeout_ms=1000)
+    await db.start()
+    async with db.write() as conn:
+        await run_migrations(conn)
+    reg = ArchiveRegistry(db=db, zims_dir=zims, read_pool_size=2, cluster_cache_mb=32)
+    bind_registry(reg)
+    try:
+        await reg.start()  # nothing on disk yet → no rows
+
+        # Drop one new archive and force both scans to overlap inside
+        # _register_new (both have already seen no existing row): without the
+        # rescan lock the second INSERT deterministically hits UNIQUE(uuid).
+        build_tiny_zim(zims / "tiny.zim")
+        orig_register_new = reg._register_new
+
+        async def slow_register_new(archive: Any, probe: Any, path: Path) -> int:
+            await asyncio.sleep(0.05)
+            return await orig_register_new(archive, probe, path)
+
+        reg._register_new = slow_register_new  # type: ignore[method-assign]
+        try:
+            results = await asyncio.gather(reg.rescan(), reg.rescan())
+        finally:
+            reg._register_new = orig_register_new  # type: ignore[method-assign]
+
+        # Both scans completed without error.
+        assert len(results) == 2
+        assert sum(len(r.added) for r in results) == 1
+        assert all(r.total == 1 for r in results)
+
+        # Exactly one zims row for the archive.
+        async with db.read() as conn, conn.execute("SELECT id FROM zims") as cur:
+            rows = await cur.fetchall()
+        assert len(rows) == 1
+        zim_id = int(rows[0]["id"])
+        assert [zim_id] == list(results[0].added) or [zim_id] == list(results[1].added)
+
+        # No leaked handle: the registry holds exactly one open archive for it.
+        assert list(reg._archives.keys()) == [zim_id]
+        stored = reg.get(zim_id)
+        assert isinstance(stored, LocalArchive)
+        assert stored._lz is not None  # close() sets this to None; handle is live
+        assert zim_id in reg._enabled
     finally:
         bind_registry(None)
         await reg.stop()

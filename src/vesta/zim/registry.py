@@ -523,6 +523,12 @@ class ArchiveRegistry:
         # vectors explicitly. ``zim/`` cannot import ``vectors/``, so the
         # composition root (``main``) registers the cascade here.
         self._on_remove: list[Any] = []
+        # Serializes rescan(): startup discovery, POST /api/zims/scan, and the
+        # post-download callback can overlap. Without this, two concurrent
+        # scans both classify the same dropped archive as new and the second
+        # INSERT hits UNIQUE(zims.uuid) — the loser 500s the scan endpoint,
+        # aborts its whole loop, and leaks every archive handle it probed.
+        self._rescan_lock = asyncio.Lock()
 
     def add_on_remove(self, callback: Any) -> None:
         """Register an ``async def(zim_id) -> None`` invoked before the zims row
@@ -728,56 +734,57 @@ class ArchiveRegistry:
         expensive alias mining runs only for *newly* registered archives, so a
         repeat scan over a large corpus stays fast.
         """
-        self._zims_dir.mkdir(parents=True, exist_ok=True)
-        files = sorted(self._zims_dir.glob("*.zim"))
-        file_by_uuid: dict[str, tuple[LibzimArchive, _Probe, Path]] = {}
-        for path in files:
-            try:
-                archive, probe = await self._dispatch(_probe_archive, path)
-            except Exception as exc:  # a corrupt/unreadable ZIM never crashes discovery
-                _log.warning("zim.open_failed", extra={"path": str(path), "error": repr(exc)})
-                continue
-            file_by_uuid[probe.uuid] = (archive, probe, path)
+        async with self._rescan_lock:
+            self._zims_dir.mkdir(parents=True, exist_ok=True)
+            files = sorted(self._zims_dir.glob("*.zim"))
+            file_by_uuid: dict[str, tuple[LibzimArchive, _Probe, Path]] = {}
+            for path in files:
+                try:
+                    archive, probe = await self._dispatch(_probe_archive, path)
+                except Exception as exc:  # a corrupt/unreadable ZIM never crashes discovery
+                    _log.warning("zim.open_failed", extra={"path": str(path), "error": repr(exc)})
+                    continue
+                file_by_uuid[probe.uuid] = (archive, probe, path)
 
-        # Load existing rows by uuid (uuid survives renames).
-        async with self._db.read() as conn, conn.execute("SELECT * FROM zims") as cur:
-            rows = [dict(r) for r in await cur.fetchall()]
-        row_by_uuid = {r["uuid"]: r for r in rows if r["uuid"]}
+            # Load existing rows by uuid (uuid survives renames).
+            async with self._db.read() as conn, conn.execute("SELECT * FROM zims") as cur:
+                rows = [dict(r) for r in await cur.fetchall()]
+            row_by_uuid = {r["uuid"]: r for r in rows if r["uuid"]}
 
-        added: list[int] = []
-        updated: list[int] = []
-        for uuid, (archive, probe, path) in file_by_uuid.items():
-            existing = row_by_uuid.get(uuid)
-            if existing is None:
-                zim_id = await self._register_new(archive, probe, path)
-                added.append(zim_id)
-            else:
-                zim_id = await self._refresh_existing(existing, archive, probe, path)
-                if zim_id not in self._archives:
-                    updated.append(zim_id)
+            added: list[int] = []
+            updated: list[int] = []
+            for uuid, (archive, probe, path) in file_by_uuid.items():
+                existing = row_by_uuid.get(uuid)
+                if existing is None:
+                    zim_id = await self._register_new(archive, probe, path)
+                    added.append(zim_id)
                 else:
-                    # already open; nothing structural changed
-                    pass
-            row_by_uuid.pop(uuid, None)
+                    zim_id = await self._refresh_existing(existing, archive, probe, path)
+                    if zim_id not in self._archives:
+                        updated.append(zim_id)
+                    else:
+                        # already open; nothing structural changed
+                        pass
+                row_by_uuid.pop(uuid, None)
 
-        # Anything left in row_by_uuid had no file on disk → mark missing.
-        missing: list[int] = []
-        for _uuid, row in row_by_uuid.items():
-            zim_id = int(row["id"])
-            if zim_id in self._archives:
-                self._archives[zim_id].close()
-                self._archives.pop(zim_id, None)
-                self._enabled.discard(zim_id)
-            if row["status"] != "missing":
-                await self._set_status(zim_id, "missing")
-            missing.append(zim_id)
+            # Anything left in row_by_uuid had no file on disk → mark missing.
+            missing: list[int] = []
+            for _uuid, row in row_by_uuid.items():
+                zim_id = int(row["id"])
+                if zim_id in self._archives:
+                    self._archives[zim_id].close()
+                    self._archives.pop(zim_id, None)
+                    self._enabled.discard(zim_id)
+                if row["status"] != "missing":
+                    await self._set_status(zim_id, "missing")
+                missing.append(zim_id)
 
-        return ScanResult(
-            added=tuple(added),
-            updated=tuple(updated),
-            missing=tuple(missing),
-            total=len(self._archives),
-        )
+            return ScanResult(
+                added=tuple(added),
+                updated=tuple(updated),
+                missing=tuple(missing),
+                total=len(self._archives),
+            )
 
     async def _register_new(self, archive: LibzimArchive, probe: _Probe, path: Path) -> int:
         """Insert a zims row, mine aliases, and hold the archive open."""
