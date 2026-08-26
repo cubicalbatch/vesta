@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from vesta.config.capabilities import Capability
 from vesta.retrieval.contracts import PreparedQuery, QueryRewriter
+from vesta.retrieval.impls.normalize import is_keyword_query, normalize_query_terms
 from vesta.retrieval.registry import ComponentParams, register
 
 if TYPE_CHECKING:
@@ -105,8 +106,8 @@ class ConversationalRewrite:
         if not rewritten or not rewritten.strip():
             return q
 
-        text = rewritten.strip()
-        terms = tuple(w for w in text.replace('"', " ").replace("'", " ").split() if w)
+        text = rewritten.strip().lower()
+        terms = normalize_query_terms(text)
         if not terms:
             return q
 
@@ -115,7 +116,7 @@ class ConversationalRewrite:
             terms=terms,
             text=text,
             aliases=q.aliases,
-            is_keyword_query=q.is_keyword_query,
+            is_keyword_query=is_keyword_query(text),
             rung=q.rung,
             history=q.history,
         )

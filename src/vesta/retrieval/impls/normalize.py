@@ -21,13 +21,51 @@ if TYPE_CHECKING:
     from vesta.retrieval.trace import Trace
 
 
-def _is_keyword_query(text: str) -> bool:
+def is_keyword_query(text: str) -> bool:
     """True when ``text`` looks like a lookup, not a question.
 
     A query ending in ``?`` or starting with an interrogative is a question;
     everything else is a keyword query (the "bare search term" mode).
     """
     return not looks_like_question(text)
+
+
+_is_keyword_query = is_keyword_query
+
+
+def normalize_query_terms(
+    text: str,
+    *,
+    strip_stopwords: bool = True,
+    stopwords: frozenset[str] = frozenset(DEFAULT_STOPWORDS),
+) -> tuple[str, ...]:
+    """Extract normalized terms from text (lowercased, stopword and inert-token stripped).
+
+    Splits on whitespace and quotes/punctuation, strips stopwords (if enabled
+    and non-empty after stripping), and drops libzim-inert boolean/operator tokens.
+    """
+    clean_text = text.strip().lower()
+    # Simple word-level term extraction.
+    terms = tuple(
+        w for w in clean_text.replace("?", " ").replace('"', " ").replace("'", " ").split() if w
+    )
+    if strip_stopwords:
+        stripped = tuple(t for t in terms if t not in stopwords)
+        # Only adopt the stripped form if it didn't remove everything — a
+        # query that is entirely stopwords (rare) still needs something to
+        # search with.
+        if stripped:
+            terms = stripped
+    # Drop libzim-inert boolean/operator tokens ("not", "near", "xor",
+    # standalone "+"/"-"/"*") — the same set ``zim.query.normalize_terms``
+    # drops on the ladder path. Without this they become literal AND-ed
+    # terms on the primary path ("hotels near the grand canyon" requires a
+    # literal "near"), while the ladder only rescued that on a zero-result
+    # fallback. Same empty-guard as above: never strip down to nothing.
+    inert_stripped = tuple(t for t in terms if t not in INERT_TOKENS)
+    if inert_stripped:
+        terms = inert_stripped
+    return terms
 
 
 @register("query_preparer", "normalize")
@@ -66,33 +104,19 @@ class Normalize:
         """Normalize: lowercase the raw text, strip whitespace, detect keyword vs
         question form. Returns a new ``PreparedQuery`` — the input is the raw
         pipeline bootstrap, and this is the first transform."""
+        del tr
         text = q.raw.strip().lower()
-        # Simple word-level term extraction for the bootstrap.
-        terms = tuple(
-            w for w in text.replace("?", " ").replace('"', " ").replace("'", " ").split() if w
+        terms = normalize_query_terms(
+            text,
+            strip_stopwords=self._params.strip_stopwords,
+            stopwords=self._stopwords,
         )
-        if self._params.strip_stopwords:
-            stripped = tuple(t for t in terms if t not in self._stopwords)
-            # Only adopt the stripped form if it didn't remove everything — a
-            # query that is entirely stopwords (rare) still needs something to
-            # search with.
-            if stripped:
-                terms = stripped
-        # Drop libzim-inert boolean/operator tokens ("not", "near", "xor",
-        # standalone "+"/"-"/"*") — the same set ``zim.query.normalize_terms``
-        # drops on the ladder path. Without this they become literal AND-ed
-        # terms on the primary path ("hotels near the grand canyon" requires a
-        # literal "near"), while the ladder only rescued that on a zero-result
-        # fallback. Same empty-guard as above: never strip down to nothing.
-        inert_stripped = tuple(t for t in terms if t not in INERT_TOKENS)
-        if inert_stripped:
-            terms = inert_stripped
         result = PreparedQuery(
             raw=q.raw,
             terms=terms,
             text=text,
             aliases=q.aliases,
-            is_keyword_query=_is_keyword_query(text),
+            is_keyword_query=is_keyword_query(text),
             rung=q.rung,
             history=q.history,
         )
