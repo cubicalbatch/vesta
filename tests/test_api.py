@@ -130,6 +130,61 @@ async def test_create_download_model_job_validates_params(
 
 
 @pytest.mark.asyncio
+async def test_create_job_rejects_bad_params_for_every_type(
+    app_client: httpx.AsyncClient,
+) -> None:
+    """Every registered type gates its params at ``POST /api/jobs`` (audit
+    AUDIT_0824 N2): unknown keys, wrong-typed values, out-of-range values, and
+    the reserved checkpoint key are refused before any job row exists — params
+    are never passed through verbatim to the handler."""
+    bad_submissions = [
+        ("refresh_catalog", {"url": 123}),  # wrong type
+        ("refresh_catalog", {"feed": "https://lan/opds"}),  # unknown key
+        ("refresh_catalog", {"__checkpoint__": {}}),  # reserved key
+        ("index_zim", {"depth": 2}),  # missing zim_id
+        ("index_zim", {"zim_id": "one"}),  # wrong type
+        ("index_zim", {"zim_id": True}),  # bool is not an int here
+        ("index_zim", {"zim_id": 1, "depth": 0}),  # out of range
+        ("index_zim", {"zim_id": 1, "depth": 4}),  # out of range
+        ("download_zim", {}),  # missing url
+        ("download_zim", {"url": "https://x/a.zim.meta4", "size": -1}),
+        ("download_zim", {"url": "https://x/a.zim.meta4", "title": 5}),
+        ("download_zim", {"url": "https://x/a.zim.meta4", "name": "../evil"}),
+        ("noop", {"total": 0}),
+        ("noop", {"delay": "fast"}),
+    ]
+    for jtype, params in bad_submissions:
+        resp = await app_client.post("/api/jobs", json={"type": jtype, "params": params})
+        assert resp.status_code == 400, (jtype, params)
+    assert (await app_client.get("/api/jobs")).json()["jobs"] == []
+
+
+def test_job_param_validators_accept_handler_shaped_params() -> None:
+    """The per-type gates accept exactly what each handler consumes, including
+    boundary values — so a legitimate client submission is never refused."""
+    from vesta.api.jobs import _validate_job_params
+
+    valid: dict[str, list[dict[str, object]]] = {
+        "refresh_catalog": [{}, {"url": "https://lan/portal/opds"}],
+        "index_zim": [{"zim_id": 1}, {"zim_id": 7, "depth": 1}, {"zim_id": 7, "depth": 3}],
+        "download_zim": [
+            {"url": "https://x/a.zim.meta4"},
+            {
+                "url": "https://x/a.zim.meta4",
+                "name": "wikipedia",
+                "title": "Wikipedia",
+                "sha256": "ab" * 32,
+                "size": 0,
+            },
+        ],
+        "noop": [{}, {"total": 3, "delay": 0}, {"total": 1, "delay": 0.01}],
+    }
+    for jtype, cases in valid.items():
+        for params in cases:
+            _validate_job_params(jtype, dict(params))  # must not raise
+
+
+@pytest.mark.asyncio
 async def test_job_sse_stream_emits_snapshot_then_progress(
     app_client: httpx.AsyncClient,
 ) -> None:
