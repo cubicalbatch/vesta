@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import contextlib
 import time
-from collections.abc import AsyncIterator
-from typing import Any
+from collections.abc import AsyncGenerator, AsyncIterator
+from typing import Any, cast
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -33,6 +33,7 @@ from vesta.answer import CHAT_HISTORY_MAX_TURNS
 from vesta.answer.contracts import (
     AnswerResetEvent,
     CitationsEvent,
+    ErrorEvent,
     SourcesEvent,
     TokenEvent,
     TraceEvent,
@@ -93,11 +94,10 @@ class ConversationDetail(BaseModel):
 async def chat(request: Request, body: ChatRequest) -> StreamingResponse:
     """Stream a grounded, cited answer as SSE events, persisting the exchange.
 
-    The conversation is created (or verified) before the response is returned so
     ``X-Conversation-Id`` is available immediately. History is loaded, the user
     turn is persisted, the answer is streamed, and the assistant turn is
-    persisted once the stream completes — so a crashed stream still records the
-    question and whatever answer partial accumulated.
+    persisted once the stream ends — including a failed turn, which records
+    the question plus whatever partial answer accumulated.
     """
     if not body.query or not body.query.strip():
         raise HTTPException(status_code=400, detail="query must not be empty")
@@ -141,6 +141,47 @@ async def chat(request: Request, body: ChatRequest) -> StreamingResponse:
             "X-Conversation-Id": str(conversation_id),
         },
     )
+
+
+def _absorb_turn_event(
+    event: object,
+    answer_parts: list[str],
+    final_answer: str | None,
+    source_cards: list[dict[str, Any]] | None,
+    trace_dict: dict[str, object] | None,
+) -> tuple[list[str], str | None, list[dict[str, Any]] | None, dict[str, object] | None]:
+    """Accumulate one streamed event into the turn's persistence state."""
+    if isinstance(event, TokenEvent):
+        answer_parts.append(event.text)
+    elif isinstance(event, AnswerResetEvent):
+        # FIX 1: a fresh, REPLACEMENT generation is starting — discard
+        # everything accumulated for this turn so far. Without this, a
+        # regenerate (fallback/abstention_retry) doubles up with
+        # whatever streamed before it in the persisted conversation turn.
+        answer_parts = []
+    elif isinstance(event, CitationsEvent):
+        # FIX 2: the citations event carries the authoritative final text —
+        # the answer after inline [n] passage-numbered citation markers were
+        # rewritten to CARD numbers (which the UI displays). Persist THAT,
+        # not the raw token concatenation, or the conversation history keeps
+        # citing passage numbers the UI never shows. `answer_text` is null
+        # only when no renumbering happened (then the token join is equal).
+        if event.answer_text is not None:
+            final_answer = event.answer_text
+    elif isinstance(event, SourcesEvent):
+        # docs/sse-protocol.md "Sources merge": a ``merge: true`` event
+        # carries ONLY the delta cards discovered after the first event —
+        # append them (continuing the same 0-based numbering), exactly like
+        # the SPA reducer; a non-merge event is this turn's initial set and
+        # replaces. Persisting only the last event's cards would drop every
+        # Round-0 card from the system of record.
+        if source_cards is None or not event.merge:
+            source_cards = [_card_to_dict(c) for c in event.cards]
+        else:
+            source_cards.extend(_card_to_dict(c) for c in event.cards)
+    elif isinstance(event, TraceEvent):
+        trace_dict = event.trace
+    return answer_parts, final_answer, source_cards, trace_dict
 
 
 async def _run_chat_turn(
@@ -198,39 +239,24 @@ async def _run_chat_turn(
         event_gen = iter_answer_events(
             state, body.query, body.scope, body.profile, None, history=history
         )
-
-    async for event in event_gen:
-        yield _serialize_event(event)
-        if isinstance(event, TokenEvent):
-            answer_parts.append(event.text)
-        elif isinstance(event, AnswerResetEvent):
-            # FIX 1: a fresh, REPLACEMENT generation is starting — discard
-            # everything accumulated for this turn so far. Without this, a
-            # regenerate (fallback/abstention_retry) doubles up with
-            # whatever streamed before it in the persisted conversation turn.
-            answer_parts = []
-        elif isinstance(event, CitationsEvent):
-            # FIX 2: the citations event carries the authoritative final text —
-            # the answer after inline [n] passage-numbered citation markers were
-            # rewritten to CARD numbers (which the UI displays). Persist THAT,
-            # not the raw token concatenation, or the conversation history keeps
-            # citing passage numbers the UI never shows. `answer_text` is null
-            # only when no renumbering happened (then the token join is equal).
-            if event.answer_text is not None:
-                final_answer = event.answer_text
-        elif isinstance(event, SourcesEvent):
-            # docs/sse-protocol.md "Sources merge": a ``merge: true`` event
-            # carries ONLY the delta cards discovered after the first event —
-            # append them (continuing the same 0-based numbering), exactly like
-            # the SPA reducer; a non-merge event is this turn's initial set and
-            # replaces. Persisting only the last event's cards would drop every
-            # Round-0 card from the system of record.
-            if source_cards is None or not event.merge:
-                source_cards = [_card_to_dict(c) for c in event.cards]
-            else:
-                source_cards.extend(_card_to_dict(c) for c in event.cards)
-        elif isinstance(event, TraceEvent):
-            trace_dict = event.trace
+    stream_failure: Exception | None = None
+    async with contextlib.aclosing(cast(AsyncGenerator[object], event_gen)) as events:
+        try:
+            async for event in events:
+                yield _serialize_event(event)
+                if isinstance(event, ErrorEvent):
+                    # Ordering rule 8 (docs/sse-protocol.md): an error event
+                    # terminates the stream. Stop consuming upstream (a
+                    # well-behaved emitter returns here anyway) so nothing can
+                    # follow it on this layer's wire.
+                    break
+                answer_parts, final_answer, source_cards, trace_dict = _absorb_turn_event(
+                    event, answer_parts, final_answer, source_cards, trace_dict
+                )
+        except Exception as exc:
+            # The turn died mid-stream. Remember why, persist whatever exists
+            # below, then re-raise so the wrapper emits the terminal error.
+            stream_failure = exc
 
     # 4. Persist the assistant turn. tokens_in/out stay null — no tokenizer runs
     #    in the request path; the trace carries the full detail for analysis.
@@ -245,6 +271,9 @@ async def _run_chat_turn(
         trace_json=trace_json,
         latency_ms=latency_ms,
     )
+
+    if stream_failure is not None:
+        raise stream_failure
 
 
 # ── Conversation CRUD (JSON) ────────────────────────────────────────────────
@@ -360,11 +389,12 @@ def _dumps(obj: Any) -> str:
 
 
 def _serialize_event_error(exc: Exception) -> str:
-    from vesta.answer.contracts import DoneEvent, ErrorEvent
+    """Terminal ``error`` SSE event for a crashed turn.
 
-    return _serialize_event(
-        ErrorEvent(code="fatal", message=str(exc), recoverable=False)
-    ) + _serialize_event(DoneEvent())
+    Ordering rule 8 (docs/sse-protocol.md): an error event terminates the
+    stream — nothing, including ``done``, may follow it.
+    """
+    return _serialize_event(ErrorEvent(code="fatal", message=str(exc), recoverable=False))
 
 
 __all__ = ["router"]

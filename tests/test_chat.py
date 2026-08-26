@@ -631,6 +631,86 @@ class TestSourcesMergePersistence:
         assert [c["path"] for c in cards] == ["only/a", "only/b"]
 
 
+class TestErrorTerminalStream:
+    """AUDIT_0824 C1: ordering rule 8 — an ``error`` event terminates the
+    stream (no ``done`` after it), and a failed turn still persists whatever
+    of the exchange existed when it died."""
+
+    @pytest.mark.asyncio
+    async def test_upstream_crash_ends_stream_at_error_and_persists_partial(
+        self, app_client_with_zim: tuple[httpx.AsyncClient, int], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The upstream generator raises mid-stream: the client stream ends on
+        the fatal ``error`` event (never a trailing ``done``), and the partial
+        answer is persisted alongside the already-written user row."""
+        import vesta.api.chat as chat_module
+        from vesta.answer.contracts import TokenEvent
+
+        async def fake_iter_answer_events(
+            state: object,
+            query: str,
+            scope: str | None,
+            profile: str | None,
+            strategy: str | None,
+            *,
+            history: tuple[tuple[str, str], ...] = (),
+        ) -> AsyncIterator[object]:
+            yield TokenEvent(text="partial ans")
+            raise RuntimeError("model exploded mid-turn")
+
+        monkeypatch.setattr(chat_module, "iter_answer_events", fake_iter_answer_events)
+        monkeypatch.setattr(chat_module, "compute_capabilities", frozenset)
+
+        client, _ = app_client_with_zim
+        resp = await client.post("/api/chat", json={"query": "test"})
+        assert resp.status_code == 200
+        names = [name for name, _ in _parse_sse(resp.text)]
+        assert names[-1] == "error"
+        assert "done" not in names
+
+        detail = await client.get(f"/api/conversations/{int(resp.headers['X-Conversation-Id'])}")
+        turns = [(m["role"], m["content"]) for m in detail.json()["messages"]]
+        assert turns == [("user", "test"), ("assistant", "partial ans")]
+
+    @pytest.mark.asyncio
+    async def test_terminal_error_event_stops_consuming_and_persists_partial(
+        self, app_client_with_zim: tuple[httpx.AsyncClient, int], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A yielded ``ErrorEvent`` is terminal even if a misbehaving upstream
+        keeps emitting afterwards: nothing may follow it on the wire, and the
+        partial turn is still persisted."""
+        import vesta.api.chat as chat_module
+        from vesta.answer.contracts import DoneEvent, ErrorEvent, TokenEvent, TraceEvent
+
+        async def fake_iter_answer_events(
+            state: object,
+            query: str,
+            scope: str | None,
+            profile: str | None,
+            strategy: str | None,
+            *,
+            history: tuple[tuple[str, str], ...] = (),
+        ) -> AsyncIterator[object]:
+            yield TokenEvent(text="half an answer")
+            yield ErrorEvent(code="fatal", message="boom", recoverable=False)
+            # Misbehaving upstream: these must NEVER reach the wire.
+            yield TraceEvent(trace={"version": 1, "stages": []})
+            yield DoneEvent()
+
+        monkeypatch.setattr(chat_module, "iter_answer_events", fake_iter_answer_events)
+        monkeypatch.setattr(chat_module, "compute_capabilities", frozenset)
+
+        client, _ = app_client_with_zim
+        resp = await client.post("/api/chat", json={"query": "test"})
+        assert resp.status_code == 200
+        names = [name for name, _ in _parse_sse(resp.text)]
+        assert names == ["token", "error"]
+
+        detail = await client.get(f"/api/conversations/{int(resp.headers['X-Conversation-Id'])}")
+        turns = [(m["role"], m["content"]) for m in detail.json()["messages"]]
+        assert turns == [("user", "test"), ("assistant", "half an answer")]
+
+
 # ── The local runtime in the answer path ─────────────────────────────────────
 
 
