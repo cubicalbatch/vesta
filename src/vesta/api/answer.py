@@ -654,15 +654,13 @@ def _build_rewriter(state: AppState, sn: Any) -> Any:
     """
     if state.gateway is None:
         return None
-    from vesta.inference import INFERENCE_LLM_MODEL
     from vesta.inference.gateway import NullGateway
 
     if isinstance(state.gateway, NullGateway):
         return None
-    model = "unsloth/qwen3.5-4b"
-    if sn is not None:
-        with contextlib.suppress(Exception):
-            model = str(sn.get(INFERENCE_LLM_MODEL))
+    from vesta.api.agent_chat import _resolve_llm
+
+    model = _resolve_llm(sn)[0]
     from vesta.answer.rewriter import GatewayQueryRewriter
 
     return GatewayQueryRewriter(state.gateway, model=model)
@@ -679,15 +677,13 @@ def _build_reformulator(state: AppState, sn: Any) -> Any:
     """
     if state.gateway is None:
         return None
-    from vesta.inference import INFERENCE_LLM_MODEL
     from vesta.inference.gateway import NullGateway
 
     if isinstance(state.gateway, NullGateway):
         return None
-    model = "unsloth/qwen3.5-4b"
-    if sn is not None:
-        with contextlib.suppress(Exception):
-            model = str(sn.get(INFERENCE_LLM_MODEL))
+    from vesta.api.agent_chat import _resolve_llm
+
+    model = _resolve_llm(sn)[0]
     variant, max_tokens = "exemplified", 64
     if sn is not None:
         from vesta.answer import (
