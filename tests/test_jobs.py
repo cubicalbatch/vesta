@@ -668,6 +668,48 @@ async def test_cancel_then_resume_does_not_resurrect_cancelled_job(
 
 
 @pytest.mark.asyncio
+async def test_cancel_paused_job_finishes_terminal(
+    runner: tuple[Database, JobRunner],
+) -> None:
+    """AUDIT_0824 N22: cancelling a paused job took the live-task branch, but
+    pausing already finished that task — Task.cancel() on a done task is a
+    no-op, so the row stayed 'paused' while the API reported 'cancelled', the
+    per-job SSE stream never closed, and a later resume() cleared the cancel
+    intent and resurrected the job."""
+    db, r = runner
+    probe = _GateProbe(name="paused_cancel_probe")
+    register_job_type(probe)
+    try:
+        jid = await r.submit("paused_cancel_probe", None, {"tag": "only"})
+        await _wait_status(r, jid, "running")
+        assert await r.pause(jid) is True
+        await _wait_status(r, jid, "paused")
+
+        queue = r._subscribe(jid)
+        assert await r.cancel(jid) is True
+
+        # The row lands terminally 'cancelled', matching the API's reply.
+        rec = await r.get(jid)
+        assert rec is not None and rec.status == "cancelled"
+        # The terminal status event is published, so SSE subscribers see
+        # closure instead of waiting forever.
+        event = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert event["event"] == "status"
+        assert event["data"]["status"] == "cancelled"
+
+        # Resume refuses a cancelled row; the job never runs again.
+        assert await r.resume(jid) is False
+        probe.release.set()
+        await asyncio.sleep(0.05)
+        assert probe.runs == ["only"]
+        still = await r.get(jid)
+        assert still is not None and still.status == "cancelled"
+    finally:
+        JOB_TYPES.pop("paused_cancel_probe", None)
+    await _stop(db, r)
+
+
+@pytest.mark.asyncio
 async def test_row_superseded_while_queued_is_never_run(
     runner: tuple[Database, JobRunner],
 ) -> None:

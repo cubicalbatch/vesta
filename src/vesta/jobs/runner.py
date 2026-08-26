@@ -171,13 +171,15 @@ class JobRunner:
         record = await self.get(job_id)
         if record is None or record.status in _TERMINAL:
             return False
-        if state is not None:
-            state.cancel_requested = True
-            if state.task is not None:
-                state.task.cancel()
-        else:
-            # queued but not yet running: terminate immediately
+        if record.status == "paused" or state is None or state.task is None or state.task.done():
+            # Nothing live to cooperate with: a paused job's task already ran
+            # to its CancelledError, so cancelling it again is a no-op and the
+            # row would stay 'paused' while callers report 'cancelled'. Land
+            # the terminal transition here so resume() cannot resurrect it.
             await self._finish(job_id, "cancelled")
+            return True
+        state.cancel_requested = True
+        state.task.cancel()
         return True
 
     # ── reads ──────────────────────────────────────────────────────────────
