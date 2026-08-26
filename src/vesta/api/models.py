@@ -150,6 +150,23 @@ def _scan_installed(models_dir: Path, active_name: str) -> list[InstalledModel]:
     return entries
 
 
+def _render_presets(models_dir: Path | None) -> list[ModelPresetOut]:
+    """Build ModelPresetOut instances for all shipped presets with disk status."""
+    return [
+        ModelPresetOut(
+            id=p.id,
+            display_name=p.display_name,
+            url=p.url,
+            filename=p.filename,
+            size_bytes=p.size_bytes,
+            min_ram_gb=p.min_ram_gb,
+            description=p.description,
+            downloaded=models_dir is not None and (models_dir / p.filename).is_file(),
+        )
+        for p in model_presets()
+    ]
+
+
 async def _current_status() -> dict[str, object]:
     """The bound runtime's ``LlmStatus`` as a JSON-ready dict (503 unbound)."""
     from vesta.inference import get_runtime
@@ -172,21 +189,7 @@ async def list_presets() -> dict[str, object]:
     from vesta.inference import get_models_dir
 
     models_dir = get_models_dir()
-    return {
-        "presets": [
-            ModelPresetOut(
-                id=p.id,
-                display_name=p.display_name,
-                url=p.url,
-                filename=p.filename,
-                size_bytes=p.size_bytes,
-                min_ram_gb=p.min_ram_gb,
-                description=p.description,
-                downloaded=models_dir is not None and (models_dir / p.filename).is_file(),
-            ).model_dump()
-            for p in model_presets()
-        ]
-    }
+    return {"presets": [p.model_dump() for p in _render_presets(models_dir)]}
 
 
 @router.post("/api/models/download", response_model=ModelDownloadResponse)
@@ -261,19 +264,7 @@ async def list_models() -> dict[str, object]:
 
     models_dir = get_models_dir()
     installed = _scan_installed(models_dir, _active_model_name()) if models_dir is not None else []
-    presets = [
-        ModelPresetOut(
-            id=p.id,
-            display_name=p.display_name,
-            url=p.url,
-            filename=p.filename,
-            size_bytes=p.size_bytes,
-            min_ram_gb=p.min_ram_gb,
-            description=p.description,
-            downloaded=models_dir is not None and (models_dir / p.filename).is_file(),
-        ).model_dump()
-        for p in model_presets()
-    ]
+    presets = [p.model_dump() for p in _render_presets(models_dir)]
     return {
         "installed": [e.model_dump() for e in installed],
         "presets": presets,

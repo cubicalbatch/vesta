@@ -15,13 +15,11 @@ wizard bookkeeping, not a tunable, and declaring it would pollute the
 
 from __future__ import annotations
 
-import datetime as _dt
-
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from vesta.api.settings import persist_settings_and_reload
 from vesta.api.state import AppState, app_state
-from vesta.db.settings_store import upsert_setting
 
 router = APIRouter(tags=["setup"])
 
@@ -33,9 +31,7 @@ class SetupCompleteOut(BaseModel):
 @router.post("/api/setup/complete", response_model=SetupCompleteOut)
 async def complete_setup(state: AppState = Depends(app_state)) -> dict[str, object]:
     """Persist ``setup.completed=true``. Idempotent — safe to call repeatedly."""
-    now = _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat()
-    async with state.db.write() as conn:
-        await upsert_setting(conn, "setup.completed", "true", now)
+    await persist_settings_and_reload(state.db, [("setup.completed", "true")])
     return {"ok": True}
 
 
