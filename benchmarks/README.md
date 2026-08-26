@@ -326,9 +326,13 @@ Untouched — just renamed for discoverability.
   no pipeline work (the runner wrote each answer as `pending` immediately on
   completion; a killed run leaves those pending, and rejudge completes them).
   It loads the run's dataset to render rubrics for judge-cache misses.
-- `vesta bench compare A B` — per-question diff: aggregate deltas plus the four
-  buckets `fixed` / `broken` / `both_correct` / `both_wrong`. The **broken**
-  bucket is mandatory — never let a mean hide a regression.
+- `vesta bench compare A B` — per-question diff: aggregate deltas plus the
+  buckets `fixed` / `broken` / `both_correct` / `both_wrong` / `unjudged`. The
+  **broken** bucket is mandatory — never let a mean hide a regression. The
+  `source_recall` delta's denominator matches the headline metric: abstain
+  (out_of_corpus) questions are excluded. A pair where either side is
+  `pending`/`unjudged` lands in **unjudged** — a judge failure must not read
+  as a regression.
 - `vesta bench list` / `vesta bench show RUN_ID` — list runs / show one run's
   scorecard.
 

@@ -1716,6 +1716,7 @@ class ComparePair(BaseModel):
     both_wrong: list[str]
     only_a: list[str]
     only_b: list[str]
+    unjudged: list[str] = []
     deltas: dict[str, float] = {}
 
 
@@ -2204,7 +2205,7 @@ async def compare_bench_runs(
     request: Request,
     runs: str = Query("", description="comma-separated run ids, e.g. 1,2,3"),
 ) -> BenchCompareResponse:
-    """Per-question diff across runs: fixed/broken/both_correct/both_wrong."""
+    """Per-question diff across runs: fixed/broken/both_correct/both_wrong/unjudged."""
     state: AppState = app_state(request)
     store = SqliteBenchStore(state.db)
     try:
@@ -2218,12 +2219,22 @@ async def compare_bench_runs(
     for rid in ids:
         if await store.get_run(rid) is None:
             raise HTTPException(status_code=404, detail=f"run {rid} not found")
+    # The dataset question map aligns the source_recall delta's denominator
+    # with the headline metric (excludes abstain/out_of_corpus questions).
+    # Tolerant: a missing/unloadable dataset file degrades to the legacy
+    # all-shared-questions denominator instead of failing an otherwise valid
+    # comparison.
+    try:
+        dataset = load_bench_dataset(str(app_config.get(BENCH_DATASET)))
+        questions = {q.id: q for q in dataset.questions}
+    except Exception:
+        questions = None
 
     pairs: list[ComparePair] = []
     try:
         for i in range(len(ids)):
             for j in range(i + 1, len(ids)):
-                cmp = await compare_runs(store, ids[i], ids[j])
+                cmp = await compare_runs(store, ids[i], ids[j], questions=questions)
                 pairs.append(
                     ComparePair(
                         run_a=cmp.run_a,
@@ -2235,6 +2246,7 @@ async def compare_bench_runs(
                         both_wrong=list(cmp.both_wrong),
                         only_a=list(cmp.only_a),
                         only_b=list(cmp.only_b),
+                        unjudged=list(cmp.unjudged),
                         deltas=cmp.deltas,
                     )
                 )

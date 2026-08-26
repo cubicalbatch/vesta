@@ -348,10 +348,13 @@ class BenchQuestionResult:
 class CompareResult:
     """Per-question diff across two runs + aggregate deltas.
 
-    ``fixed`` = A wrong → B correct. ``broken`` = A correct → B wrong. These
-    are the buckets that catch regressions a mean can hide (trap 9).
-    ``shared_denominator`` is the count of questions present in BOTH runs —
-    ``--limit 5`` runs must never compare against full runs without this marker.
+    ``fixed`` = A wrong → B correct (improvements). ``broken`` = A correct → B
+    wrong (regressions). These are the buckets that catch regressions a mean
+    can hide (trap 9). ``both_correct`` / ``both_wrong``. ``unjudged`` = shared
+    questions where EITHER side's verdict is ``pending``/``unjudged`` — the
+    pair is unscoreable, so it lands here instead of masquerading as a fix or
+    a regression. ``only_a`` / ``only_b`` = questions present in only one run
+    (different subsets — ``shared_denominator`` is the intersection).
     """
 
     run_a: int
@@ -363,6 +366,7 @@ class CompareResult:
     both_wrong: tuple[str, ...]
     only_a: tuple[str, ...]
     only_b: tuple[str, ...]
+    unjudged: tuple[str, ...] = ()
     deltas: dict[str, float] = field(default_factory=dict)
 
 
@@ -1067,13 +1071,29 @@ class IncomparableRuns(ValueError):
     """
 
 
-async def compare_runs(store: BenchStore, run_a: int, run_b: int) -> CompareResult:
+async def compare_runs(
+    store: BenchStore,
+    run_a: int,
+    run_b: int,
+    *,
+    questions: Mapping[str, BenchQuestion] | None = None,
+) -> CompareResult:
     """Compare two runs: per-question buckets + aggregate deltas.
 
     ``fixed`` = A wrong → B correct (improvements). ``broken`` = A correct → B
-    wrong (regressions). ``both_correct`` / ``both_wrong``. ``only_a`` /
-    ``only_b`` = questions present in only one run (different subsets —
-    ``shared_denominator`` is the intersection).
+    wrong (regressions). ``both_correct`` / ``both_wrong``. ``unjudged`` =
+    shared questions where either side is ``pending``/``unjudged`` — the pair
+    cannot be scored, so it never lands in fixed/broken (a judge failure must
+    not read as a regression). ``only_a`` / ``only_b`` = questions present in
+    only one run (different subsets — ``shared_denominator`` is the
+    intersection).
+
+    ``questions`` (id → question, from the runs' dataset) aligns the
+    ``source_recall`` delta's denominator with the headline metric
+    (:func:`aggregate_source_metrics`): only questions with >=1 required
+    source count — abstain/out_of_corpus questions have no gold source and
+    would silently dilute the delta. Without it the delta degrades to the
+    legacy all-shared-questions denominator.
 
     Refuses runs whose dataset identity differs (:class:`IncomparableRuns`):
     a different ``dataset_hash`` or ``subset_hash`` makes fixed/broken lists
@@ -1117,9 +1137,16 @@ async def compare_runs(store: BenchStore, run_a: int, run_b: int) -> CompareResu
     broken: list[str] = []
     both_correct: list[str] = []
     both_wrong: list[str] = []
+    unjudged: list[str] = []
+    non_judged = frozenset({Verdict.PENDING.value, Verdict.UNJUDGED.value})
     for qid in shared:
         va = rows_a[qid].verdict
         vb = rows_b[qid].verdict
+        if va in non_judged or vb in non_judged:
+            # pending/unjudged on either side makes the pair unscoreable —
+            # same posture as scoring: never counted correct, never wrong.
+            unjudged.append(qid)
+            continue
         a_correct = _verdict_is_correct(va)
         b_correct = _verdict_is_correct(vb)
         if a_correct and b_correct:
@@ -1131,15 +1158,7 @@ async def compare_runs(store: BenchStore, run_a: int, run_b: int) -> CompareResu
         else:
             broken.append(qid)
 
-    deltas: dict[str, float] = {}
-    if shared:
-        n = len(shared)
-        a_acc = sum(1 for qid in shared if _verdict_is_correct(rows_a[qid].verdict)) / n
-        b_acc = sum(1 for qid in shared if _verdict_is_correct(rows_b[qid].verdict)) / n
-        a_found = sum(1 for qid in shared if rows_a[qid].source_hit_rank is not None) / n
-        b_found = sum(1 for qid in shared if rows_b[qid].source_hit_rank is not None) / n
-        deltas["strict_accuracy"] = b_acc - a_acc
-        deltas["source_recall"] = b_found - a_found
+    deltas = _compare_deltas(rows_a, rows_b, shared, questions)
 
     return CompareResult(
         run_a=run_a,
@@ -1151,8 +1170,50 @@ async def compare_runs(store: BenchStore, run_a: int, run_b: int) -> CompareResu
         both_wrong=tuple(sorted(both_wrong)),
         only_a=only_a,
         only_b=only_b,
+        unjudged=tuple(sorted(unjudged)),
         deltas=deltas,
     )
+
+
+def _compare_deltas(
+    rows_a: Mapping[str, BenchQuestionResult],
+    rows_b: Mapping[str, BenchQuestionResult],
+    shared: set[str],
+    questions: Mapping[str, BenchQuestion] | None,
+) -> dict[str, float]:
+    """Aggregate deltas (B - A) over the shared question set.
+
+    ``strict_accuracy`` keeps the headline convention: pending/unjudged count
+    as not correct over the full shared denominator.
+
+    ``source_recall`` mirrors :func:`aggregate_source_metrics` eligibility:
+    only questions with at least one required source are eligible. Abstain
+    (out_of_corpus) questions have none by construction and always miss, so
+    including them dilutes the delta without information. Without the
+    question map the legacy all-shared denominator applies.
+    """
+    if not shared:
+        return {}
+    n = len(shared)
+    a_acc = sum(1 for qid in shared if _verdict_is_correct(rows_a[qid].verdict)) / n
+    b_acc = sum(1 for qid in shared if _verdict_is_correct(rows_b[qid].verdict)) / n
+    if questions is not None:
+        recall_ids = tuple(
+            qid
+            for qid in sorted(shared)
+            if (q := questions.get(qid)) is not None and any(s.required for s in q.sources)
+        )
+    else:
+        recall_ids = tuple(sorted(shared))
+    if not recall_ids:
+        return {}
+    a_found = sum(1 for qid in recall_ids if rows_a[qid].source_hit_rank is not None)
+    b_found = sum(1 for qid in recall_ids if rows_b[qid].source_hit_rank is not None)
+    recall_n = len(recall_ids)
+    return {
+        "strict_accuracy": b_acc - a_acc,
+        "source_recall": b_found / recall_n - a_found / recall_n,
+    }
 
 
 def resolve_judge_concurrency(

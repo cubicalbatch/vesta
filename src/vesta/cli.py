@@ -1112,8 +1112,9 @@ async def _cmd_bench_rejudge(args: argparse.Namespace) -> int:
 
 
 async def _cmd_bench_compare(state: Any, run_a: int, run_b: int) -> int:
-    """Print the per-question diff + four buckets for two runs (state = AppState)."""
+    """Print the per-question diff + buckets for two runs (state = AppState)."""
     from vesta.api.bench import SqliteBenchStore
+    from vesta.eval.bench_dataset import BENCH_DATASET, load_bench_dataset
     from vesta.eval.bench_runner import IncomparableRuns, compare_runs
 
     store = SqliteBenchStore(state.db)
@@ -1122,8 +1123,18 @@ async def _cmd_bench_compare(state: Any, run_a: int, run_b: int) -> int:
     if ra is None or rb is None:
         print(f"compare: run {run_a if ra is None else run_b} not found.")
         return 1
+    # The dataset question map aligns the source_recall delta's denominator
+    # with the headline metric (excludes abstain/out_of_corpus questions).
+    dataset_path = str(config.get(BENCH_DATASET))
+    questions = None
     try:
-        comp = await compare_runs(store, run_a, run_b)
+        dataset = load_bench_dataset(dataset_path)
+    except Exception as exc:
+        print(f"warning: could not load dataset {dataset_path!r}: {exc}")
+    else:
+        questions = _question_map(dataset.questions)
+    try:
+        comp = await compare_runs(store, run_a, run_b, questions=questions)
     except IncomparableRuns as exc:
         print(f"compare: {exc}")
         return 1
@@ -1135,7 +1146,8 @@ async def _cmd_bench_compare(state: Any, run_a: int, run_b: int) -> int:
     print(
         f"  fixed (A wrong→B correct): {len(comp.fixed)}   "
         f"broken (A correct→B wrong): {len(comp.broken)}   "
-        f"both correct: {len(comp.both_correct)}   both wrong: {len(comp.both_wrong)}"
+        f"both correct: {len(comp.both_correct)}   both wrong: {len(comp.both_wrong)}   "
+        f"unjudged: {len(comp.unjudged)}"
     )
     if comp.deltas:
         print("  aggregate deltas (B - A):")
@@ -1149,6 +1161,10 @@ async def _cmd_bench_compare(state: Any, run_a: int, run_b: int) -> int:
         print("\n  fixed:")
         for qid in comp.fixed:
             print(f"    + {qid}")
+    if comp.unjudged:
+        print("\n  unjudged (pending/unjudged on either side — not scored):")
+        for qid in comp.unjudged:
+            print(f"    ? {qid}")
     return 0
 
 

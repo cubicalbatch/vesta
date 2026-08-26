@@ -587,6 +587,85 @@ async def test_compare_runs(store) -> None:
     assert cmp.shared_denominator == 4
 
 
+def _cmp_row(
+    run: int,
+    qid: str,
+    verdict: str,
+    shr: int | None = None,
+) -> BenchQuestionResult:
+    return BenchQuestionResult(
+        run_id=run,
+        question_id=qid,
+        capability="lookup",
+        difficulty="easy",
+        question_text=qid,
+        expected_answer="A",
+        answer_text="A",
+        abstained=False,
+        verdict=verdict,
+        source_hit_rank=shr,
+        source_coverage=0.5,
+    )
+
+
+@pytest.mark.asyncio
+async def test_compare_runs_recall_delta_excludes_abstentions(store) -> None:
+    """AUDIT_0824 N37: the source_recall delta's denominator must match the
+    headline ``source.recall_at_10`` — abstain (out_of_corpus) questions have
+    no required source, never hit, and must not dilute the delta."""
+    rec = _make_run_record()
+    run_a = await store.insert_run(rec)
+    run_b = await store.insert_run(replace(rec, label="b"))
+    # q1: found in A (rank 1), missed in B → the real regression.
+    # qabst: out_of_corpus (no sources) — misses by construction in BOTH runs.
+    await store.insert_question_result(run_a, _cmp_row(run_a, "q1", "incorrect", shr=1))
+    await store.insert_question_result(run_a, _cmp_row(run_a, "qabst", "correct", shr=None))
+    await store.insert_question_result(run_b, _cmp_row(run_b, "q1", "incorrect", shr=None))
+    await store.insert_question_result(run_b, _cmp_row(run_b, "qabst", "correct", shr=None))
+
+    abstain_q = _q("qabst", expected_behavior="abstain", sources=False)
+    questions = {"q1": _q("q1"), "qabst": abstain_q}
+
+    cmp = await compare_runs(store, run_a, run_b, questions=questions)
+    assert cmp.deltas["source_recall"] == pytest.approx(-1.0)  # 1/1 → 0/1
+
+    # Without the question map the legacy all-shared denominator applies
+    # (backward-compatible fallback): 1/2 → 0/2 = -0.5.
+    legacy = await compare_runs(store, run_a, run_b)
+    assert legacy.deltas["source_recall"] == pytest.approx(-0.5)
+
+
+@pytest.mark.asyncio
+async def test_compare_runs_unjudged_bucket(store) -> None:
+    """AUDIT_0824 N37: pending/unjudged on either side makes the pair
+    unscoreable — it lands in the explicit unjudged bucket instead of reading
+    as a regression (broken), an improvement (fixed), or both_wrong."""
+    rec = _make_run_record()
+    run_a = await store.insert_run(rec)
+    run_b = await store.insert_run(replace(rec, label="b"))
+    rows = [
+        # A correct → B unjudged: judge failure, NOT a broken regression.
+        (run_a, "u1", Verdict.CORRECT.value, run_b, "u1", Verdict.UNJUDGED.value),
+        # A pending → B correct: not yet judged, NOT a fixed improvement.
+        (run_a, "u2", Verdict.PENDING.value, run_b, "u2", Verdict.CORRECT.value),
+        # Both sides non-judged.
+        (run_a, "u3", Verdict.UNJUDGED.value, run_b, "u3", Verdict.PENDING.value),
+    ]
+    for ra, qa, va, rb_, qb, vb in rows:
+        await store.insert_question_result(ra, _cmp_row(ra, qa, va))
+        await store.insert_question_result(rb_, _cmp_row(rb_, qb, vb))
+
+    cmp = await compare_runs(store, run_a, run_b)
+    assert cmp.unjudged == ("u1", "u2", "u3")
+    assert cmp.fixed == ()
+    assert cmp.broken == ()
+    # strict_accuracy keeps the headline convention: non-judged counts as not
+    # correct over the full shared denominator. Each arm has exactly one
+    # judged-correct (u1 in A, u2 in B), so the delta nets to zero — pending/
+    # unjudged rows contributed neither correctness nor exclusion.
+    assert cmp.deltas["strict_accuracy"] == pytest.approx(0.0)
+
+
 @pytest.mark.asyncio
 async def test_compare_runs_refuses_dataset_mismatch(store) -> None:
     """Different dataset_hash → refused, never a silent misleading diff."""
