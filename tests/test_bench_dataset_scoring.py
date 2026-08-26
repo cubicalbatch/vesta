@@ -32,6 +32,8 @@ from vesta.eval.bench_scoring import (
     ScoredQuestion,
     SourceMetrics,
     Verdict,
+    _parse_judge_json,
+    _unjudged,
     aggregate_answer_metrics,
     aggregate_peak_context,
     aggregate_source_metrics,
@@ -794,12 +796,38 @@ def test_score_question_bundles_fields() -> None:
         abstained=False,
         judge_model="jm",
     )
-    sq = score_question(q, ("Path1", "Path2"), out)
+    sq = score_question(q, ("Path1", "Path2"), out, abstained=True)
     assert sq.question is q
     assert sq.retrieved_paths == ("Path1", "Path2")
     assert sq.verdict == Verdict.PARTIAL
+    assert sq.abstained is True  # harness decision, not the judge echo (False)
     assert sq.sub_facts_present == (True,)
     assert sq.judge_model == "jm"
+
+
+def test_score_question_abstention_follows_harness_not_judge_echo() -> None:
+    """AUDIT_0824 M17: a judge verdict that OMITS ``abstained`` must not turn an
+    over-refusal into a clean answer — the harness decision decides."""
+    q = _q("a", sources=(_src("A"),), expected_behavior="answer")
+    outcome = _parse_judge_json('{"verdict": "correct", "reason": "r"}', "jm")
+    assert outcome is not None
+    assert outcome.abstained is False  # echo defaults false on omission
+    sq = score_question(q, ("A",), outcome, abstained=True)
+    assert sq.abstained is True
+    m = aggregate_answer_metrics([sq])
+    assert m.over_refusal == 1.0
+    assert m.abstention_correctness == 0.0
+
+
+def test_unjudged_outcome_does_not_inflate_hallucination_rate() -> None:
+    """AUDIT_0824 M17: judge failure on a correctly-abstaining out-of-corpus
+    question must not count as a hallucination."""
+    ooc = _q("ooc", expected_behavior="abstain")
+    outcome = _unjudged("jm", "judge endpoint down")
+    assert outcome.abstained is False  # UNJUDGED outcomes carry no echo
+    m = aggregate_answer_metrics([score_question(ooc, (), outcome, abstained=True)])
+    assert m.hallucination_rate == 0.0
+    assert m.abstention_correctness == 1.0
 
 
 # ── Token usage aggregation ─────────────────────────────────────────────────
@@ -940,7 +968,14 @@ def test_peak_context_ignores_non_integer_garbage() -> None:
 def test_score_question_carries_answer_tokens() -> None:
     q = _q("a")
     out = JudgeOutcome(verdict=Verdict.CORRECT, reason="r")
-    sq = score_question(q, ("A",), out, answer_input_tokens=150, answer_output_tokens=30)
+    sq = score_question(
+        q,
+        ("A",),
+        out,
+        abstained=False,
+        answer_input_tokens=150,
+        answer_output_tokens=30,
+    )
     assert sq.answer_input_tokens == 150
     assert sq.answer_output_tokens == 30
 

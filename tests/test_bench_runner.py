@@ -26,11 +26,19 @@ from vesta.eval.bench_runner import (
     BenchRunRecord,
     CompareResult,
     QuestionOutput,
+    _rebuild_scored,
     compare_runs,
     rejudge_run,
     run_benchmark,
 )
-from vesta.eval.bench_scoring import Verdict, judge_cache_key, render_rubric
+from vesta.eval.bench_scoring import (
+    JudgeOutcome,
+    Verdict,
+    aggregate_answer_metrics,
+    judge_cache_key,
+    render_rubric,
+    score_question,
+)
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -583,7 +591,6 @@ async def test_two_stage_and_rejudge(store) -> None:
     assert pending_b == []
 
 
-
 @pytest.mark.asyncio
 async def test_rejudge_preserves_rounds_and_latency(store) -> None:
     """Rejudge must not zero the stored rounds/latency columns or the run's
@@ -634,6 +641,37 @@ async def test_rejudge_preserves_rounds_and_latency(store) -> None:
     assert isinstance(lat, dict)
     assert lat["n"] == 2
     assert lat["p50"] > 0
+
+
+def test_rebuild_scored_matches_live_abstention_source() -> None:
+    """AUDIT_0824 M17: given identical rows + verdicts, the rejudge rebuild and
+    the live scoring path must agree on abstention metrics — both read the
+    HARNESS ``abstained`` flag, never the judge's echoed field."""
+    q = _q("a", expected_behavior="answer")  # in-corpus; harness refused
+    row = BenchQuestionResult(
+        run_id=1,
+        question_id=q.id,
+        capability=q.capability,
+        difficulty=q.difficulty,
+        question_text=q.question,
+        expected_answer=q.answer,
+        answer_text="",
+        abstained=True,
+        verdict=Verdict.CORRECT.value,
+        verdict_reason="r",
+    )
+    rebuilt = _rebuild_scored([row], {q.id: q}, "jm")
+    # The live path scores the same shape from outputs[q.id].abstained.
+    live = score_question(
+        q,
+        row.retrieved_paths,
+        JudgeOutcome(verdict=Verdict.CORRECT, reason="r"),
+        abstained=row.abstained,
+    )
+    assert rebuilt[0].abstained is True
+    assert aggregate_answer_metrics(rebuilt) == aggregate_answer_metrics([live])
+    assert aggregate_answer_metrics(rebuilt).over_refusal == 1.0
+
 
 # ── Concurrency invariance ──────────────────────────────────────────────────
 
@@ -723,9 +761,11 @@ async def test_run_benchmark_full(store) -> None:
     assert m["answer"]["weighted_accuracy"] == 1.0
     assert m["source"]["recall_at_10"] == 1.0
     assert m["source"]["source_coverage"] == 1.0
-    # Reference: ceiling from oracle (q2 correct; q1 has no oracle → 0), system 2/2, floor 0.
-    assert m["reference"]["system"] == 2
+    # Reference counts only the oracle-bearing subset (q2; q1 has no oracle):
+    # ceiling 1/1, system 1/1, floor 0. total is the full run size.
+    assert m["reference"]["system"] == 1
     assert m["reference"]["total"] == 2
+    assert m["reference"]["reference_n"] == 1
     assert m["by_capability"]["lookup"]["strict_accuracy"] == 1.0
     assert "pipeline" in progress and "judging" in progress and "complete" in progress
 

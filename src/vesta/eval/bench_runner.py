@@ -710,6 +710,7 @@ async def _run_cell(  # noqa: PLR0912, PLR0915
                         question=q,
                         retrieved_paths=outputs[q.id].retrieved_paths,
                         outcome=outcome,
+                        abstained=outputs[q.id].abstained,
                         answer_input_tokens=outputs[q.id].input_tokens,
                         answer_output_tokens=outputs[q.id].output_tokens,
                         latency_ms=latencies[q.id],
@@ -732,6 +733,7 @@ async def _run_cell(  # noqa: PLR0912, PLR0915
                         question=q,
                         retrieved_paths=outputs[q.id].retrieved_paths,
                         outcome=pending_outcome,
+                        abstained=outputs[q.id].abstained,
                         latency_ms=latencies[q.id],
                     )
                 )
@@ -932,7 +934,12 @@ async def rejudge_run(
             )
             await store.update_question_result(run_id, row.question_id, updated)
             scored.append(
-                score_question(question=q, retrieved_paths=row.retrieved_paths, outcome=outcome)
+                score_question(
+                    question=q,
+                    retrieved_paths=row.retrieved_paths,
+                    outcome=outcome,
+                    abstained=row.abstained,
+                )
             )
             graded += 1
         if progress is not None:
@@ -989,6 +996,7 @@ def _rebuild_scored(
                 question=q,
                 retrieved_paths=row.retrieved_paths,
                 outcome=outcome,
+                abstained=row.abstained,
                 answer_input_tokens=row.input_tokens,
                 answer_output_tokens=row.output_tokens,
                 latency_ms=row.latency_ms,

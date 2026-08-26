@@ -214,17 +214,23 @@ def score_question(
     retrieved_paths: Sequence[str],
     outcome: JudgeOutcome,
     *,
+    abstained: bool,
     answer_input_tokens: int = 0,
     answer_output_tokens: int = 0,
     latency_ms: float = 0.0,
 ) -> ScoredQuestion:
-    """Bundle a question, its retrieved paths, and the judge outcome."""
+    """Bundle a question, its retrieved paths, and the judge outcome.
+
+    ``abstained`` is the HARNESS decision (did the pipeline decline to answer?)
+    and is the authoritative abstention source for the metrics — never the
+    judge's echoed field, which defaults false on omission or judge failure.
+    """
     return ScoredQuestion(
         question=question,
         retrieved_paths=tuple(retrieved_paths),
         verdict=outcome.verdict,
         reason=outcome.reason,
-        abstained=outcome.abstained,
+        abstained=abstained,
         sub_facts_present=outcome.sub_facts_present,
         judge_model=outcome.judge_model,
         answer_input_tokens=answer_input_tokens,
