@@ -32,7 +32,7 @@ import vesta.index
 from vesta import config
 from vesta.db.connection import Database
 from vesta.db.migrations import run_migrations
-from vesta.index import bind_coordinator, bind_runtime, reseed_indexed_state, set_indexed_state
+from vesta.index import bind_coordinator, bind_runtime, set_indexed_state
 from vesta.index.job import _INDEX_FMT_VERSION, IndexZimJob
 from vesta.jobs.runner import JobRunner
 from vesta.jobs.types import RESUME_CHECKPOINT_KEY
@@ -485,8 +485,8 @@ async def test_server_pause_mid_build_stamps_zims_paused_not_running(
         assert await r.pause(jid)
         assert await _poll_status(r, jid, "paused")
         assert await _zims_status(rig) == "paused"
-        # And the seed query must not mistake the partial build for an index.
-        await reseed_indexed_state(rig.db)
+        # And the capability flag dropped in the same unwind (S3): no restart
+        # needed before dense profiles stop serving the partial build.
         assert vesta.index._ANY_INDEXED is False
     finally:
         await r.stop()
@@ -504,7 +504,6 @@ async def test_server_cancel_mid_build_stamps_zims_paused_not_running(
         assert await r.cancel(jid)
         assert await _poll_status(r, jid, "cancelled")
         assert await _zims_status(rig) == "paused"
-        await reseed_indexed_state(rig.db)
         assert vesta.index._ANY_INDEXED is False
     finally:
         await r.stop()
@@ -519,6 +518,23 @@ async def test_missing_embedder_fails_with_error_status(rig: _Rig) -> None:
     with pytest.raises(RuntimeError, match="no embed model"):
         await IndexZimJob().run(rig.handle, {"zim_id": 1, "depth": 1})
     assert await _zims_status(rig) == "error"
+
+
+@pytest.mark.asyncio
+async def test_failed_build_reseeds_vectors_flag(rig: _Rig) -> None:
+    """AUDIT_0824 S3: the 'running' stamp raises the capability flag mid-build;
+    when the build then fails, the error arm stamps 'error' — which the seed
+    query does not count as indexed — and must lower the flag in the same
+    unwind instead of claiming VECTORS for a partial store until restart."""
+
+    async def _boom_provider() -> Any:
+        raise RuntimeError("embedder exploded")
+
+    bind_runtime(rig.db, _FakeRegistry(_FakeArchive(rig.paths)), _boom_provider)
+    with pytest.raises(RuntimeError, match="embedder exploded"):
+        await IndexZimJob().run(rig.handle, {"zim_id": 1, "depth": 1})
+    assert await _zims_status(rig) == "error"
+    assert vesta.index._ANY_INDEXED is False
 
 
 @pytest.mark.asyncio

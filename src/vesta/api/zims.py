@@ -298,6 +298,11 @@ async def patch_zim(
         ok = await state.registry.set_enabled(zim_id, patch.enabled)
         if not ok:
             raise HTTPException(status_code=404, detail="archive not found")
+        # Recompute the capability flag: a disabled archive no longer counts
+        # toward VECTORS, so dense profiles must degrade until it returns.
+        from vesta.index import reseed_indexed_state
+
+        await reseed_indexed_state(state.db)
     if patch.corpus_label is not None:
         ok = await state.registry.set_corpus_label(zim_id, patch.corpus_label)
         if not ok:
@@ -329,6 +334,11 @@ async def delete_zim(
     ok = await state.registry.remove(zim_id, delete_file=not keep_file)
     if not ok:
         raise HTTPException(status_code=404, detail="archive not found")
+    # The cascade removed this archive's vectors; recompute the capability
+    # flag so VECTORS turns off when this was the last indexed archive.
+    from vesta.index import reseed_indexed_state
+
+    await reseed_indexed_state(state.db)
     return {"id": zim_id, "ok": True, "file_removed": not keep_file}
 
 

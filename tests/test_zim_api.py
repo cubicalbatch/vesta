@@ -125,6 +125,32 @@ async def test_patch_enable_disable_and_delete(
     assert (await client.get("/api/zims")).json()["archives"] == []
 
 
+async def test_disable_and_delete_recompute_vectors_capability(
+    app_client_with_zim: tuple[httpx.AsyncClient, int],
+) -> None:
+    """AUDIT_0824 S3: disabling or deleting the last indexed archive must
+    recompute the cached VECTORS capability flag in the same request, not
+    leave it claiming vectors until the next restart."""
+    import vesta.index
+
+    client, zim_id = app_client_with_zim
+    try:
+        vesta.index.set_indexed_state(True)
+        # Disabling the archive drops its seed qualification.
+        resp = await client.patch(f"/api/zims/{zim_id}", json={"enabled": False})
+        assert resp.json()["ok"] is True
+        assert vesta.index._ANY_INDEXED is False
+
+        # Deletion likewise: row + vectors gone, the claim must follow.
+        vesta.index.set_indexed_state(True)
+        resp = await client.delete(f"/api/zims/{zim_id}")
+        assert resp.json()["ok"] is True
+        assert (await client.get("/api/zims")).json()["archives"] == []
+        assert vesta.index._ANY_INDEXED is False
+    finally:
+        vesta.index.set_indexed_state(False)
+
+
 async def test_missing_archive_404(app_client_with_zim: tuple[httpx.AsyncClient, int]) -> None:
     client, _ = app_client_with_zim
     resp = await client.get("/api/zim/99999/Foo", follow_redirects=False)

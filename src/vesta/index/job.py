@@ -46,6 +46,7 @@ from vesta.index import (
     get_db,
     get_embedder_provider,
     get_registry,
+    reseed_indexed_state,
     set_indexed_state,
 )
 from vesta.index.depth import chunks_for_article
@@ -183,12 +184,18 @@ class IndexZimJob:
             # re-raise so the runner finishes its own paused/cancelled
             # bookkeeping.
             await _pause_running_build(db, zim_id)
+            # 'paused' is not an indexed state in the seed query either —
+            # lower the capability flag now, not at the next restart.
+            await reseed_indexed_state(db)
             raise
         except Exception:
             # A failed build is surfaced on the archive row, not just the job
             # row (08: index_status includes 'error'; the checkpoint keeps the
             # resume position, so retrying the job resumes where it stopped).
             await _set_index_status(db, zim_id, "error", depth=depth)
+            # 'error' is likewise not counted as indexed: drop the stale
+            # VECTORS claim left over from the 'running' stamp.
+            await reseed_indexed_state(db)
             raise
         finally:
             await release_index_lease(db, zim_id, owner_id=owner_id)
