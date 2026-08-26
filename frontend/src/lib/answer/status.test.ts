@@ -127,4 +127,25 @@ describe('formatTurnStatus', () => {
 		};
 		expect(formatTurnStatus(state)).toBe('Answered · read 2 sources across 2 archives');
 	});
+
+	it('returns "Failed" for a terminal errored turn, never the answered summary', () => {
+		const state: AnswerState = {
+			...createAnswerState(),
+			done: true,
+			error: { code: 'no_llm', message: 'Model unavailable', recoverable: false }
+		};
+		const text = formatTurnStatus(state);
+		expect(text).toBe('Failed');
+		expect(text).not.toContain('Answered');
+	});
+
+	it('keeps the settled summary for an aborted turn (stop(): done without error)', () => {
+		const state: AnswerState = {
+			...createAnswerState(),
+			done: true,
+			text: 'Partial ans',
+			buffer: 'Partial ans'
+		};
+		expect(formatTurnStatus(state)).toBe('Answered · read 0 sources across 0 archives');
+	});
 });
