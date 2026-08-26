@@ -2,7 +2,8 @@
 
 **Frozen wire protocol.** The production UI depends on this exact shape.
 Changes are recorded as dated amendments in this file (below); the protocol
-itself is contract-tested (`tests/test_sse_protocol*.py` + recorded fixtures).
+itself is contract-tested (`tests/test_answer_sse.py` + recorded fixtures under
+`tests/fixtures/sse/`).
 
 > **2026-08-12 amendment (agent trace timing breakdown — additive, non-breaking).**
 > The `POST /api/chat` agent's `trace` event gains a `stages` field: a per-step
@@ -64,7 +65,7 @@ itself is contract-tested (`tests/test_sse_protocol*.py` + recorded fixtures).
 > emitted immediately before the first `token` of such a regenerate, telling
 > clients: **everything streamed so far for this turn is superseded — discard
 > accumulated answer text and start fresh.** It carries one field, `reason` (a
-> short machine tag, e.g. `"fallback"` — may be `""`). Clients that ignore
+> short machine tag, e.g. `"fallback"`). Clients that ignore
 > `answer_reset` will concatenate the old and new answers (the exact bug this
 > fixes) but will not crash — the event is purely additive to the stream.
 
@@ -195,11 +196,10 @@ answer.
 ```json
 {"reason": "fallback"}
 ```
-Everything streamed so far for this turn (all `token.text` accumulated) is
 superseded by the regenerate that follows. `reason` is a short machine tag for
-the trace/dev console (`"fallback"` | `"abstention_retry"` | `""`) —
-informational only, clients should treat any non-empty-or-empty value the
-same way (discard and restart).
+the trace/dev console (`"fallback"` | `"compact_reask"` | `"abstention_retry"`
+| `"cleanup"`) — informational only, clients should treat any value the same
+way (discard and restart).
 
 ### `citations`
 ```json
@@ -254,9 +254,9 @@ stages (`abstention`, `answer`, `citations`) are appended to the retrieval stage
 
 ### `error`
 ```json
-{"code": "stream_error", "message": "...", "recoverable": true}
+{"code": "no_llm", "message": "...", "recoverable": true}
 ```
-`code` ∈ `"no_llm"` | `"retrieval_failed"` | `"stream_error"` | `"fatal"` |
+`code` ∈ `"no_llm"` | `"retrieval_failed"` | `"fatal"` |
 `"no_profile"` | `"budget_exhausted"` | `"unknown_event"`. `recoverable=true`
 means killing `llama-server` mid-answer or a remote timeout — the next question
 works. `"budget_exhausted"` (recoverable) means the model spent its whole token
