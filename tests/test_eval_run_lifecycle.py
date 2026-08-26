@@ -87,7 +87,7 @@ async def test_completed_run_keeps_started_at(
     async def fake_evaluate(*args: Any, **kwargs: Any) -> tuple[RunMetrics, tuple[(), ...]]:
         return _zero_metrics(), ()
 
-    monkeypatch.setattr(eval_api, "LivePipelineRunner", lambda state, profile: _OkRunner())
+    monkeypatch.setattr(eval_api, "LivePipelineRunner", lambda state: _OkRunner())
     monkeypatch.setattr(eval_api, "evaluate_profile", fake_evaluate)
     await eval_api._run_to_completion(
         object(),
@@ -122,7 +122,7 @@ async def test_failed_run_reports_error(db: Database, monkeypatch: pytest.Monkey
     async def boom(*args: Any, **kwargs: Any) -> tuple[RunMetrics, tuple[(), ...]]:
         raise RuntimeError("pipeline exploded")
 
-    monkeypatch.setattr(eval_api, "LivePipelineRunner", lambda state, profile: _OkRunner())
+    monkeypatch.setattr(eval_api, "LivePipelineRunner", lambda state: _OkRunner())
     monkeypatch.setattr(eval_api, "evaluate_profile", boom)
     await eval_api._run_to_completion(
         object(),

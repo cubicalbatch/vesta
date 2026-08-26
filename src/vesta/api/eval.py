@@ -174,7 +174,7 @@ class LivePipelineRunner(PipelineRunner):
     measure-before-ship comparability guarantee.
     """
 
-    def __init__(self, state: AppState, profile: RetrievalProfile | None = None) -> None:
+    def __init__(self, state: AppState) -> None:
         self._state = state
 
     async def run(
@@ -364,7 +364,7 @@ async def _run_to_completion(
     """Run the golden set, then overwrite the placeholder row with the result."""
     try:
         golden = load_set(body.golden_set)
-        runner = LivePipelineRunner(state, profile)
+        runner = LivePipelineRunner(state)
         metrics, results = await evaluate_profile(profile, runner, golden)
         snapshot = app_config.strip_secret_values(app_config.snapshot().values)
         record = _build_record(

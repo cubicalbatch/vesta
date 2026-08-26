@@ -634,16 +634,12 @@ class OracleSystem(_BaseSystem):
         state: AppState,
         *,
         model_id: str = "",
-        endpoint: str = "",
-        api_key: str = "",
         max_tokens: int = 1024,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._state = state
         self._model_id = model_id
-        self._endpoint = endpoint
-        self._api_key = api_key
         self._max_tokens = max_tokens
 
     async def _find_archive(self, zim: str) -> Any:
@@ -717,16 +713,12 @@ class ClosedBookSystem(_BaseSystem):
         state: AppState,
         *,
         model_id: str = "",
-        endpoint: str = "",
-        api_key: str = "",
         max_tokens: int = 1024,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._state = state
         self._model_id = model_id
-        self._endpoint = endpoint
-        self._api_key = api_key
         self._max_tokens = max_tokens
 
     async def run_one(self, q: BenchQuestion) -> QuestionOutput:
@@ -799,8 +791,6 @@ class AnswerOnlySystem(_BaseSystem):
         state: AppState,
         *,
         model_id: str = "",
-        endpoint: str = "",
-        api_key: str = "",
         max_tokens: int = 1024,
         context_path: str | None = None,
         oracle_context: bool = False,
@@ -820,8 +810,6 @@ class AnswerOnlySystem(_BaseSystem):
                 raise ValueError("context_passages must be >= 1")
         self._state = state
         self._model_id = model_id
-        self._endpoint = endpoint
-        self._api_key = api_key
         self._max_tokens = max_tokens
         self._mode = "snapshot" if context_path else "oracle"
         self._context_path = context_path
@@ -984,15 +972,13 @@ def make_system(
         return cls(
             state,
             model_id=model_id,
-            endpoint=endpoint,
-            api_key=api_key,
             context_path=context_path,
             oracle_context=oracle_context,
             context_passages=context_passages,
             **common,
         )
     # oracle, closed_book
-    return cls(state, model_id=model_id, endpoint=endpoint, api_key=api_key, **common)
+    return cls(state, model_id=model_id, **common)
 
 
 # ── SqliteBenchStore (concrete BenchStore over the new tables) ──────────────
