@@ -151,6 +151,13 @@ class JobRunner:
         if record is None or record.status not in {"paused", "queued"}:
             return False
         state = self._runs.get(job_id)
+        if state is not None and state.task is not None and not state.task.done():
+            # A live task already owns this job: parked on the semaphore,
+            # running, or mid-cancel. Spawning a second task would re-run the
+            # job body when both tasks eventually reach the semaphore, and
+            # clearing the cancel flag under a task that is about to deliver
+            # its own CancelledError resurrects a job the user just cancelled.
+            return False
         if state is not None:
             state.pause_requested = False
             state.cancel_requested = False
@@ -268,6 +275,17 @@ class JobRunner:
             state = self._runs.get(job_id)
             if state is not None and state.cancel_requested:
                 await self._finish(job_id, "cancelled")
+                return
+            # Re-read the row now that we hold the slot: an out-of-band writer
+            # (e.g. `vesta index` superseding stranded server-side index jobs)
+            # can mark a queued row terminal while this task is parked on the
+            # semaphore — no lease is held and no runner flag is set while
+            # queued, so the in-memory checks above cannot see it. Never run a
+            # job whose row went terminal; republish so SSE subscribers see
+            # closure.
+            record = await self.get(job_id)
+            if record is not None and record.status in _TERMINAL:
+                await self._publish_status(job_id, record.status)
                 return
             await self._run_job(job_id)
         finally:

@@ -16,8 +16,9 @@ from vesta import config
 from vesta.db.connection import Database
 from vesta.db.migrations import run_migrations
 from vesta.jobs.handle import JobHandleImpl
-from vesta.jobs.runner import JobRunner, _RunState
+from vesta.jobs.runner import JobRunner, _now_iso, _RunState
 from vesta.jobs.types import (
+    JOB_TYPES,
     RESUME_CHECKPOINT_KEY,
     JobHandle,
     JobRecord,
@@ -560,4 +561,154 @@ async def test_progress_publish_does_not_select_per_event(
         "message": "step 7",
         "status": "running",
     }
+    await _stop(db, r)
+
+
+@dataclass
+class _GateProbe:
+    """A job that records every execution (by tag) and parks on a release
+    event, so a test can hold the per-type semaphore slot and prove exactly
+    which jobs ran — and how many times."""
+
+    name: str
+    runs: list[str] = field(default_factory=list)
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def run(self, job: JobHandle, params: Mapping[str, Any]) -> None:
+        self.runs.append(str(params.get("tag", "")))
+        await self.release.wait()
+        await job.progress(1, 1, "done")
+
+
+async def _wait_status(r: JobRunner, jid: int, status: str) -> JobRecord:
+    rec: JobRecord | None = None
+    for _ in range(400):
+        await asyncio.sleep(0.005)
+        rec = await r.get(jid)
+        if rec is not None and rec.status == status:
+            return rec
+    raise AssertionError(f"job {jid} never reached {status!r}: {rec!r}")
+
+
+@pytest.mark.asyncio
+async def test_resume_on_queued_job_with_live_task_does_not_double_run(
+    runner: tuple[Database, JobRunner],
+) -> None:
+    """AUDIT_0824 M15 interleaving A: resume() accepted 'queued' rows and
+    _enqueue spawned unconditionally, so a second resume on an already-queued
+    job spawned a twin task; both eventually crossed the per-type semaphore
+    and the job body ran twice (for download_zim, re-downloading the file)."""
+    db, r = runner
+    probe = _GateProbe(name="gate_probe")
+    register_job_type(probe)
+    try:
+        first = await r.submit("gate_probe", None, {"tag": "first"})
+        await _wait_status(r, first, "running")
+        second = await r.submit("gate_probe", None, {"tag": "second"})
+        await _wait_status(r, second, "queued")
+
+        # The queued job already has a live task parked on the semaphore;
+        # resuming it must refuse instead of spawning a duplicate.
+        assert await r.resume(second) is False
+
+        probe.release.set()
+        await _wait_status(r, first, "done")
+        await _wait_status(r, second, "done")
+        assert probe.runs == ["first", "second"]
+    finally:
+        JOB_TYPES.pop("gate_probe", None)
+    await _stop(db, r)
+
+
+@pytest.mark.asyncio
+async def test_cancel_then_resume_does_not_resurrect_cancelled_job(
+    runner: tuple[Database, JobRunner],
+) -> None:
+    """AUDIT_0824 M15 interleaving B: cancel() flags + cancels the parked
+    task, but until that task delivers its CancelledError the row still reads
+    'queued' — a resume() squeezed into that window cleared cancel_requested
+    and spawned a fresh task, so the job the user cancelled ran anyway."""
+    db, r = runner
+    probe = _GateProbe(name="resurrect_probe")
+    register_job_type(probe)
+    try:
+        first = await r.submit("resurrect_probe", None, {"tag": "first"})
+        await _wait_status(r, first, "running")
+        second = await r.submit("resurrect_probe", None, {"tag": "second"})
+        await _wait_status(r, second, "queued")
+
+        # Hold the terminal transition so the race window stays open: the
+        # cancel has been requested and the parked task cancelled, but the
+        # row still reads 'queued' because its CancelledError is undelivered.
+        orig_finish = r._finish
+        gate = asyncio.Event()
+
+        async def gated_finish(job_id: int, status: str, **kw: Any) -> None:
+            if job_id == second:
+                await gate.wait()
+            await orig_finish(job_id, status, **kw)
+
+        r._finish = gated_finish  # type: ignore[method-assign]
+        try:
+            assert await r.cancel(second) is True
+            # The live mid-cancel task owns the job: resume must refuse.
+            assert await r.resume(second) is False
+        finally:
+            gate.set()
+            r._finish = orig_finish  # type: ignore[method-assign]
+
+        await _wait_status(r, second, "cancelled")
+        probe.release.set()
+        await _wait_status(r, first, "done")
+        # The cancelled job never ran again.
+        assert probe.runs == ["first"]
+    finally:
+        JOB_TYPES.pop("resurrect_probe", None)
+    await _stop(db, r)
+
+
+@pytest.mark.asyncio
+async def test_row_superseded_while_queued_is_never_run(
+    runner: tuple[Database, JobRunner],
+) -> None:
+    """AUDIT_0824 M15 interleaving C: `vesta index` supersedes stranded
+    server-side index jobs by writing status='cancelled' straight to SQLite.
+    A task parked on the per-type semaphore holds no lease and no runner flag,
+    so it used to run anyway once the slot freed — surfacing a spurious
+    lease error. The runner must re-read the row at acquire time."""
+    db, r = runner
+    probe = _GateProbe(name="supersede_probe")
+    register_job_type(probe)
+    try:
+        first = await r.submit("supersede_probe", None, {"tag": "first"})
+        await _wait_status(r, first, "running")
+        second = await r.submit("supersede_probe", None, {"tag": "second"})
+        await _wait_status(r, second, "queued")
+
+        queue = r._subscribe(second)
+        stamp = _now_iso()
+        # Mirror cli._cancel_pending_index_jobs: an out-of-band terminal write
+        # the runner's in-memory flags cannot see.
+        async with db.write() as conn:
+            await conn.execute(
+                "UPDATE jobs SET status='cancelled', "
+                "error='superseded by `vesta index`', updated_at=?, finished_at=? "
+                "WHERE id=?",
+                (stamp, stamp, second),
+            )
+
+        probe.release.set()
+        await _wait_status(r, first, "done")
+        await asyncio.sleep(0.05)  # let the parked task cross the semaphore
+        rec = await r.get(second)
+        assert rec is not None
+        assert rec.status == "cancelled"
+        assert rec.error == "superseded by `vesta index`"
+        assert probe.runs == ["first"]
+        # SSE subscribers see closure for the already-terminal row.
+        event = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert event["event"] == "status"
+        assert event["data"]["status"] == "cancelled"
+    finally:
+        JOB_TYPES.pop("supersede_probe", None)
     await _stop(db, r)
