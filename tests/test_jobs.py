@@ -754,3 +754,54 @@ async def test_row_superseded_while_queued_is_never_run(
     finally:
         JOB_TYPES.pop("supersede_probe", None)
     await _stop(db, r)
+
+
+@pytest.mark.asyncio
+async def test_crash_stranded_queued_job_is_requeued_on_start(
+    tmp_db_path: Path,
+) -> None:
+    """AUDIT_0824 N23: a job left ``queued`` by a hard crash (SIGKILL/power loss
+    while its task was parked on the type semaphore) must be re-enqueued by a
+    fresh runner's ``start()`` — not strand forever with no task in the new
+    process. (A clean stop never strands this way: M14 checkpoints parked tasks
+    to ``paused``.)"""
+    config.configure(env={})
+    probe = _ResumeProbe()
+    register_job_type(probe)
+    try:
+        # Crash debris: a row sitting at 'queued' whose owning process died.
+        db1 = Database(str(tmp_db_path), busy_timeout_ms=2000)
+        await db1.start()
+        async with db1.write() as conn:
+            await run_migrations(conn)
+        now = _now_iso()
+        async with db1.write() as conn:
+            cur = await conn.execute(
+                "INSERT INTO jobs(type, target, params, status, progress, total, "
+                "created_at, updated_at) VALUES('resume_probe', NULL, ?, 'queued', 0, 0, ?, ?)",
+                (json.dumps({"total": 3}), now, now),
+            )
+            jid = int(cur.lastrowid) if cur.lastrowid is not None else 0
+        await db1.stop()
+
+        # Fresh "process": start() must pick the queued row up and run it.
+        db2 = Database(str(tmp_db_path), busy_timeout_ms=2000)
+        await db2.start()
+        r2 = JobRunner(db2)
+        await r2.start()
+        rec = None
+        for _ in range(200):
+            await asyncio.sleep(0.005)
+            rec = await r2.get(jid)
+            if rec and rec.status in {"done", "error", "cancelled"}:
+                break
+        await r2.stop()
+        await db2.stop()
+
+        assert rec is not None
+        assert rec.status == "done"
+        assert rec.progress == rec.total == 3
+        # It ran exactly once, fresh from zero (no checkpoint existed).
+        assert probe.resumed_from == [0]
+    finally:
+        JOB_TYPES.pop("resume_probe", None)

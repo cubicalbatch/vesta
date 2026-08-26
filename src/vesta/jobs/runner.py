@@ -74,15 +74,21 @@ class JobRunner:
     async def start(self) -> None:
         """Resume jobs interrupted by a crash/restart.
 
-        Any job left ``running`` was killed mid-flight: re-queue it so it resumes
-        from its checkpoint.         ``paused`` jobs stay paused until the user resumes.
+        Any job left ``running`` was killed mid-flight: re-queue it so it
+        resumes from its checkpoint. A job left ``queued`` was parked on its
+        type semaphore when the process died (SIGKILL/power loss — a clean
+        stop checkpoints parked tasks to ``paused`` instead): re-enqueue it,
+        or it would strand forever with no task in the new process.
+        ``paused`` jobs stay paused until the user resumes.
         """
         async with (
             self._db.read() as conn,
-            conn.execute("SELECT id FROM jobs WHERE status = 'running'") as cur,
+            conn.execute(
+                "SELECT id, status FROM jobs WHERE status IN ('running', 'queued')"
+            ) as cur,
         ):
             rows = list(await cur.fetchall())
-        for (job_id,) in rows:
+        for job_id, _status in rows:
             await self._set_status(job_id, "queued")
             await self._enqueue(job_id, resume=True)
         if rows:
