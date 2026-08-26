@@ -40,6 +40,7 @@ from vesta.eval.bench_scoring import (
     aggregate_token_usage,
     attribution_by_capability,
     attribution_matrix,
+    judge_cache_key,
     judge_verdict,
     measure_bench_calibration,
     reference_points,
@@ -547,6 +548,101 @@ async def test_judge_verdict_no_judge_is_unjudged() -> None:
         question=q, model_answer="x", abstained=False, judge=None, judge_model="m"
     )
     assert out.verdict == Verdict.UNJUDGED
+
+
+class _ParamJudge(_FakeJudge):
+    """A fake judge that carries the sampling/endpoint identity the real
+    ``GatewayJudgeLLM`` exposes (read duck-typed by the cache key)."""
+
+    def __init__(
+        self,
+        responses: list[str] | str,
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        endpoint: str = "",
+    ) -> None:
+        super().__init__(responses)
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.endpoint = endpoint
+
+
+def test_judge_cache_key_is_sampling_param_sensitive() -> None:
+    """AUDIT_0824 N33: verdicts minted at one temperature / token budget /
+    endpoint must never be served for another."""
+    rubric = "rubric"
+    base = judge_cache_key(rubric, "q1", "ans", "judge-b")
+    assert base != judge_cache_key(rubric, "q1", "ans", "judge-b", temperature=0.0)
+    assert base != judge_cache_key(rubric, "q1", "ans", "judge-b", temperature=0.0, max_tokens=4096)
+    assert judge_cache_key(rubric, "q1", "ans", "judge-b", temperature=0.0) != judge_cache_key(
+        rubric, "q1", "ans", "judge-b", temperature=1.5
+    )
+    assert judge_cache_key(
+        rubric, "q1", "ans", "judge-b", temperature=0.0, max_tokens=4096
+    ) != judge_cache_key(rubric, "q1", "ans", "judge-b", temperature=0.0, max_tokens=2048)
+    assert judge_cache_key(rubric, "q1", "ans", "judge-b", temperature=0.0) != judge_cache_key(
+        rubric, "q1", "ans", "judge-b", temperature=0.0, endpoint="http://127.0.0.1:8080/v1"
+    )
+    # Identical params ⇒ identical key (cache hit).
+    assert judge_cache_key(
+        rubric, "q1", "ans", "judge-b", temperature=0.7, max_tokens=512, endpoint="ep"
+    ) == judge_cache_key(
+        rubric, "q1", "ans", "judge-b", temperature=0.7, max_tokens=512, endpoint="ep"
+    )
+
+
+@pytest.mark.asyncio
+async def test_judge_verdict_cache_rejudges_on_temperature_change() -> None:
+    """Same rubric/qid/answer/model but a different judge temperature ⇒ cache
+    miss: the second call re-judges instead of serving the stale verdict."""
+    q = _q("a")
+    cache: dict[str, JudgeOutcome] = {}
+
+    async def cache_get(key: str) -> JudgeOutcome | None:
+        return cache.get(key)
+
+    async def cache_put(key: str, outcome: JudgeOutcome) -> None:
+        cache[key] = outcome
+
+    hot = _ParamJudge('{"verdict": "correct", "reason": "hot"}', temperature=1.5)
+    out_hot = await judge_verdict(
+        question=q,
+        model_answer="x",
+        abstained=False,
+        judge=hot,
+        judge_model="m",
+        cache_get=cache_get,
+        cache_put=cache_put,
+    )
+    assert out_hot.verdict == Verdict.CORRECT
+    assert len(hot.calls) == 1  # judged live, then cached
+
+    cold = _ParamJudge('{"verdict": "partial", "reason": "cold"}', temperature=0.0)
+    out_cold = await judge_verdict(
+        question=q,
+        model_answer="x",
+        abstained=False,
+        judge=cold,
+        judge_model="m",
+        cache_get=cache_get,
+        cache_put=cache_put,
+    )
+    assert out_cold.verdict == Verdict.PARTIAL
+    assert len(cold.calls) == 1  # temperature changed ⇒ re-judged, not served
+
+    warm = _ParamJudge('{"verdict": "incorrect", "reason": "never called"}', temperature=1.5)
+    out_warm = await judge_verdict(
+        question=q,
+        model_answer="x",
+        abstained=False,
+        judge=warm,
+        judge_model="m",
+        cache_get=cache_get,
+        cache_put=cache_put,
+    )
+    assert out_warm.verdict == Verdict.CORRECT
+    assert len(warm.calls) == 0  # identical params back ⇒ cache hit
 
 
 # ── Answer metrics ──────────────────────────────────────────────────────────

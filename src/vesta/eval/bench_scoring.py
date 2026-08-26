@@ -519,6 +519,10 @@ def judge_cache_key(
     question_id: str,
     model_answer: str,
     judge_model: str,
+    *,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    endpoint: str | None = None,
 ) -> str:
     """Cache key for ``bench_judge_cache``.
 
@@ -527,9 +531,38 @@ def judge_cache_key(
     invalidates the stale entry — a template-only hash would not. The
     ``question_id`` and ``model_answer`` are included explicitly as belt-and-
     suspenders (they are already embedded in the rubric).
+
+    The judge's sampling parameters (``temperature`` / ``max_tokens``) and
+    endpoint identity are folded in as well: verdicts minted at one operating
+    point must never be served for another (a re-judge at temperature 0 after
+    tuning at 1.5, or against a re-pointed endpoint, would otherwise measure
+    nothing new). Rows persisted under the earlier four-field scheme are
+    unreachable under this key shape (the extra fields change the digest);
+    they simply miss and are re-judged — no data migration.
     """
-    raw = f"{rendered_rubric}\x1f{question_id}\x1f{model_answer}\x1f{judge_model}"
+    # ``endpoint=None`` (caller without identity) and ``""`` must hash alike.
+    raw = (
+        f"{rendered_rubric}\x1f{question_id}\x1f{model_answer}\x1f{judge_model}"
+        f"\x1f{temperature!r}\x1f{max_tokens!r}\x1f{(endpoint or '')!r}"
+    )
     return hashlib.sha256(raw.encode("utf-8"), usedforsecurity=False).hexdigest()
+
+
+def _judge_key_params(judge: JudgeLLM | None) -> tuple[float | None, int | None, str]:
+    """Sampling params + endpoint identity carried by the injected judge.
+
+    Duck-typed via ``getattr``: the :class:`JudgeLLM` Protocol is deliberately
+    minimal (``judge(prompt)``), so test fakes without these attributes yield
+    ``(None, None, "")`` — still new-scheme keys, just without finer
+    distinction. The real :class:`~vesta.api.bench.GatewayJudgeLLM` exposes
+    all three.
+    """
+    if judge is None:
+        return None, None, ""
+    temp = getattr(judge, "temperature", None)
+    mt = getattr(judge, "max_tokens", None)
+    ep = getattr(judge, "endpoint", "")
+    return (None if temp is None else float(temp), None if mt is None else int(mt), str(ep))
 
 
 # ── Judge call (structured JSON; one retry, then unjudged; NO lexical path) ──
@@ -607,16 +640,25 @@ async def judge_verdict(
 
     Cache hooks: when ``cache_get`` / ``cache_put`` are provided (by the
     runner, wired to the ``bench_judge_cache`` table), a hit short-circuits the
-    judge call entirely and a judged result is stored. Only the three scored
     verdicts are cached — ``UNJUDGED`` is never cached so a re-judge retries.
     """
+
     if judge is None or not judge_model:
         return _unjudged(judge_model, "no judge configured")
     if retries is None:
         retries = int(get_or_default(BENCH_JUDGE_RETRIES))
     prompt = render_rubric(question=question, model_answer=model_answer, abstained=abstained)
+    temp, mt, endpoint = _judge_key_params(judge)
     if cache_get is not None:
-        key = judge_cache_key(prompt, question.id, model_answer, judge_model)
+        key = judge_cache_key(
+            prompt,
+            question.id,
+            model_answer,
+            judge_model,
+            temperature=temp,
+            max_tokens=mt,
+            endpoint=endpoint,
+        )
         try:
             cached = await cache_get(key)
         except Exception:
@@ -643,7 +685,15 @@ async def judge_verdict(
     if result.verdict.is_judged and cache_put is not None:
         with contextlib.suppress(Exception):
             await cache_put(
-                judge_cache_key(prompt, question.id, model_answer, judge_model),
+                judge_cache_key(
+                    prompt,
+                    question.id,
+                    model_answer,
+                    judge_model,
+                    temperature=temp,
+                    max_tokens=mt,
+                    endpoint=endpoint,
+                ),
                 result,
             )
     return result

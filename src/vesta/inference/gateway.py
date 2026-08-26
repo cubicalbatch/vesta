@@ -205,6 +205,11 @@ class OpenAIGateway:
             timeout=timeout,
         )
 
+    @property
+    def base_url(self) -> str:
+        """The OpenAI-compatible base URL this client points at."""
+        return self._base_url
+
     async def _ensure_ready(self) -> None:
         """For the local source, ensure the supervised ``llama-server`` is up.
 

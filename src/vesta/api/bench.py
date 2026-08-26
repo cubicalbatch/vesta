@@ -132,8 +132,12 @@ class GatewayJudgeLLM:
     ) -> None:
         self._gateway = gateway
         self._model = model
-        self._temp = temperature
-        self._mt = max_tokens
+        #: Public: the judge cache key folds these into its digest so verdicts
+        #: minted at one operating point / endpoint are never served for another.
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        base = getattr(gateway, "_inner", gateway)  # unwrap UsageRecorder if wrapped
+        self.endpoint = str(getattr(base, "base_url", ""))
 
     async def judge(self, prompt: str) -> str:
         from vesta.inference.gateway import ChatMessage
@@ -146,8 +150,8 @@ class GatewayJudgeLLM:
         async for delta in self._gateway.chat_stream(
             [ChatMessage(role="user", content=prompt)],
             model=self._model,
-            temperature=self._temp,
-            max_tokens=self._mt,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
             enable_thinking=False,
         ):
             if delta.text:
