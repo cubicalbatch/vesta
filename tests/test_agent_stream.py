@@ -15,6 +15,7 @@ done.
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -358,6 +359,62 @@ async def test_warmup_emits_reading_status_before_first_token(
     # Turn completed → the runtime's last_used was stamped (D4).
     assert fake.used >= 1
     assert isinstance(events[-1], DoneEvent)
+
+
+_COUNT_DETAIL = re.compile(r"\d+ sources")
+
+
+def _reading_statuses(events: list[Any]) -> list[StatusEvent]:
+    return [e for e in events if isinstance(e, StatusEvent)]
+
+
+@pytest.mark.asyncio
+async def test_warmup_restores_reading_status_after_cold_load(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a cold load's ``Loading <model> into memory…`` statuses flush,
+    the runner re-emits the pre-warmup reading detail (``N sources``). Without
+    this the client sticks on the loading message through the whole first
+    inference gap (it preserves explicit lifecycle details verbatim while the
+    phase stays ``reading``) — users read it as a crash."""
+    from fixtures.llm_runtime import FakeLlmRuntime
+
+    fake = FakeLlmRuntime(status_messages=["Loading Qwen3.5 4B into memory…"])
+    monkeypatch.setattr("vesta.inference.get_runtime", lambda: fake)
+    monkeypatch.setattr(agent_chat, "_make_model", lambda *a, **k: _stub_model())
+
+    events = await _collect(state, "Einstein")
+    statuses = _reading_statuses(events)
+
+    loading_idx = next(i for i, s in enumerate(statuses) if "Loading" in s.detail)
+    count_idxs = [i for i, s in enumerate(statuses) if _COUNT_DETAIL.fullmatch(s.detail)]
+    # Initial "N sources" … Loading … restored "N sources" — same detail, same
+    # phase, all before the first token.
+    assert len(count_idxs) == 2
+    assert count_idxs[0] < loading_idx < count_idxs[1]
+    assert statuses[count_idxs[0]].detail == statuses[count_idxs[1]].detail
+    assert statuses[count_idxs[1]].phase == "reading"
+    first_token = next(i for i, e in enumerate(events) if isinstance(e, TokenEvent))
+    assert count_idxs[0] < first_token and loading_idx < first_token
+
+
+@pytest.mark.asyncio
+async def test_warm_runtime_does_not_duplicate_reading_status(
+    state: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A runtime that was already loaded reports no warm-up statuses, so no
+    restore status either — the turn's only count detail stays the original."""
+    from fixtures.llm_runtime import FakeLlmRuntime
+
+    fake = FakeLlmRuntime()
+    monkeypatch.setattr("vesta.inference.get_runtime", lambda: fake)
+    monkeypatch.setattr(agent_chat, "_make_model", lambda *a, **k: _stub_model())
+
+    events = await _collect(state, "Einstein")
+    statuses = _reading_statuses(events)
+    details = [s.detail for s in statuses]
+    assert not any("Loading" in d for d in details)
+    assert sum(1 for d in details if _COUNT_DETAIL.fullmatch(d)) == 1
 
 
 @pytest.mark.asyncio

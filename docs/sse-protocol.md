@@ -5,6 +5,19 @@ Changes are recorded as dated amendments in this file (below); the protocol
 itself is contract-tested (`tests/test_answer_sse.py` + recorded fixtures under
 `tests/fixtures/sse/`).
 
+> **2026-08-26 amendment (cold-load status restore — additive, non-breaking).**
+> When a `/api/chat` turn warms a cold local runtime, the loading statuses
+> (`status` phase `reading`, detail `"Loading <model> into memory…"`) are now
+> followed — once the runtime is ready — by **one more** `status` event with
+> phase `reading` whose detail is the turn's pre-warmup reading detail:
+> `"<N> sources"` on turn 1 (matching the initial Round-0 status) or
+> `"Considering your question…"` on a follow-up. Clients that overwrite their
+> displayed status on every `status` event are unaffected. This closes the gap
+> where an old client kept showing "Loading … into memory…" for the entire
+> first inference call after load completed. No new event type; ordering rules
+> unchanged (all of this happens before any token).
+>
+> **2026-08-12 amendment (agent trace timing breakdown — additive, non-breaking).**
 > **2026-08-12 amendment (agent trace timing breakdown — additive, non-breaking).**
 > The `POST /api/chat` agent's `trace` event gains a `stages` field: a per-step
 > wall-clock breakdown of the turn (`pre_seed`, `agent_llm`, `search`,

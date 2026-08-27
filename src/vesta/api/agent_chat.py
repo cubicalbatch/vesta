@@ -2637,6 +2637,11 @@ async def iter_agent_turn_events(  # noqa: PLR0912, PLR0915
         # or searches — the FIRST discovery then surfaces ``sources(merge=False)``
         # live from ``_do_search``. ``first_sources_keys`` stays ``None`` until then.
         yield StatusEvent("reading", detail="Considering your question…")
+        #: Restored after a cold-load warm-up (see below) so the UI goes
+        #: back to the truthful pre-warmup reading detail once the model
+        #: is ready instead of staying stuck on ``Loading <model> into
+        #: memory…``.
+        pre_warmup_detail = "Considering your question…"
     else:
         # Turn 1: emit the Round-0 pre-seed cards first (always present, even when
         # empty — the existing contract), then a reading status.
@@ -2649,6 +2654,7 @@ async def iter_agent_turn_events(  # noqa: PLR0912, PLR0915
         )
         ctx.first_sources_keys = set(ctx.turn_cards.keys())
         yield StatusEvent("reading", detail=f"{len(ctx.turn_cards)} sources")
+        pre_warmup_detail = f"{len(ctx.turn_cards)} sources"
 
     # ── Warm-up: bring the local runtime to ready BEFORE the
     # agent's first model call, so a cold model load surfaces as truthful
@@ -2673,6 +2679,12 @@ async def iter_agent_turn_events(  # noqa: PLR0912, PLR0915
         return
     for status in warm:
         yield status
+    if warm:
+        # Cold load: hand the UI back its pre-warmup reading status ("2
+        # sources" / "Considering your question…"). Without this the client
+        # keeps displaying ``Loading <model> into memory…`` through the whole
+        # first inference gap — truthful statuses only, no new phase.
+        yield StatusEvent("reading", detail=pre_warmup_detail)
 
     # Post-warmup sync: ensure ctx.model uses the live router model id.
     resolved_id, resolved_endpoint, resolved_key, _, _ = _resolve_llm(sn)
