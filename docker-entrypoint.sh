@@ -45,4 +45,3 @@ chown -R "$APP_USER:$APP_USER" "$DATA_DIR"
 
 # Never run the app as root.
 exec gosu "$APP_USER" "$@"
-
