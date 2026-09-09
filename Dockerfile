@@ -35,17 +35,25 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
 # ── Stage 3: fetch llama.cpp (CPU variants + Vulkan backend) ───────────────
-# The official `ubuntu-vulkan-x64` prebuilt is a superset: every CPU backend
-# variant (sse42 … zen4, dispatched at runtime by feature scoring → no SIGILL on
-# any x86-64 host) AND libggml-vulkan.so. Pinned tag — bumping is a release
-# change. Building from source would add ~15 min and a toolchain for no gain.
+# The official `ubuntu-vulkan-*` prebuilts are a superset: every CPU backend
+# variant (x64: sse42 … zen4 / arm64: armv8.0 … armv9.2, dispatched at runtime
+# by feature scoring → no SIGILL on any host) AND libggml-vulkan.so. Pinned
+# tag — bumping is a release change. Building from source would add ~15 min
+# and a toolchain for no gain.
 FROM debian:bookworm-slim AS llamacpp
 ARG LLAMA_TAG=b10373
+# TARGETARCH (buildx auto-arg: amd64/arm64) → release asset suffix (x64/arm64).
+ARG TARGETARCH
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl tar \
     && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL -o /tmp/llc.tgz \
-        "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-ubuntu-vulkan-x64.tar.gz" \
+RUN case "${TARGETARCH:-amd64}" in \
+        amd64) asset_arch=x64 ;; \
+        arm64) asset_arch=arm64 ;; \
+        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL -o /tmp/llc.tgz \
+        "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-ubuntu-vulkan-${asset_arch}.tar.gz" \
     && mkdir -p /opt/llama.cpp \
     && tar xzf /tmp/llc.tgz -C /opt/llama.cpp --strip-components=1 \
     && rm /tmp/llc.tgz \
