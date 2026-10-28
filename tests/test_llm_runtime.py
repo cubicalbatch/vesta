@@ -939,6 +939,9 @@ class TestModelHelpers:
         assert thinking_for_filename(f"{QWEN_ID}.gguf") == "toggle"
         assert thinking_for_filename(f"{LFM_ID}.gguf") == "never"
         assert thinking_for_filename("LFM2.5-2.6B-Q4_K_M.gguf") == "always"
+        # LFM3's template HAS a working enable_thinking switch (defaults to ON),
+        # so the switch must be sent — unlike LFM2.x, which always reasons.
+        assert thinking_for_filename("LFM3-1.7B-Q4_K_M.gguf") == "toggle"
         assert thinking_for_filename("Some-7B-Thinking-Q4.gguf") == "always"
         assert thinking_for_filename("Mistral-7B-Q4_K_M.gguf") == "toggle"
 

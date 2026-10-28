@@ -108,9 +108,11 @@ def thinking_for_filename(filename: str) -> ThinkingMode:
 
     Heuristic (calibrated against live models): ``instruct`` ⇒ ``never``
     (measured on LFM2.5-1.2B-Instruct — no kwargs needed, no ``<think>``);
-    ``thinking`` ⇒ ``always``; a bare LFM (no Instruct) ⇒ ``always`` (measured —
-    LFM2.5-2.6B's template has no off switch); anything else (incl. Qwen3.x) ⇒
-    ``toggle``.
+    ``thinking`` ⇒ ``always``; LFM3 ⇒ ``toggle`` (measured — its template has a
+    working ``enable_thinking`` switch, and defaults to ON when the kwarg is
+    absent, which burns the whole answer budget on hidden reasoning); a bare
+    LFM2.x (no Instruct) ⇒ ``always`` (measured — LFM2.5-2.6B's template has no
+    off switch); anything else (incl. Qwen3.x) ⇒ ``toggle``.
     """
     preset = preset_by_filename(filename)
     if preset is not None:
@@ -120,6 +122,8 @@ def thinking_for_filename(filename: str) -> ThinkingMode:
         return "never"
     if "thinking" in stem:
         return "always"
+    if "lfm3" in stem:
+        return "toggle"
     if "lfm" in stem:
         return "always"
     return "toggle"
