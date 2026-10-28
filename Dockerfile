@@ -41,7 +41,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # tag — bumping is a release change. Building from source would add ~15 min
 # and a toolchain for no gain.
 FROM debian:bookworm-slim AS llamacpp
-ARG LLAMA_TAG=b10373
+# b11938 = first release with `lfm3` architecture support (LFM3-1.7B / LFM3-VL-2B,
+# ggml-org/llama.cpp#31252). Older tags (e.g. b10373) abort with
+# "unknown model architecture: 'lfm3'".
+ARG LLAMA_TAG=b11938
 # TARGETARCH (buildx auto-arg: amd64/arm64) → release asset suffix (x64/arm64).
 ARG TARGETARCH
 RUN apt-get update \
