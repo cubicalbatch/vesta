@@ -689,6 +689,7 @@ async def _cmd_bench_run(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR
     from vesta.eval.runner import git_sha as _git_sha
     from vesta.inference import (
         INFERENCE_LLM_API_KEY,
+        INFERENCE_LLM_ENABLE_THINKING,
         INFERENCE_LLM_ENDPOINT_URL,
     )
 
@@ -802,6 +803,11 @@ async def _cmd_bench_run(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR
                             model_id=model,
                             endpoint=answer_endpoint,
                             api_key=str(config.get(INFERENCE_LLM_API_KEY)),
+                            # Honour the answer model's thinking setting. Without
+                            # it, a template that defaults to ON (LFM3, Qwen3.5)
+                            # spends the whole answer budget on hidden reasoning
+                            # and returns empty content.
+                            enable_thinking=bool(config.get(INFERENCE_LLM_ENABLE_THINKING)),
                             profile_hash=profile_hash,
                             context_path=context_path,
                             oracle_context=oracle_context,
