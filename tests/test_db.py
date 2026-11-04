@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -341,3 +342,37 @@ async def test_read_waits_when_pool_exhausted(tmp_db_path: Path) -> None:
 async def _read_once(db: Database) -> None:
     async with db.read():
         pass
+
+
+async def test_cancelled_write_rolls_back_before_next_writer(tmp_db_path: Path) -> None:
+    """Cancelling a request must not commit its partial writes with the next job."""
+    db = Database(str(tmp_db_path))
+    await db.start()
+    entered = asyncio.Event()
+
+    async def interrupted_write() -> None:
+        async with db.write() as conn:
+            await conn.execute("INSERT INTO cancellation_probe VALUES ('interrupted')")
+            entered.set()
+            await asyncio.Event().wait()
+
+    try:
+        async with db.write() as conn:
+            await conn.execute("CREATE TABLE cancellation_probe (value TEXT)")
+        task = asyncio.create_task(interrupted_write())
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # BEGIN also detects a leaked open transaction before any new writes.
+        async with db.write() as conn:
+            assert not conn.in_transaction
+            await conn.execute("BEGIN IMMEDIATE")
+            await conn.execute("INSERT INTO cancellation_probe VALUES ('completed')")
+        async with (
+            db.read() as conn,
+            conn.execute("SELECT value FROM cancellation_probe") as cur,
+        ):
+            assert [row[0] for row in await cur.fetchall()] == ["completed"]
+    finally:
+        await db.stop()
