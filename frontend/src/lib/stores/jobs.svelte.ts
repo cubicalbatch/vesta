@@ -16,7 +16,9 @@ export class JobsStore {
 
 	private controller: AbortController | null = null;
 	private reconnectDelay = RECONNECT_BASE_MS;
-	private stopped = false;
+	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	private generation = 0;
+	private stopped = true;
 
 	get list(): JobRecord[] {
 		return [...this.jobs.values()].sort((a, b) => b.id - a.id);
@@ -48,23 +50,34 @@ export class JobsStore {
 	}
 
 	start() {
-		if (this.controller) return; // already running
+		if (!this.stopped) return; // connected or waiting to reconnect
 		this.stopped = false;
-		this.connect();
+		this.reconnectDelay = RECONNECT_BASE_MS;
+		void this.connect(++this.generation);
 	}
 
 	stop() {
 		this.stopped = true;
+		this.generation++;
 		this.controller?.abort();
 		this.controller = null;
+		this.connected = false;
+		if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
+		this.reconnectTimer = null;
 	}
 
-	private async connect() {
-		this.controller = new AbortController();
+	private async connect(generation: number) {
+		if (this.stopped || generation !== this.generation) return;
+		const controller = new AbortController();
+		this.controller = controller;
 		try {
 			for await (const event of fetchEventStream('/api/jobs/stream', {
-				signal: this.controller.signal
+				signal: controller.signal
 			})) {
+				if (this.stopped || generation !== this.generation) return;
+				// fetchEventStream also yields synthetic transport errors. They
+				// must not announce a healthy connection or reset the backoff.
+				if (event.event === 'error') break;
 				this.connected = true;
 				this.reconnectDelay = RECONNECT_BASE_MS;
 				this.applyWire(event.event, event.data);
@@ -72,12 +85,16 @@ export class JobsStore {
 		} catch {
 			// fall through to reconnect below
 		}
+		// An aborted generation may finish after stop()/start() has already
+		// opened its replacement. It cannot update state or schedule retries.
+		if (this.stopped || generation !== this.generation) return;
+		this.controller = null;
 		this.connected = false;
-		if (this.stopped) return;
 		const delay = this.reconnectDelay;
 		this.reconnectDelay = Math.min(this.reconnectDelay * 2, RECONNECT_MAX_MS);
-		setTimeout(() => {
-			if (!this.stopped) this.connect();
+		this.reconnectTimer = setTimeout(() => {
+			this.reconnectTimer = null;
+			void this.connect(generation);
 		}, delay);
 	}
 
