@@ -11,6 +11,7 @@
 // The session exists only in AI mode. POST /api/chat now drives the streaming
 // pydantic-ai agent directly (no strategy field): the server runs the agent
 // whenever an LLM is configured and degrades to sources_only otherwise.
+import { untrack } from 'svelte';
 import { AnswerStream } from './answerStream.svelte';
 import { streamChat } from './client';
 import { createAnswerState, type AnswerState } from './reducer';
@@ -73,7 +74,9 @@ export class AnswerSession {
 	/** Tear the session down: abort any in-flight stream. Called by the
 	 *  orchestrator on unmount and on leaving AI mode. */
 	dispose() {
-		this.controller?.abort();
+		this.abort();
+		this.seq++;
+		this.loadingHistory = false;
 		this.rootDispose?.();
 		this.rootDispose = null;
 	}
@@ -82,7 +85,10 @@ export class AnswerSession {
 	 *  used when toggling modes or starting a new question mid-stream. */
 	abort() {
 		this.controller?.abort();
-		this.liveTurn?.stream.stop();
+		this.controller = null;
+		// reset() also runs inside URL-seeding effects. Ending an old turn
+		// must not subscribe those effects to its changing answer state.
+		untrack(() => this.liveTurn?.stream.stop());
 	}
 
 	async loadHistory(id: number) {
@@ -114,11 +120,12 @@ export class AnswerSession {
 	}
 
 	startTurn(query: string, { asRegenerate = false }: { asRegenerate?: boolean } = {}) {
+		this.abort();
 		if (this.liveTurn && !asRegenerate) {
 			this.priorTurns = [...this.priorTurns, { query: this.liveTurn.query, state: this.liveTurn.stream.state }];
 		}
-		this.controller?.abort();
-		this.controller = new AbortController();
+		const controller = new AbortController();
+		this.controller = controller;
 		const stream = new AnswerStream();
 		this.liveTurn = { query, stream };
 		const chat = streamChat(
@@ -130,9 +137,12 @@ export class AnswerSession {
 				// whenever an LLM is present, and degrades to sources_only
 				// otherwise.
 			},
-			this.controller.signal
+			controller.signal
 		);
 		chat.conversationId.then((id) => {
+			// A resolved response can already be queued when abort() runs.
+			// Only the request still owned by this session may set its URL/id.
+			if (this.controller !== controller || controller.signal.aborted) return;
 			if (id != null && this.conversationId == null) {
 				this.conversationId = Number(id);
 				// The orchestrator owns URL writes; we only announce the id.
@@ -145,7 +155,7 @@ export class AnswerSession {
 	/** Back to a blank question — "New question", and leaving AI mode. Aborts
 	 *  any in-flight stream and drops all conversation state. */
 	reset() {
-		this.controller?.abort();
+		this.abort();
 		this.seq++;
 		this.conversationId = null;
 		this.priorTurns = [];
