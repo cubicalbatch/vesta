@@ -127,7 +127,6 @@ async def iter_answer_events(
         yield ErrorEvent(
             code="no_profile", message="no retrieval profile could be resolved", recoverable=False
         )
-        yield DoneEvent()
         return
     ret_scope = _parse_scope(scope, state.registry)
 
@@ -172,7 +171,6 @@ async def iter_answer_events(
         return
     except Exception as exc:
         yield ErrorEvent(code="retrieval_failed", message=str(exc), recoverable=False)
-        yield DoneEvent()
         return
 
     # The trace is a first-class output shared across the whole request

@@ -5,7 +5,7 @@
 // These pin describeHttpError's contract: the body's reason is folded into
 // transportErrorEvent's message.
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { fetchEventStream } from './sse';
+import { fetchEventStream, parseEventStream } from './sse';
 
 function jsonResponse(status: number, body: string): Response {
 	return {
@@ -55,6 +55,39 @@ async function collectError(response: Response): Promise<{ code: string; message
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('parseEventStream framing', () => {
+	it.each(['\n', '\r\n', '\r'])('dispatches %j-delimited frames at every chunk boundary', async (newline) => {
+		const wire = `event: token${newline}data: {"text":"hello"}${newline}${newline}event: done${newline}data: {}${newline}${newline}`;
+		for (let split = 0; split <= wire.length; split++) {
+			const events = await collectAll(sseResponse([wire.slice(0, split), wire.slice(split)]));
+			expect(events, `split at ${split}`).toEqual([
+				{ event: 'token', data: { text: 'hello' } },
+				{ event: 'done', data: {} }
+			]);
+		}
+	});
+
+	it('preserves data whitespace after removing only the optional first space', async () => {
+		const response = sseResponse(['data:  leading and trailing  \ndata:second\n\n']);
+		const events = [];
+		for await (const event of parseEventStream(response.body!)) events.push(event);
+		expect(events).toEqual([{ event: 'message', data: ' leading and trailing  \nsecond' }]);
+	});
+
+	it('cancels the underlying response when its consumer stops early', async () => {
+		const cancel = vi.fn();
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode('event: token\ndata: {}\n\n'));
+			},
+			cancel
+		});
+		for await (const _event of parseEventStream(body)) break;
+		expect(cancel).toHaveBeenCalledOnce();
+		expect(body.locked).toBe(false);
+	});
+});
 
 describe('fetchEventStream non-2xx reason propagation', () => {
 	it('folds a FastAPI detail body into the error message', async () => {

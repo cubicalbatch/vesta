@@ -39,6 +39,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -54,6 +55,7 @@ from vesta.catalog import (
 from vesta.catalog.opds import _local_name
 from vesta.config import netguard
 from vesta.config.netguard import EgressBlocked, assert_public_http_url, guarded_stream
+from vesta.jobs.download import response_bounds
 from vesta.jobs.types import (
     RESUME_CHECKPOINT_KEY,
     JobHandle,
@@ -72,6 +74,9 @@ _DISK_CHECK_EVERY = 50 * _CHUNK
 
 #: Seconds to wait per HTTP request before degrading to the next mirror.
 _HTTP_TIMEOUT_S = 120.0
+
+#: Metalinks contain metadata, never archive payloads. Bound even chunked bodies.
+_METALINK_MAX_BYTES = 1024 * 1024
 
 
 class DownloadError(RuntimeError):
@@ -118,7 +123,7 @@ class MetalinkInfo:
     mirrors: tuple[str, ...]  # priority order (1 = first)
 
 
-def parse_metalink(xml_text: str) -> MetalinkInfo:
+def parse_metalink(xml_text: str | bytes) -> MetalinkInfo:
     """Parse a MirrorBrain ``.meta4`` metalink.
 
     Extracts ``<size>``, the ``sha-256`` ``<hash>``, and the ranked ``<url>`` list
@@ -170,7 +175,8 @@ def parse_metalink(xml_text: str) -> MetalinkInfo:
 
 def _direct_url_from_meta4(meta4_url: str) -> str:
     """Strip ``.meta4`` for a direct ZIM URL (fallback)."""
-    return meta4_url[:-6] if meta4_url.endswith(".meta4") else meta4_url
+    parts = urlsplit(meta4_url)
+    return urlunsplit(parts._replace(path=parts.path.removesuffix(".meta4")))
 
 
 def _validated_filename(info: MetalinkInfo, name: str) -> str:
@@ -302,17 +308,27 @@ async def _resolve_metalink(meta4_url: str, mirror_policy: str) -> MetalinkInfo:
     """Fetch + parse the ``.meta4`` (policy ``metalink``); fall back to the
     direct URL (policy ``first`` or a fetch failure). Never raises — a degraded
     metalink yields a single-mirror ``MetalinkInfo`` so the download still runs."""
-    if mirror_policy == "first":
+    if mirror_policy == "first" or urlsplit(meta4_url).path.lower().endswith(".zim"):
         return MetalinkInfo(
             filename="", size=0, sha256=None, mirrors=(_direct_url_from_meta4(meta4_url),)
         )
     try:
         # AUDIT_0824 A1: ``meta4_url`` is request-controlled — validate scheme
         # + host on every hop (the safe client disables httpx auto-follow).
-        async with netguard.safe_client(timeout=_HTTP_TIMEOUT_S) as client:
-            resp = await netguard.guarded_request(client, "GET", meta4_url)
+        async with (
+            netguard.safe_client(timeout=_HTTP_TIMEOUT_S) as client,
+            guarded_stream(client, "GET", meta4_url) as resp,
+        ):
             resp.raise_for_status()
-            return parse_metalink(resp.text)
+            length = resp.headers.get("Content-Length", "")
+            if length.isdigit() and int(length) > _METALINK_MAX_BYTES:
+                raise DownloadError("metalink exceeds the 1 MiB metadata limit")
+            body = bytearray()
+            async for chunk in resp.aiter_bytes(64 * 1024):
+                if len(body) + len(chunk) > _METALINK_MAX_BYTES:
+                    raise DownloadError("metalink exceeds the 1 MiB metadata limit")
+                body.extend(chunk)
+            return parse_metalink(bytes(body))
     except Exception as exc:
         _log.warning(
             "download.metalink_failed",
@@ -394,7 +410,7 @@ async def _download_with_resume(
                     "download.mirror_failed",
                     extra={"mirror": mirror, "index": idx, "error": str(exc)},
                 )
-                bytes_done = max(bytes_done, exc.written)
+                bytes_done = exc.written
                 continue
     raise DownloadError(f"all {len(mirrors)} mirror(s) failed; no bytes written")
 
@@ -452,7 +468,7 @@ async def _download_one(
     """Stream one mirror to ``part_path`` (from ``start``). Raises on any
     network/range failure so the caller tries the next mirror; failures are
     wrapped in :class:`_MirrorFailure` carrying the last written offset."""
-    headers: dict[str, str] = {}
+    headers = {"Accept-Encoding": "identity"}
     if start > 0:
         headers["Range"] = f"bytes={start}-"
 
@@ -460,21 +476,13 @@ async def _download_one(
     try:
         # ``stream`` gives us the body without buffering the whole file in memory.
         async with guarded_stream(client, "GET", url, headers=headers) as resp:
-            if resp.status_code not in (200, 206):
-                raise DownloadError(f"mirror returned HTTP {resp.status_code}")
-            served_from_zero = resp.status_code == 200
-            if served_from_zero and start > 0:
+            bounds = response_bounds(resp, start, total)
+            if bounds.start == 0 and start > 0:
                 # This mirror ignored the Range header: restart from zero rather than
                 # silently corrupting the .part by appending the whole file.
                 _log.warning("download.range_ignored", extra={"mirror": url})
-                start = 0
-                written = 0
-            content_length = resp.headers.get("Content-Length")
-            # Validate the mirror isn't lying about the size of what it'll serve now.
-            if content_length and content_length.isdigit():
-                served_now = int(content_length)
-                if total > 0 and served_from_zero and served_now != total:
-                    raise DownloadError(f"mirror Content-Length {served_now} != expected {total}")
+            start = written = bounds.start
+            total = bounds.total
 
             # Open read/write and seek to ``start`` — never append-at-EOF, which
             # would silently drift onto any leftover tail a failed mirror left
@@ -488,6 +496,8 @@ async def _download_one(
                 async for chunk in resp.aiter_bytes(_CHUNK):
                     if job.cancelled():
                         raise asyncio.CancelledError
+                    if bounds.end is not None and written + len(chunk) > bounds.end:
+                        raise DownloadError("mirror body exceeds the declared byte range")
                     fh.write(chunk)
                     written += len(chunk)
                     # Periodic free-space re-check.
@@ -500,13 +510,13 @@ async def _download_one(
                 # crash before the next checkpoint lands.
                 fh.flush()
                 os.fsync(fh.fileno())
+            if (bounds.end is not None and written != bounds.end) or (total and written != total):
+                raise DownloadError(f"mirror served {written}/{total} bytes then closed")
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         raise _MirrorFailure(exc, written) from exc
 
-    if total and written < total:
-        raise DownloadError(f"mirror served {written}/{total} bytes then closed")
     return written
 
 

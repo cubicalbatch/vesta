@@ -25,8 +25,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from vesta import config
 from vesta.config.netguard import (
     EgressBlocked,
@@ -35,6 +33,7 @@ from vesta.config.netguard import (
     guarded_stream,
     safe_client,
 )
+from vesta.jobs.download import response_bounds
 from vesta.jobs.types import (
     RESUME_CHECKPOINT_KEY,
     JobHandle,
@@ -202,55 +201,15 @@ async def _content_length(url: str) -> int:
     """Best-effort Content-Length via HEAD; 0 if unavailable."""
     try:
         async with safe_client(timeout=30.0) as client:
-            resp = await guarded_request(client, "HEAD", url)
+            resp = await guarded_request(
+                client, "HEAD", url, headers={"Accept-Encoding": "identity"}
+            )
             if resp.status_code >= 400:
                 return 0
             cl = resp.headers.get("Content-Length")
             return int(cl) if cl else 0
     except Exception:
         return 0
-
-
-def _validate_response_headers(
-    resp: httpx.Response, start: int, total: int, url: str
-) -> tuple[int, bool, int]:
-    """Validate status code, Range/Content-Range headers, and Content-Length."""
-    if resp.status_code not in (200, 206):
-        raise DownloadModelError(f"HTTP {resp.status_code} fetching {url}")
-
-    served_from_zero = resp.status_code == 200
-    if served_from_zero and start > 0:
-        _log.warning("download_model.range_ignored", extra={"url": url})
-        start = 0
-
-    if resp.status_code == 206:
-        content_range = resp.headers.get("Content-Range", "")
-        if content_range.startswith("bytes "):
-            spec = content_range[len("bytes ") :].strip()
-            range_spec, _, total_spec = spec.partition("/")
-            range_start_str, _, _ = range_spec.partition("-")
-            if range_start_str.isdigit():
-                range_start = int(range_start_str)
-                if range_start == 0 and start > 0:
-                    _log.warning("download_model.range_ignored", extra={"url": url})
-                    served_from_zero = True
-                    start = 0
-                elif range_start != start:
-                    raise DownloadModelError(
-                        f"server Content-Range start {range_start} != expected {start}"
-                    )
-            if total_spec.isdigit() and not total:
-                total = int(total_spec)
-
-    content_length = resp.headers.get("Content-Length")
-    if content_length and content_length.isdigit():
-        served_now = int(content_length)
-        if not total:
-            total = served_now + (start if not served_from_zero else 0)
-        elif served_from_zero and served_now != total:
-            raise DownloadModelError(f"server Content-Length {served_now} != expected {total}")
-
-    return start, served_from_zero, total
 
 
 async def _download_with_resume(
@@ -267,14 +226,22 @@ async def _download_with_resume(
     limit_kbps = int(config.get(bandwidth_desc)) if bandwidth_desc else 0
 
     start = _trim_part_to(part_path, bytes_done)
-    headers = {"Range": f"bytes={start}-"} if start > 0 else {}
+    headers = {"Accept-Encoding": "identity"}
+    if start > 0:
+        headers["Range"] = f"bytes={start}-"
     t0 = asyncio.get_event_loop().time()
 
     async with (
         safe_client(timeout=_HTTP_TIMEOUT_S) as client,
         guarded_stream(client, "GET", url, headers=headers) as resp,
     ):
-        start, _served_from_zero, total = _validate_response_headers(resp, start, total, url)
+        try:
+            bounds = response_bounds(resp, start, total)
+        except ValueError as exc:
+            raise DownloadModelError(str(exc)) from exc
+        if bounds.start == 0 and start > 0:
+            _log.warning("download_model.range_ignored", extra={"url": url})
+        start, total = bounds.start, bounds.total
         written = start
 
         with part_path.open("wb" if start == 0 else "r+b") as f:
@@ -283,6 +250,8 @@ async def _download_with_resume(
             async for chunk in resp.aiter_bytes(_CHUNK):
                 if job.cancelled():
                     raise asyncio.CancelledError
+                if bounds.end is not None and written + len(chunk) > bounds.end:
+                    raise DownloadModelError("server body exceeds the declared byte range")
                 f.write(chunk)
                 written += len(chunk)
                 await _checkpoint(job, written, total, url, sha256)
@@ -290,7 +259,7 @@ async def _download_with_resume(
             f.flush()
             os.fsync(f.fileno())
 
-    if total and written < total:
+    if (bounds.end is not None and written != bounds.end) or (total and written != total):
         raise DownloadModelError(f"server served {written}/{total} bytes then closed")
     return written
 

@@ -73,6 +73,60 @@ async function drainMicrotasks(): Promise<void> {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('AnswerSession.reset strands nothing', () => {
+	it.each(['reset', 'dispose', 'abort'] as const)('ignores response headers arriving after %s()', async (action) => {
+		const pending = deferred<Response>();
+		vi.stubGlobal('fetch', vi.fn(() => pending.promise));
+		const session = new AnswerSession();
+		const announce = vi.fn();
+		session.onConversationId = announce;
+		try {
+			session.startTurn('old question');
+			session[action]();
+			pending.resolve(finiteSseResponse());
+			await drainMicrotasks();
+			expect(session.conversationId).toBeNull();
+			expect(announce).not.toHaveBeenCalled();
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it('accepts only the current turn\'s response headers after starting another question', async () => {
+		const older = deferred<Response>();
+		const newer = deferred<Response>();
+		vi.stubGlobal('fetch', vi.fn().mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise));
+		const session = new AnswerSession();
+		try {
+			session.startTurn('old question');
+			session.reset();
+			session.startTurn('new question');
+			older.resolve(finiteSseResponse());
+			await drainMicrotasks();
+			expect(session.conversationId).toBeNull();
+			const response = finiteSseResponse();
+			response.headers.set('X-Conversation-Id', '42');
+			newer.resolve(response);
+			await drainMicrotasks();
+			expect(session.conversationId).toBe(42);
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it('ends an interrupted turn before archiving it for a follow-up', async () => {
+		const pending = deferred<Response>();
+		vi.stubGlobal('fetch', vi.fn(() => pending.promise));
+		const session = new AnswerSession();
+		try {
+			session.startTurn('first question');
+			session.startTurn('second question');
+			expect(session.priorTurns[0].state.done).toBe(true);
+		} finally {
+			session.dispose();
+			pending.resolve(finiteSseResponse());
+			await drainMicrotasks();
+		}
+	});
 	it('a follow-up before reset carries the conversation id', async () => {
 		const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => finiteSseResponse());
 		vi.stubGlobal('fetch', fetchMock);
@@ -117,6 +171,17 @@ describe('AnswerSession.reset strands nothing', () => {
 });
 
 describe('loadHistory stale-resolution guard (AUDIT_0824 F4)', () => {
+	it('dispose() drops an outstanding history load', async () => {
+		const pending = deferred<ConversationDetail>();
+		getDetail.mockReturnValue(pending.promise);
+		const session = new AnswerSession();
+		const loading = session.loadHistory(17);
+		session.dispose();
+		pending.resolve(detailOf([['user', 'stale'], ['assistant', 'stale answer']]));
+		await loading;
+		expect(session.priorTurns).toEqual([]);
+		expect(session.loadingHistory).toBe(false);
+	});
 	it('a normal load populates priorTurns', async () => {
 		getDetail.mockResolvedValue(
 			detailOf([

@@ -151,7 +151,10 @@ class Database:
             try:
                 yield self._write
                 await self._write.commit()
-            except Exception:
+            except BaseException:
+                # CancelledError bypasses Exception. Roll back before releasing
+                # the writer lock so a cancelled request cannot leave partial
+                # writes for an unrelated request to commit.
                 await self._write.rollback()
                 raise
 

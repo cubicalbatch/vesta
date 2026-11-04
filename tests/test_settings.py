@@ -131,6 +131,21 @@ def test_validate_and_coerce_enforces_bounds() -> None:
     assert config.validate_and_coerce(config.SERVER_PORT, "8080") == 8080
 
 
+@pytest.mark.parametrize("raw", ["nan", "NaN", "inf", "-Infinity", "1e999"])
+def test_float_settings_reject_nonfinite_values(raw: str) -> None:
+    knob = config.setting("test.finite_float", float, 1.0, group="Test", help="h")
+    with pytest.raises(ValueError, match="finite"):
+        config.validate_and_coerce(knob, raw)
+
+
+@pytest.mark.parametrize("layer", ["env", "db_values"])
+def test_settings_resolution_rejects_nonfinite_values(layer: str) -> None:
+    knob = config.setting("test.finite_layer", float, 1.0, group="Test", help="h")
+    config.configure(**{layer: {knob.key: "nan"}})
+    with pytest.raises(ValueError, match="finite"):
+        config.get(knob)
+
+
 def test_validate_and_coerce_enforces_choices() -> None:
     with pytest.raises(ValueError):
         config.validate_and_coerce(config.LOGGING_LEVEL, "LOUD")

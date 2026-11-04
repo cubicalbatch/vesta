@@ -220,10 +220,11 @@
 	function askAboutThisArticle() {
 		if (!target) return;
 		const q = encodeURIComponent(`Tell me about ${displayTitle || target.title || target.path}`);
+		const url = `/?q=${q}&scope=${target.zimId}&ai=1`;
 		readerStore.close();
 		// Seed AI mode on the unified surface, scoped to this archive
 		// Reader navigation.
-		goto(`/?q=${q}&scope=${target.zimId}&ai=1`);
+		goto(url);
 	}
 </script>
 {#if target}

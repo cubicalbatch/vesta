@@ -33,6 +33,7 @@ from vesta.answer import CHAT_HISTORY_MAX_TURNS
 from vesta.answer.contracts import (
     AnswerResetEvent,
     CitationsEvent,
+    DoneEvent,
     ErrorEvent,
     SourcesEvent,
     TokenEvent,
@@ -220,6 +221,7 @@ async def _run_chat_turn(
     started = time.monotonic()
 
     stream_failure: Exception | None = None
+    terminal_event: DoneEvent | ErrorEvent | None = None
     event_gen: AsyncIterator[object] | None = None
     try:
         capabilities = compute_capabilities()
@@ -251,23 +253,23 @@ async def _run_chat_turn(
         stream_failure = exc
 
     if event_gen is not None:
-        async with contextlib.aclosing(cast(AsyncGenerator[object], event_gen)) as events:
-            try:
+        try:
+            async with contextlib.aclosing(cast(AsyncGenerator[object], event_gen)) as events:
                 async for event in events:
-                    yield _serialize_event(event)
-                    if isinstance(event, ErrorEvent):
-                        # Ordering rule 8 (docs/sse-protocol.md): an error event
-                        # terminates the stream. Stop consuming upstream (a
-                        # well-behaved emitter returns here anyway) so nothing can
-                        # follow it on this layer's wire.
+                    if isinstance(event, (DoneEvent, ErrorEvent)):
+                        # Finish upstream cleanup and persist before publishing
+                        # completion. A client may close the connection or start
+                        # a follow-up as soon as it sees the terminal event.
+                        terminal_event = event
                         break
                     answer_parts, final_answer, source_cards, trace_dict = _absorb_turn_event(
                         event, answer_parts, final_answer, source_cards, trace_dict
                     )
-            except Exception as exc:
-                # The turn died mid-stream. Remember why, persist whatever exists
-                # below, then re-raise so the wrapper emits the terminal error.
-                stream_failure = exc
+                    yield _serialize_event(event)
+        except Exception as exc:
+            # This also covers upstream cleanup failing after its final event.
+            # Persist the partial turn, then let the wrapper emit one error.
+            stream_failure = exc
 
     # 4. Persist the assistant turn. tokens_in/out stay null — no tokenizer runs
     #    in the request path; the trace carries the full detail for analysis.
@@ -285,6 +287,8 @@ async def _run_chat_turn(
 
     if stream_failure is not None:
         raise stream_failure
+    if terminal_event is not None:
+        yield _serialize_event(terminal_event)
 
 
 # ── Conversation CRUD (JSON) ────────────────────────────────────────────────

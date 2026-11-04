@@ -525,11 +525,15 @@ def judge_cache_key(
     tuning at 1.5, or against a re-pointed endpoint, would otherwise measure
     nothing new). Rows persisted under the earlier four-field scheme are
     unreachable under this key shape (the extra fields change the digest);
-    they simply miss and are re-judged — no data migration.
+    they simply miss and are re-judged — no data migration. The parser version
+    also invalidates verdicts accepted before boolean fields were validated:
+    stored outcomes have already coerced those values, so a malformed reply
+    cannot be distinguished from a valid one after caching. Historical run
+    results are untouched; a future judge call repopulates only its own entry.
     """
     # ``endpoint=None`` (caller without identity) and ``""`` must hash alike.
     raw = (
-        f"{rendered_rubric}\x1f{question_id}\x1f{model_answer}\x1f{judge_model}"
+        f"judge-json-v2\x1f{rendered_rubric}\x1f{question_id}\x1f{model_answer}\x1f{judge_model}"
         f"\x1f{temperature!r}\x1f{max_tokens!r}\x1f{(endpoint or '')!r}"
     )
     return hashlib.sha256(raw.encode("utf-8"), usedforsecurity=False).hexdigest()
@@ -589,10 +593,16 @@ def _parse_judge_json(raw: str, judge_model: str) -> JudgeOutcome | None:
         verdict = Verdict(token)  # only correct/partial/incorrect parse here
     except ValueError:
         return None
+    if not verdict.is_judged:
+        return None
     reason = str(obj.get("reason") or "")[:300]
-    sfp_raw = obj.get("sub_facts_present")
-    sub_facts_present = tuple(bool(x) for x in sfp_raw) if isinstance(sfp_raw, list) else ()
-    abstained = bool(obj.get("abstained", False))
+    sfp_raw = obj.get("sub_facts_present", [])
+    if not isinstance(sfp_raw, list) or any(not isinstance(value, bool) for value in sfp_raw):
+        return None
+    sub_facts_present = tuple(sfp_raw)
+    abstained = obj.get("abstained", False)
+    if not isinstance(abstained, bool):
+        return None
     return JudgeOutcome(
         verdict=verdict,
         reason=reason,

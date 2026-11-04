@@ -9,12 +9,15 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
 import yaml
 
 from vesta.config.settings import SettingsSnapshot, all_settings
 from vesta.retrieval.profiles import (
     BUILTIN_PROFILES,
     load_profile,
+    load_user_profiles,
+    parse_profile_text,
     profile_to_dict,
     resolve_profile_from_settings,
 )
@@ -132,6 +135,46 @@ def test_resolve_profile_from_settings_corrupt_user_profile_ignored() -> None:
     invalid_yaml_blob = json.dumps({"broken": "not: [valid: yaml"})
     sn2 = _make_snapshot(**{"retrieval.profiles": invalid_yaml_blob})
     assert resolve_profile_from_settings("broken", snapshot=sn2, fallback_to_default=False) is None
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"name": ["broken"]},
+        {"description": {"unexpected": "mapping"}},
+        {"preparers": {"impl": "normalize"}},
+        {"scorers": "static"},
+        {"sources": [{"impl": ["xapian_fts"]}]},
+        {"sources": [{"impl": "xapian_fts", "params": []}]},
+        {"sources": [{"impl": "xapian_fts", "params": False}]},
+        {"sources": [{"impl": "xapian_fts", "params": {1: 2}}]},
+        {1: "unexpected top-level key", "unexpected": True},
+    ],
+)
+def test_malformed_profile_shapes_are_rejected_without_breaking_other_profiles(
+    patch: dict[object, object],
+) -> None:
+    data = yaml.safe_load(_custom_profile_yaml("broken"))
+    data.update(patch)
+    malformed = yaml.safe_dump(data)
+    with pytest.raises(ValueError):
+        parse_profile_text(malformed)
+    valid = _custom_profile_yaml("valid")
+    blob = json.dumps({"broken": malformed, "valid": valid})
+    profiles = load_user_profiles(blob)
+    assert set(profiles) == {"valid"}
+    sn = _make_snapshot(**{"retrieval.profiles": blob})
+    assert resolve_profile_from_settings("lexical", snapshot=sn) == BUILTIN_PROFILES["lexical"]
+
+
+def test_optional_profile_stages_and_params_still_accept_null() -> None:
+    data = yaml.safe_load(_custom_profile_yaml("custom"))
+    data.update(preparers=None, scorers=None)
+    data["sources"][0]["params"] = None
+    profile = parse_profile_text(yaml.safe_dump(data))
+    assert profile.preparers == ()
+    assert profile.scorers == ()
+    assert profile.sources[0].params == {}
 
 
 def test_resolve_profile_from_settings_custom_default_name() -> None:
