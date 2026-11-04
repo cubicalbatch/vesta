@@ -11,29 +11,40 @@ export interface WireEvent {
 	data: string;
 }
 
-/** Parses the `event:`/`data:` SSE wire format out of a byte stream. A dozen lines, by design. */
+/** Parses SSE frames independently of byte boundaries and line-ending style. */
 export async function* parseEventStream(
 	body: ReadableStream<Uint8Array>
 ): AsyncGenerator<WireEvent> {
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = '';
+	let ended = false;
+	let previousCR = false;
+	const normalizeLines = (text: string): string => {
+		if (!text) return '';
+		// A CR already ended the previous line. Its optional LF may arrive
+		// in the next network chunk and must not become a second newline.
+		const normalized = previousCR && text.startsWith('\n') ? text.slice(1) : text;
+		previousCR = text.endsWith('\r');
+		return normalized.replace(/\r\n?/g, '\n');
+	};
 	try {
 		for (;;) {
 			const { done, value } = await reader.read();
 			if (done) {
-				// A frame cut off by EOF still counts (SSE spec): dispatch it rather
-				// than dropping the tail of a stream that died mid-frame.
-				buffer += decoder.decode();
+				ended = true;
+				// Preserve this client's residual-frame recovery at EOF; the
+				// transport reports an incomplete answer separately below.
+				buffer += normalizeLines(decoder.decode());
 				if (buffer.trim()) {
 					const parsed = parseBlock(buffer);
 					if (parsed) yield parsed;
 				}
 				break;
 			}
-			buffer += decoder.decode(value, { stream: true });
+			buffer += normalizeLines(decoder.decode(value, { stream: true }));
 			let sep: number;
-			// SSE frames are separated by a blank line ("\n\n"); tolerate "\r\n\r\n".
+			// CRLF, LF and CR have all been normalized before framing.
 			while ((sep = buffer.indexOf('\n\n')) !== -1) {
 				const block = buffer.slice(0, sep);
 				buffer = buffer.slice(sep + 2);
@@ -42,6 +53,9 @@ export async function* parseEventStream(
 			}
 		}
 	} finally {
+		// Releasing a lock alone leaves the response downloading when a
+		// consumer breaks out before EOF (for example after stopping a turn).
+		if (!ended) await reader.cancel().catch(() => {});
 		reader.releaseLock();
 	}
 }
@@ -51,8 +65,12 @@ function parseBlock(block: string): WireEvent | null {
 	const dataLines: string[] = [];
 	for (const rawLine of block.split('\n')) {
 		const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
-		if (line.startsWith('event:')) event = line.slice(6).trim();
-		else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+		const colon = line.indexOf(':');
+		const field = colon < 0 ? line : line.slice(0, colon);
+		let value = colon < 0 ? '' : line.slice(colon + 1);
+		if (value.startsWith(' ')) value = value.slice(1);
+		if (field === 'event') event = value || 'message';
+		else if (field === 'data') dataLines.push(value);
 	}
 	if (dataLines.length === 0 && event === 'message') return null;
 	return { event, data: dataLines.join('\n') };
