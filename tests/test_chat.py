@@ -653,6 +653,86 @@ class TestErrorTerminalStream:
     of the exchange existed when it died."""
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("terminal", ["done", "error"])
+    async def test_persistence_failure_emits_only_one_terminal_event(
+        self,
+        app_client_with_zim: tuple[httpx.AsyncClient, int],
+        monkeypatch: pytest.MonkeyPatch,
+        terminal: str,
+    ) -> None:
+        import vesta.api.chat as chat_module
+        from vesta.answer.contracts import DoneEvent, ErrorEvent, TokenEvent
+
+        async def events(*args: object, **kwargs: object) -> AsyncIterator[object]:
+            yield TokenEvent(text="the answer")
+            yield (
+                DoneEvent()
+                if terminal == "done"
+                else ErrorEvent(code="model_failed", message="model failed", recoverable=False)
+            )
+
+        append = SqliteConversationStore.append_message
+
+        async def fail_assistant_write(
+            store: SqliteConversationStore,
+            conversation_id: int,
+            role: str,
+            content: str,
+            **kwargs: object,
+        ) -> int:
+            if role == "assistant":
+                raise RuntimeError("assistant write failed")
+            return await append(store, conversation_id, role, content)
+
+        monkeypatch.setattr(chat_module, "iter_answer_events", events)
+        monkeypatch.setattr(chat_module, "compute_capabilities", frozenset)
+        monkeypatch.setattr(SqliteConversationStore, "append_message", fail_assistant_write)
+        client, _ = app_client_with_zim
+        response = await client.post("/api/chat", json={"query": "test"})
+        wire = _parse_sse(response.text)
+        assert [name for name, _ in wire] == ["token", "error"]
+        assert wire[-1][1]["message"] == "assistant write failed"
+
+    @pytest.mark.asyncio
+    async def test_completion_is_persisted_before_done_and_closes_upstream(
+        self, db: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import vesta.api.chat as chat_module
+        from vesta.answer.contracts import DoneEvent, TokenEvent
+
+        closed = False
+
+        async def events(*args: object, **kwargs: object) -> AsyncIterator[object]:
+            nonlocal closed
+            try:
+                yield TokenEvent(text="the answer")
+                yield DoneEvent()
+                yield TokenEvent(text="must never be consumed")
+            finally:
+                closed = True
+
+        monkeypatch.setattr(chat_module, "iter_answer_events", events)
+        monkeypatch.setattr(chat_module, "compute_capabilities", frozenset)
+        store = SqliteConversationStore(db)
+        conversation_id = await store.create_conversation("test")
+        stream = chat_module._run_chat_turn(
+            object(), store, conversation_id, chat_module.ChatRequest(query="test")
+        )
+        async with contextlib.aclosing(stream):
+            assert _parse_sse(await anext(stream))[0][0] == "token"
+            assert _parse_sse(await anext(stream))[0][0] == "done"
+            # A client can immediately ask a follow-up or close the response
+            # upon seeing done: the completed exchange must already exist.
+            messages = await store.list_messages(conversation_id)
+            assert [(m.role, m.content) for m in messages] == [
+                ("user", "test"),
+                ("assistant", "the answer"),
+            ]
+            assert closed
+            with pytest.raises(StopAsyncIteration):
+                await anext(stream)
+
+    @pytest.mark.asyncio
     async def test_upstream_crash_ends_stream_at_error_and_persists_partial(
         self, app_client_with_zim: tuple[httpx.AsyncClient, int], monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -277,6 +277,28 @@ async def test_answer_endpoint_sse_stream(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["profile", "retrieval"])
+async def test_answer_failures_end_at_error(
+    app_client: AsyncClient, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    import vesta.api.answer as answer_module
+
+    if failure == "profile":
+        monkeypatch.setattr(answer_module, "_resolve_profile", lambda *args, **kwargs: None)
+    else:
+
+        async def fail_retrieval(*args: object, **kwargs: object) -> object:
+            raise RuntimeError("retrieval unavailable")
+
+        monkeypatch.setattr(answer_module, "run_pipeline", fail_retrieval)
+
+    response = await app_client.get("/api/answer?q=test")
+    events = _parse_sse(response.text)
+    assert [name for name, _ in events] == ["error"]
+    assert events[0][1]["code"] == ("no_profile" if failure == "profile" else "retrieval_failed")
+
+
+@pytest.mark.asyncio
 async def test_answer_endpoint_no_archives_abstains(app_client: AsyncClient) -> None:
     """With zero archives registered, every candidate source returns nothing and
     the pipeline raises NoCandidatesError. The endpoint must surface that the way
