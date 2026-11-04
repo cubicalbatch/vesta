@@ -92,6 +92,8 @@ def _hash_yaml(text: str) -> str:
 
 def _validate_components(profile_name: str, data: dict[str, Any]) -> None:
     """Raise ``ValueError`` if any component ref does not resolve in the registry."""
+    if any(not isinstance(key, str) for key in data):
+        raise ValueError(f"profile {profile_name!r}: top-level keys must be strings")
     unknown = sorted(set(data) - _KNOWN_TOP_LEVEL_KEYS)
     if unknown:
         raise ValueError(
@@ -105,8 +107,8 @@ def _validate_components(profile_name: str, data: dict[str, Any]) -> None:
                 f"profile {profile_name!r}: {key} entry must be a dict, got {type(entry).__name__}"
             )
         impl = entry.get("impl")
-        if not impl:
-            raise ValueError(f"profile {profile_name!r}: {key}.impl is required")
+        if not isinstance(impl, str) or not impl:
+            raise ValueError(f"profile {profile_name!r}: {key}.impl must be a non-empty string")
         resolved: type | None = None
         for tag in kind_tags:
             resolved = resolve(tag, impl)
@@ -119,9 +121,13 @@ def _validate_components(profile_name: str, data: dict[str, Any]) -> None:
             )
         # A typo'd param name (``limt: 3``) must fail here at load, not
         # silently fall back to the default at query time.
-        params = entry.get("params") or {}
+        params = entry.get("params")
+        if params is None:
+            params = {}
         if not isinstance(params, dict):
             raise ValueError(f"profile {profile_name!r}: {key}.params must be a dict")
+        if any(not isinstance(param, str) for param in params):
+            raise ValueError(f"profile {profile_name!r}: {key}.params keys must be strings")
         params_model = getattr(resolved, "Params", None)
         if isinstance(params_model, type) and issubclass(params_model, BaseModel):
             try:
@@ -137,8 +143,10 @@ def _validate_components(profile_name: str, data: dict[str, Any]) -> None:
 
     for key in _LIST_KINDS & set(data):
         entries = data[key]
+        if entries is None and key != "sources":
+            continue
         if not isinstance(entries, list):
-            entries = []
+            raise ValueError(f"profile {profile_name!r}: {key} must be a list")
         for entry in entries:
             _check({_KIND_MAP[key]: key}, key, entry)
 
@@ -201,9 +209,13 @@ def parse_profile_text(yaml_text: str, *, default_name: str | None = None) -> Re
     if not isinstance(data, dict):
         raise ValueError("profile YAML must map to a dict")
     name = data.get("name") or default_name
-    if not name:
-        raise ValueError("profile YAML must include a 'name' field")
-    desc = data.get("description") or ""
+    if not isinstance(name, str) or not name:
+        raise ValueError("profile YAML must include a non-empty string 'name' field")
+    desc = data.get("description")
+    if desc is None:
+        desc = ""
+    if not isinstance(desc, str):
+        raise ValueError(f"profile {name!r}: description must be a string")
     _validate_components(name, data)
     return _parse_profile(name, desc, yaml_text)
 
