@@ -591,6 +591,76 @@ async def test_judge_verdict_parses_fenced_json() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"verdict": "pending"},
+        {"verdict": "unjudged"},
+        {"sub_facts_present": ["false", "true"]},
+        {"sub_facts_present": [0, 1]},
+        {"sub_facts_present": [None]},
+        {"sub_facts_present": "false"},
+        {"sub_facts_present": None},
+        {"abstained": "false"},
+        {"abstained": 0},
+        {"abstained": None},
+    ],
+)
+async def test_malformed_judge_fields_are_unjudged_and_never_cached(
+    patch: dict[str, object],
+) -> None:
+    payload = {"verdict": "correct", **patch}
+    malformed = json.dumps(payload)
+    assert _parse_judge_json(malformed, "m") is None
+    judge = _FakeJudge([malformed, malformed])
+    cached: list[JudgeOutcome] = []
+
+    async def cache_put(key: str, outcome: JudgeOutcome) -> None:
+        cached.append(outcome)
+
+    out = await judge_verdict(
+        question=_q("a"),
+        model_answer="x",
+        abstained=False,
+        judge=judge,
+        judge_model="m",
+        retries=1,
+        cache_put=cache_put,
+    )
+    assert out.verdict == Verdict.UNJUDGED
+    assert out.reason == "unparseable judge output"
+    assert len(judge.calls) == 2
+    assert not cached
+
+
+@pytest.mark.asyncio
+async def test_judge_malformed_boolean_recovers_with_real_boolean_on_retry() -> None:
+    judge = _FakeJudge(
+        [
+            '{"verdict": "correct", "sub_facts_present": ["false"]}',
+            '{"verdict": "partial", "sub_facts_present": [false], "abstained": false}',
+        ]
+    )
+    out = await judge_verdict(
+        question=_q("a"),
+        model_answer="x",
+        abstained=False,
+        judge=judge,
+        judge_model="m",
+        retries=1,
+    )
+    assert out.verdict == Verdict.PARTIAL
+    assert out.sub_facts_present == (False,)
+    assert out.abstained is False
+    assert len(judge.calls) == 2
+
+
+def test_judge_optional_fields_keep_defaults() -> None:
+    out = _parse_judge_json('{"verdict": " CORRECT ", "reason": "r"}', "m")
+    assert out == JudgeOutcome(verdict=Verdict.CORRECT, reason="r", judge_model="m")
+
+
+@pytest.mark.asyncio
 async def test_judge_verdict_retries_once_then_unjudged() -> None:
     q = _q("a")
     judge = _FakeJudge(["garbage", "still garbage"])
@@ -674,6 +744,54 @@ def test_judge_cache_key_is_sampling_param_sensitive() -> None:
     ) == judge_cache_key(
         rubric, "q1", "ans", "judge-b", temperature=0.7, max_tokens=512, endpoint="ep"
     )
+
+
+@pytest.mark.asyncio
+async def test_judge_cache_does_not_reuse_pre_validation_outcomes() -> None:
+    """Old outcomes no longer reveal whether true came from true or 'false'."""
+    import hashlib
+
+    q = _q("a")
+    prompt = render_rubric(question=q, model_answer="x", abstained=False)
+    previous_raw = f"{prompt}\x1f{q.id}\x1fx\x1fm\x1fNone\x1fNone\x1f''"
+    previous_key = hashlib.sha256(previous_raw.encode(), usedforsecurity=False).hexdigest()
+    cache = {
+        previous_key: JudgeOutcome(
+            verdict=Verdict.CORRECT, sub_facts_present=(True,), judge_model="m"
+        )
+    }
+
+    async def cache_get(key: str) -> JudgeOutcome | None:
+        return cache.get(key)
+
+    async def cache_put(key: str, outcome: JudgeOutcome) -> None:
+        cache[key] = outcome
+
+    judge = _FakeJudge('{"verdict": "partial", "sub_facts_present": [false]}')
+    out = await judge_verdict(
+        question=q,
+        model_answer="x",
+        abstained=False,
+        judge=judge,
+        judge_model="m",
+        cache_get=cache_get,
+        cache_put=cache_put,
+    )
+    assert len(judge.calls) == 1
+    assert out.verdict == Verdict.PARTIAL
+    assert out.sub_facts_present == (False,)
+    assert len(cache) == 2  # historical values are preserved, never rewritten
+    again = await judge_verdict(
+        question=q,
+        model_answer="x",
+        abstained=False,
+        judge=judge,
+        judge_model="m",
+        cache_get=cache_get,
+        cache_put=cache_put,
+    )
+    assert again == out
+    assert len(judge.calls) == 1  # the new-schema result is reusable
 
 
 @pytest.mark.asyncio
