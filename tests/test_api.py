@@ -79,6 +79,21 @@ async def test_put_rejects_out_of_bounds(app_client: httpx.AsyncClient) -> None:
     assert resp.status_code == 400
 
 
+async def test_put_rejects_nonfinite_settings_before_persisting(
+    app_client: httpx.AsyncClient,
+) -> None:
+    before = (await app_client.get("/api/settings")).json()["values"]
+    response = await app_client.put(
+        "/api/settings",
+        json={"values": {"logging.level": "DEBUG", "answer.reformulate.trigger_score": "NaN"}},
+    )
+    assert response.status_code == 400
+    assert "finite" in response.json()["detail"]
+    after = await app_client.get("/api/settings")
+    assert after.status_code == 200
+    assert after.json()["values"] == before
+
+
 @pytest.mark.asyncio
 async def test_create_list_job(app_client: httpx.AsyncClient) -> None:
     create = await app_client.post(

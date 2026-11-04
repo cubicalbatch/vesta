@@ -22,6 +22,7 @@ keeps the dependency arrow one-way.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -208,6 +209,10 @@ def _coerce(s: Setting[Any], raw: str) -> object:
 
 
 def _validate(s: Setting[Any], value: object) -> None:
+    # NaN passes both min/max comparisons, then breaks JSON responses and
+    # downstream arithmetic after being persisted as an otherwise valid value.
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"setting {s.key!r}: value must be finite")
     if s.choices is not None and value not in s.choices:
         raise ValueError(f"setting {s.key!r}: {value!r} not in choices {s.choices}")
     if isinstance(value, bool | int | float) and not isinstance(value, str):
