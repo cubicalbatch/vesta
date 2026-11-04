@@ -210,12 +210,16 @@ class JobRunner:
 
     async def stream(self, job_id: int) -> AsyncIterator[dict[str, Any]]:
         """Yield events for one job: current snapshot first, then live updates."""
-        record = await self.get(job_id)
-        if record is None:
-            return
+        # Subscribe before the first await: completion during the snapshot
+        # read must be queued, or this stream can wait forever for a lost event.
         queue = self._subscribe(job_id)
         try:
+            record = await self.get(job_id)
+            if record is None:
+                return
             yield {"event": "snapshot", "data": record.to_dict()}
+            if record.status in _TERMINAL:
+                return
             while True:
                 event = await queue.get()
                 yield event
@@ -248,6 +252,8 @@ class JobRunner:
         queues = self._job_queues.get(job_id)
         if queues and queue in queues:
             queues.remove(queue)
+            if not queues:
+                del self._job_queues[job_id]
 
     # ── scheduling / execution ─────────────────────────────────────────────
 
@@ -469,10 +475,12 @@ class JobRunner:
 
 
 def _put_nowait(queue: asyncio.Queue[dict[str, Any]], event: dict[str, Any]) -> None:
-    # A slow SSE consumer misses an event; the snapshot endpoint still gives the
-    # authoritative current state on reconnect. Never block the job.
-    with suppress(asyncio.QueueFull):
-        queue.put_nowait(event)
+    # Prefer the newest state. Dropping an incoming terminal event leaves a
+    # slow per-job subscriber waiting forever after draining old progress.
+    # No awaits between eviction and insertion: producers never block.
+    if queue.full():
+        queue.get_nowait()
+    queue.put_nowait(event)
 
 
 def _rate_eta(state: _RunState | None, done: int, total: int) -> tuple[float | None, int | None]:

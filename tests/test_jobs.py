@@ -43,6 +43,86 @@ async def _stop(db: Database, r: JobRunner) -> None:
     await db.stop()
 
 
+async def _parked_job(db: Database) -> int:
+    """A persisted job without a running task, for deterministic stream races."""
+    async with db.write() as conn:
+        cur = await conn.execute(
+            "INSERT INTO jobs(type, status, created_at, updated_at) VALUES('noop', 'paused', ?, ?)",
+            (_now_iso(), _now_iso()),
+        )
+        assert cur.lastrowid is not None
+        return cur.lastrowid
+
+
+@pytest.mark.parametrize("status", ["done", "error", "cancelled"])
+async def test_stream_terminal_snapshot_closes(
+    runner: tuple[Database, JobRunner], status: str
+) -> None:
+    db, r = runner
+    try:
+        jid = await _parked_job(db)
+        await r._finish(jid, status)
+        stream = r.stream(jid)
+        snapshot = await anext(stream)
+        assert snapshot["data"]["status"] == status
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(anext(stream), timeout=1)
+        assert not r._job_queues.get(jid)
+    finally:
+        await _stop(db, r)
+
+
+async def test_stream_catches_completion_during_snapshot(
+    runner: tuple[Database, JobRunner], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db, r = runner
+    stream = None
+    try:
+        jid = await _parked_job(db)
+        original_get = r.get
+
+        async def get_and_finish(job_id: int) -> JobRecord | None:
+            record = await original_get(job_id)
+            monkeypatch.setattr(r, "get", original_get)
+            await r._finish(job_id, "done")
+            return record
+
+        monkeypatch.setattr(r, "get", get_and_finish)
+        stream = r.stream(jid)
+        assert (await anext(stream))["data"]["status"] == "paused"
+        assert (await asyncio.wait_for(anext(stream), timeout=1))["data"]["status"] == "done"
+        with pytest.raises(StopAsyncIteration):
+            await anext(stream)
+    finally:
+        if stream is not None:
+            await stream.aclose()
+        await _stop(db, r)
+
+
+async def test_slow_job_stream_keeps_terminal_event(runner: tuple[Database, JobRunner]) -> None:
+    db, r = runner
+    stream = None
+    try:
+        jid = await _parked_job(db)
+        stream = r.stream(jid)
+        await anext(stream)
+        queue = r._job_queues[jid][0]
+        for i in range(queue.maxsize + 2):
+            await r._publish_progress(jid, i, 100, "working")
+        await r._finish(jid, "done")
+
+        async def drain() -> list[dict[str, Any]]:
+            return [event async for event in stream]
+
+        events = await asyncio.wait_for(drain(), timeout=1)
+        assert events[-1]["data"]["status"] == "done"
+        assert len(events) <= queue.maxsize
+    finally:
+        if stream is not None:
+            await stream.aclose()
+        await _stop(db, r)
+
+
 @pytest.mark.asyncio
 async def test_submit_runs_to_completion(runner: tuple[Database, JobRunner]) -> None:
     db, r = runner
